@@ -72,7 +72,29 @@ npm run services:up
 
 A API e a interface web ficam em **http://localhost:3001**. Nesse caso, não rode `npm run dev:api` ao mesmo tempo.
 
-O aplicativo desktop nativo continua sendo exclusivo para Windows; no WSL/Linux, use `npm run dev:web` para visualizar a interface no navegador.
+No WSL, use `npm run dev:web` para visualizar a interface no navegador. No Linux com desktop, o aplicativo nativo também roda (veja abaixo).
+
+### Executar no Linux
+
+O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. Instale as bibliotecas de desenvolvimento do Tauri e do PulseAudio:
+
+```bash
+# Fedora (em sistemas imutáveis, como Silverblue/Kinoite, dentro de um toolbox/distrobox)
+sudo dnf install -y pulseaudio-libs-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel librsvg2-devel
+
+# Debian/Ubuntu
+sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev build-essential pkg-config
+```
+
+Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
+
+Os testes do backend PulseAudio usam um *null sink*, sem tocar alto-falantes nem microfone:
+
+```bash
+pactl load-module module-null-sink sink_name=disc_voice_test
+cargo test -p disc-audio -- --ignored pulse
+pactl unload-module module-null-sink
+```
 
 ### Se a API não conectar ao PostgreSQL
 
