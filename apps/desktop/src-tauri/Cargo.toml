@@ -1,0 +1,13 @@
+[package]
+name = "disc-voice-desktop"
+version = "0.1.0"
+description = "Testes locais de microfone, saída de áudio e webcam para Windows"
+edition = "2021"
+rust-version = "1.85"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = [] }
+disc-audio = { path = "../../../packages/audio-engine" }

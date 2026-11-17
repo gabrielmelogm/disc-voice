@@ -1,0 +1,18 @@
+{
+  "name": "disc-voice",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "npm run tauri:dev --workspace @disc-voice/desktop",
+    "dev:web": "npm run dev --workspace @disc-voice/desktop",
+    "build": "npm run build --workspace @disc-voice/desktop",
+    "build:windows": "npm run tauri:build --workspace @disc-voice/desktop",
+    "typecheck": "npm run typecheck --workspace @disc-voice/desktop",
+    "test": "npm run test --workspace @disc-voice/desktop",
+    "test:rust": "cargo test --workspace",
+    "test:audio": "cargo test -p disc-audio",
+    "check": "npm run typecheck && npm test && npm run build"
+  }
+}

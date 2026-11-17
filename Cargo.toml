@@ -1,0 +1,9 @@
+[workspace]
+members = ["apps/desktop/src-tauri", "packages/audio-engine"]
+default-members = ["packages/audio-engine"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
