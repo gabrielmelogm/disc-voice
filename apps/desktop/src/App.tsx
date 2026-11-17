@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Activity, ArrowUpRight, AudioLines, Camera, Check, CircleHelp,
-  Headphones, Mic, Monitor, Play, RefreshCw, ShieldCheck, SlidersHorizontal,
-  Square, Volume2, X,
+  Activity, Camera, Check, CircleHelp, Headphones, Mic, Monitor,
+  Play, RefreshCw, Settings, ShieldCheck, Square, Volume2, X,
 } from "lucide-react";
 import { MAX_RECORDING_SECONDS, type AudioDevice } from "@disc-voice/shared";
 import { useAudio } from "./hooks/useAudio";
@@ -64,7 +63,6 @@ export function App() {
   const audioLocked = audio.busy || audio.refreshing;
   const level = Math.min(100, Math.max(0, Math.round(audio.status.peak * 100)));
   const db = audio.status.peak > 0 ? Math.max(-60, Math.round(20 * Math.log10(audio.status.peak))) : -60;
-  const count = audio.devices.inputs.length + audio.devices.outputs.length + camera.devices.length;
 
   const stopAll = () => {
     camera.stop();
@@ -73,59 +71,65 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <header className="topbar">
+        <a href="#devices" className="brand" aria-label="Disc Voice, início"><img className="brand-mark" src="/icon.png" alt="" width={18} height={18} />DiscVoice</a>
+        <span className="topbar-caption">SEU ESPAÇO DE VOZ</span>
+        <div className="environment"><span className={`dot ${audio.available ? "green" : ""}`} />{audio.available ? "Modo local" : "Prévia no navegador"}</div>
+      </header>
+
+      <nav className="app-rail" aria-label="Aplicativo">
+        <a href="#devices" className="rail-button" aria-label="Dispositivos" title="Dispositivos"><Headphones size={20} /></a>
+        <button className="rail-button" onClick={() => setHelpOpen(true)} aria-label="Abrir guia de testes" title="Guia de testes"><CircleHelp size={20} /></button>
+        <a href="#devices" className="rail-button workspace-mark" aria-label="DiscVoice"><img src="/icon.png" alt="" width={40} height={40} /></a>
+        <a href="#devices" className="rail-button rail-settings" aria-label="Configurações de voz e vídeo" title="Configurações de voz e vídeo"><Settings size={20} /></a>
+      </nav>
+
       <aside className="sidebar">
-        <a href="#devices" className="brand" aria-label="Disc Voice, início">
-          <span className="brand-mark"><AudioLines size={25} /></span>
-          <span>disc<span className="brand-light">voice</span><small>DEVICE STUDIO</small></span>
-        </a>
-        <div className="workspace-label">SEU ESPAÇO</div>
-        <a className="nav-item selected" href="#devices"><SlidersHorizontal size={18} /> Dispositivos <span className="nav-dot" /></a>
-        <button className="nav-item" onClick={() => setHelpOpen(true)}><CircleHelp size={18} /> Guia de testes <ArrowUpRight size={14} /></button>
-        <div className="sidebar-bottom">
-          <div className="local-card"><ShieldCheck size={19} /><strong>Fica no seu dispositivo.</strong><p>Seus testes são locais. Nenhum áudio ou vídeo é enviado.</p></div>
-          <div className="platform"><Monitor size={15} /><span>Windows desktop</span><span>v0.1</span></div>
+        <div className="sidebar-heading"><h2>Configurações</h2><p>Ajustes simples e rápidos</p></div>
+        <nav className="settings-nav" aria-label="Configurações">
+          <a className="nav-item selected" href="#devices" aria-current="page"><Mic size={17} />Voz e vídeo</a>
+          <button className="nav-item" onClick={() => setHelpOpen(true)}><CircleHelp size={17} />Guia de testes</button>
+        </nav>
+        <div className="sidebar-note"><ShieldCheck size={16} /><p>Seus testes ficam<br />no seu dispositivo.</p></div>
+        <div className="user-panel">
+          <span className="user-avatar">V</span><div><strong>Você</strong><span>Modo local</span></div>
         </div>
       </aside>
 
       <div className="workspace">
-        <header className="topbar">
-          <div className="breadcrumb">Workspace <span>/</span> <strong>Dispositivos</strong></div>
-          <div className="environment"><span className={`dot ${audio.available ? "green" : ""}`} />{audio.available ? "Modo local" : "Prévia no navegador"}</div>
-        </header>
-
         <main id="devices">
           <div className="page-heading">
-            <div><div className="eyebrow">CHECK, CHECK. UM, DOIS.</div><h1>Seu setup, em sintonia<span>.</span></h1><p>Confira seu áudio e vídeo antes da próxima conversa.</p></div>
-            <button className="button secondary refresh-button" disabled={audio.refreshing || audio.busy} onClick={() => { void audio.refresh(); void camera.refresh(); }}>
-              <RefreshCw size={16} className={audio.refreshing ? "spin" : ""} />{audio.refreshing ? "Buscando…" : "Atualizar dispositivos"}
-            </button>
+            <div><h1>Voz e vídeo</h1><p>Escolha quais dispositivos o DiscVoice deve usar nos seus testes.</p></div>
           </div>
 
           {!audio.available && <div className="notice"><Monitor size={19} /><div><strong>Abra o app no Windows para testar o áudio.</strong><p>Esta prévia mostra a interface. A seleção de entradas e saídas usa o motor nativo do aplicativo.</p></div></div>}
           {audio.error && <div className="error-banner" role="alert"><Activity size={18} /><div><strong>Não foi possível concluir o teste de áudio</strong><p>{audio.error}</p><small>Verifique a conexão e o acesso ao microfone para aplicativos da área de trabalho nas configurações de privacidade do Windows.</small></div></div>}
 
-          <div className="section-bar"><div><span className="section-indicator" /><h2>Painel de dispositivos</h2><span className="count">{count}</span></div><span className="section-note">Selecione. Teste. Conecte-se.</span></div>
-
           <div className="device-grid">
             <div className="audio-column">
-              <section className={`card ${inputActive ? "card-active" : ""}`} aria-labelledby="microphone-title">
-                <div className="card-heading"><div className="device-icon purple"><Mic size={21} /></div><div><h3 id="microphone-title">Microfone</h3><p>Faça sua voz chegar com clareza.</p></div><span className={`badge ${inputActive ? "live" : ""}`}>{inputActive ? "Gravando" : "Entrada"}</span></div>
+              <div className="device-fields">
                 <DeviceSelect id="microphone" label="Dispositivo de entrada" devices={audio.devices.inputs} value={audio.inputId} onChange={audio.setInputId} disabled={audioLocked || inputActive} />
+                <DeviceSelect id="output" label="Dispositivo de saída" devices={audio.devices.outputs} value={audio.outputId} onChange={audio.setOutputId} disabled={audioLocked || outputActive} />
+                <div className="field"><label htmlFor="camera">Câmera</label><select id="camera" value={camera.deviceId} disabled={camera.busy || !!camera.stream} onChange={(e) => camera.setDeviceId(e.target.value)}>
+                  {(!camera.devices.length || !camera.devices.some((d) => d.deviceId === camera.deviceId)) && <option value="">Câmera padrão</option>}
+                  {camera.devices.map((device, index) => <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Webcam ${index + 1} · Permissão necessária`}</option>)}
+                </select></div>
+              </div>
+              <section className={`card ${inputActive ? "card-active" : ""}`} aria-labelledby="microphone-title">
+                <div className="card-heading"><div><h2 id="microphone-title">Testar microfone</h2><p>Fale para conferir o nível de entrada.</p></div>{inputActive && <span className="badge live">Gravando</span>}</div>
                 <div className="meter-caption"><span>Nível de entrada</span><span className="mono">{inputActive ? `${db} dBFS` : "— dBFS"}</span></div>
                 <div className="meter" role="meter" aria-label="Nível do microfone" aria-valuemin={0} aria-valuemax={100} aria-valuenow={level}>
-                  {Array.from({ length: 40 }, (_, index) => <span key={index} className={inputActive && index < level / 2.5 ? `lit ${index > 34 ? "hot" : ""}` : ""} />)}
+                  <span className={level > 85 ? "hot" : ""} style={{ width: `${inputActive ? level : 0}%` }} />
                 </div>
-                <div className="meter-legend"><span>Silêncio</span><span>Ideal</span><span>Alto</span></div>
                 <div className="recording-info"><span className={`dot ${inputActive ? "red" : ""}`} /><span>{inputActive ? "Fale algo. Estamos ouvindo." : audio.status.recordingReady ? "Gravação pronta para ouvir na saída abaixo." : "Grave um trecho para testar sua voz."}</span><span className="mono">{audio.status.recordedSeconds.toFixed(1)} / {MAX_RECORDING_SECONDS}s</span></div>
-                <button className={`button full ${inputActive ? "stop-button" : "primary"}`} disabled={!audio.available || !audio.inputId || audioLocked || outputActive} onClick={() => void audio.act(inputActive ? { type: "stopMicrophone" } : { type: "startMicrophone", deviceId: audio.inputId })}>
+                <button className={`button ${inputActive ? "stop-button" : "primary"}`} disabled={!audio.available || !audio.inputId || audioLocked || outputActive} onClick={() => void audio.act(inputActive ? { type: "stopMicrophone" } : { type: "startMicrophone", deviceId: audio.inputId })}>
                   {inputActive ? <Square size={15} /> : <Mic size={16} />}{inputActive ? "Finalizar gravação" : "Testar microfone"}
                 </button>
                 <p className="card-footnote">A gravação termina automaticamente após 10 segundos.</p>
               </section>
 
               <section className={`card ${outputActive ? "card-active" : ""}`} aria-labelledby="output-title">
-                <div className="card-heading"><div className="device-icon blue"><Headphones size={21} /></div><div><h3 id="output-title">Saída de áudio</h3><p>Ouça cada detalhe, no lugar certo.</p></div><span className={`badge ${outputActive ? "live" : ""}`}>{outputActive ? "Reproduzindo" : "Saída"}</span></div>
-                <DeviceSelect id="output" label="Dispositivo de saída" devices={audio.devices.outputs} value={audio.outputId} onChange={audio.setOutputId} disabled={audioLocked || outputActive} />
+                <div className="card-heading"><div><h2 id="output-title">Testar saída de áudio</h2><p>Confira o som no dispositivo selecionado.</p></div>{outputActive && <span className="badge live">Reproduzindo</span>}</div>
                 <div className="volume-row"><Volume2 size={17} /><label htmlFor="volume">Volume do teste</label><span className="mono">{volume}%</span></div>
                 <input id="volume" type="range" min="0" max="100" step="1" value={volume} disabled={outputActive} onChange={(e) => setVolume(Number(e.target.value))} aria-label="Volume do teste" />
                 <div className="button-row">
@@ -139,29 +143,29 @@ export function App() {
             </div>
 
             <section className={`card camera-card ${camera.stream ? "card-active" : ""}`} aria-labelledby="camera-title">
-              <div className="card-heading"><div className="device-icon peach"><Camera size={21} /></div><div><h3 id="camera-title">Webcam</h3><p>Encontre seu melhor enquadramento.</p></div><span className={`badge ${camera.stream ? "live" : ""}`}>{camera.stream ? "Ao vivo" : "Vídeo"}</span></div>
-              <div className="field"><label htmlFor="camera">Dispositivo de vídeo</label><select id="camera" value={camera.deviceId} disabled={camera.busy || !!camera.stream} onChange={(e) => camera.setDeviceId(e.target.value)}>
-                {(!camera.devices.length || !camera.devices.some((d) => d.deviceId === camera.deviceId)) && <option value="">Câmera padrão</option>}
-                {camera.devices.map((device, index) => <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Webcam ${index + 1} · Permissão necessária`}</option>)}
-              </select></div>
+              <div className="card-heading"><h2 id="camera-title">Pré-visualização da câmera</h2>{camera.stream && <span className="badge live">Ao vivo</span>}</div>
               <div className={`video-stage ${camera.stream ? "is-live" : ""}`}>
                 <CameraPreview stream={camera.stream} onError={camera.previewFailed} mirrored={mirrored} />
-                {!camera.stream && <div className="camera-placeholder"><div className="camera-orbit"><Camera size={31} strokeWidth={1.4} /></div><strong>{camera.busy ? "Aguardando a câmera…" : "Sua câmera, quando você quiser."}</strong><p>{camera.busy ? "Aceite a solicitação de acesso à webcam." : "Inicie o teste para ver a prévia ao vivo."}</p><span className="private-label"><ShieldCheck size={13} /> Prévia local e privada</span></div>}
+                {!camera.stream && <div className="camera-placeholder"><div className="camera-avatar" aria-hidden="true">V</div><p>{camera.busy ? "Aceite a solicitação de acesso à webcam." : "Sua câmera aparece aqui"}</p>{camera.busy && <span role="status">Aguardando a câmera…</span>}</div>}
                 {camera.stream && <><span className="live-label"><span className="dot red" />AO VIVO</span><span className="video-resolution">{camera.settings.width} × {camera.settings.height}</span></>}
-                <span className="viewfinder top-left" /><span className="viewfinder top-right" /><span className="viewfinder bottom-left" /><span className="viewfinder bottom-right" />
               </div>
               {camera.error && <p className="inline-error" role="alert">{camera.error}</p>}
               <div className="camera-options"><label className="checkbox-label"><input type="checkbox" checked={mirrored} onChange={(e) => setMirrored(e.target.checked)} />Espelhar prévia</label><span>{camera.stream && camera.settings.frameRate ? `${Math.round(camera.settings.frameRate)} fps` : "HD preferencial"}</span></div>
-              <button className={`button full ${camera.stream || camera.busy ? "stop-button" : "primary"}`} onClick={() => camera.stream || camera.busy ? camera.stop() : void camera.start()}>
+              <button className={`button ${camera.stream || camera.busy ? "stop-button" : "primary"}`} onClick={() => camera.stream || camera.busy ? camera.stop() : void camera.start()}>
                 {camera.stream || camera.busy ? <Square size={15} /> : <Camera size={17} />}{camera.busy ? "Cancelar teste" : camera.stream ? "Desligar webcam" : "Testar webcam"}
               </button>
               <p className="card-footnote">A câmera só é ativada quando você inicia o teste.</p>
-              <div className="camera-tip"><span className="tip-icon">↗</span><div><strong>Uma boa conversa começa com um bom setup.</strong><p>Posicione a câmera na altura dos olhos e procure uma fonte de luz à sua frente.</p></div></div>
             </section>
           </div>
 
-          <div className="bottom-strip"><div><span className={`dot ${active ? "green" : ""}`} /><span>{active ? "Teste em andamento" : "Tudo no seu tempo. Inicie um teste acima."}</span></div><button className="text-button" disabled={!active || audio.busy} onClick={stopAll}><Square size={12} />Encerrar todos os testes</button></div>
-          <footer><span>Feito para você se conectar melhor.</span><span><ShieldCheck size={13} />100% local <span className="footer-dot">·</span> Áudio via WASAPI</span></footer>
+          <div className="page-actions">
+            <button className="button secondary" disabled={audio.refreshing || audio.busy} onClick={() => { void audio.refresh(); void camera.refresh(); }}>
+              <RefreshCw size={15} className={audio.refreshing ? "spin" : ""} />{audio.refreshing ? "Buscando…" : "Atualizar dispositivos"}
+            </button>
+            <span>As seleções são aplicadas ao iniciar cada teste.</span>
+          </div>
+          <div className="bottom-strip"><div role="status"><span className={`dot ${active ? "green" : ""}`} /><span>{active ? "Teste em andamento" : "Tudo pronto para testar"}</span></div><button className="text-button" disabled={!active || audio.busy} onClick={stopAll}><Square size={12} />Encerrar todos os testes</button></div>
+          <footer><ShieldCheck size={13} /><span>Áudio e vídeo locais, só no seu dispositivo.</span></footer>
         </main>
       </div>
 
