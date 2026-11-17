@@ -1,0 +1,3 @@
+# Entry point at the repository root so Docker Compose reads the root .env.
+include:
+  - path: infra/docker/compose.yaml

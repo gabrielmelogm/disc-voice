@@ -1,0 +1,38 @@
+name: API
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: discvoice
+          POSTGRES_PASSWORD: discvoice_test
+          POSTGRES_DB: discvoice_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U discvoice -d discvoice_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://discvoice:discvoice_test@127.0.0.1:5432/discvoice_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p disc-api --all-targets --locked -- -D warnings
+      - run: cargo test -p disc-api --locked --test api -- --ignored

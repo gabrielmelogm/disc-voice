@@ -41,3 +41,30 @@ export const INITIAL_AUDIO_STATUS: AudioStatus = {
   sampleRate: null,
   error: null,
 };
+export interface User {
+  id: string;
+  email: string;
+}
+
+export interface AuthSession {
+  user: User;
+  token: string;
+}
+
+export interface Server {
+  id: string;
+  name: string;
+  ownerId: string;
+}
+
+export interface Invite {
+  code: string;
+  url: string;
+  server: Server;
+}
+
+export interface Channel {
+  id: string;
+  serverId: string;
+  name: string;
+}

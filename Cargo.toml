@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "packages/audio-engine"]
+members = ["apps/desktop/src-tauri", "apps/api", "packages/audio-engine"]
 default-members = ["packages/audio-engine"]
 resolver = "2"
 

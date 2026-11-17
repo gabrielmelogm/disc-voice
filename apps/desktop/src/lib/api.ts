@@ -1,0 +1,93 @@
+import type { AuthSession, Channel, Invite, Server, User } from "@disc-voice/shared";
+
+const TOKEN_KEY = "discvoice.session";
+const INVITE_KEY = "discvoice.invite";
+// Browser builds use the same origin (Vite proxies /api); the native app uses
+// the configured remote API, falling back to the local development service.
+const env = (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env;
+const native = "__TAURI_INTERNALS__" in window;
+const baseUrl = (env.VITE_API_URL || (native ? "http://127.0.0.1:3001/api" : "/api")).replace(/\/$/, "");
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+
+export const sessionToken = {
+  get: () => sessionStorage.getItem(TOKEN_KEY),
+  set: (token: string) => sessionStorage.setItem(TOKEN_KEY, token),
+  clear: () => sessionStorage.removeItem(TOKEN_KEY),
+};
+
+export function pendingInvite(): string {
+  const value = new URL(window.location.href).searchParams.get("invite");
+  if (value) sessionStorage.setItem(INVITE_KEY, value);
+  return value || sessionStorage.getItem(INVITE_KEY) || "";
+}
+
+export function clearPendingInvite() {
+  sessionStorage.removeItem(INVITE_KEY);
+  const url = new URL(window.location.href);
+  url.searchParams.delete("invite");
+  window.history.replaceState(null, "", url);
+}
+
+export function parseInvite(value: string): string {
+  let code = value.trim();
+  if (/^https?:\/\//i.test(code)) {
+    try { code = new URL(code).searchParams.get("invite") || ""; }
+    catch { code = ""; }
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code)) {
+    throw new Error("Cole um link de convite válido ou o código completo.");
+  }
+  return code;
+}
+
+async function request<T>(path: string, options: {
+  method?: "POST"; body?: unknown; signal?: AbortSignal; public?: boolean;
+} = {}): Promise<T> {
+  const token = options.public ? null : sessionToken.get();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: options.method || "GET",
+      headers: {
+        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw new Error("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => null) as { error?: string } | null;
+    if (response.status === 401 && token && token === sessionToken.get()) {
+      sessionToken.clear();
+      window.dispatchEvent(new Event("discvoice:session-expired"));
+    }
+    throw new ApiError(data?.error || "Não foi possível concluir a operação. Tente novamente.", response.status);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+export const api = {
+  register: (email: string, password: string) => request<AuthSession>("/auth/register", { method: "POST", body: { email, password }, public: true }),
+  login: (email: string, password: string) => request<AuthSession>("/auth/login", { method: "POST", body: { email, password }, public: true }),
+  me: (signal?: AbortSignal) => request<User>("/me", { signal }),
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+  servers: (signal?: AbortSignal) => request<Server[]>("/servers", { signal }),
+  createServer: (name: string) => request<Invite>("/servers", { method: "POST", body: { name } }),
+  invite: (serverId: string) => request<Invite>(`/servers/${serverId}/invite`),
+  previewInvite: (code: string) => request<Invite>(`/invites/${encodeURIComponent(code)}`),
+  join: (code: string) => request<Server>(`/invites/${encodeURIComponent(code)}/join`, { method: "POST" }),
+  channels: (serverId: string, signal?: AbortSignal) => request<Channel[]>(`/servers/${serverId}/channels`, { signal }),
+  createChannel: (serverId: string, name: string) => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name } }),
+};
+
+export function message(error: unknown) {
+  return error instanceof Error ? error.message : "Não foi possível concluir a operação.";
+}

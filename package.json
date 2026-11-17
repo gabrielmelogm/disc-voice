@@ -5,6 +5,10 @@
   "workspaces": ["apps/*", "packages/*"],
   "engines": { "node": ">=22.12.0" },
   "scripts": {
+    "dev:api": "npm run db:up && cargo run -p disc-api",
+    "db:up": "docker compose up -d --wait db",
+    "services:up": "docker compose up --build -d",
+    "services:down": "docker compose down",
     "dev": "npm run tauri:dev --workspace @disc-voice/desktop",
     "dev:web": "npm run dev --workspace @disc-voice/desktop",
     "build": "npm run build --workspace @disc-voice/desktop",
@@ -12,6 +16,7 @@
     "typecheck": "npm run typecheck --workspace @disc-voice/desktop",
     "test": "npm run test --workspace @disc-voice/desktop",
     "test:rust": "cargo test --workspace",
+    "test:api": "cargo test -p disc-api --test api -- --ignored",
     "test:audio": "cargo test -p disc-audio",
     "check": "npm run typecheck && npm test && npm run build"
   }

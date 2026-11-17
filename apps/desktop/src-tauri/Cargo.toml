@@ -1,7 +1,7 @@
 [package]
 name = "disc-voice-desktop"
 version = "0.1.0"
-description = "Testes locais de microfone, saída de áudio e webcam para Windows"
+description = "Comunidades, servidores e dispositivos de voz e vídeo para Windows"
 edition = "2021"
 rust-version = "1.85"
 
