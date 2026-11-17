@@ -76,6 +76,12 @@ impl AudioEngine {
         Self::with_backend(crate::wasapi::WasapiBackend::new)
     }
 
+    /// Starts the worker with the native backend of the current platform.
+    #[cfg(target_os = "linux")]
+    pub fn new() -> Result<Self, String> {
+        Self::with_backend(crate::pulse::PulseBackend::new)
+    }
+
     /// The backend is created on the worker thread, so it may depend on
     /// thread-local state such as COM apartments.
     pub fn with_backend<B, F>(make: F) -> Result<Self, String>

@@ -94,6 +94,11 @@ impl OutputSource {
         self.playback.next_frame()
     }
 
+    /// True once every frame was produced; later frames are silence.
+    pub fn finished(&self) -> bool {
+        self.playback.finished()
+    }
+
     /// Call after filling each buffer so the worker can release the stream.
     pub fn end_buffer(&self) {
         if self.playback.finished() {
