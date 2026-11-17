@@ -1,12 +1,92 @@
-# Disc Voice
+<p align="center">
+  <img src="public/icon.png" alt="Logo do Disc Voice" width="170" />
+</p>
 
-Aplicativo **Windows 10/11** com Tauri 2, React, TypeScript e Rust. Contas, servidores com convites, canais de texto e configurações de microfone, saída de áudio e webcam. Interface em português.
+<h1 align="center">Disc Voice</h1>
 
-## Contas, servidores e banco de dados
+<p align="center">
+  <strong>Seu espaço para amigos e comunidades.</strong><br />
+  Crie servidores, converse por canais de texto e cuide do seu áudio e vídeo —<br />
+  tudo em português e direto no seu Windows.
+</p>
 
-O backend em `apps/api` usa **Axum + SeaORM + PostgreSQL**. O desktop e a versão web acessam a mesma API HTTP; credenciais do PostgreSQL ficam no backend. A infraestrutura Docker fica em `infra/docker`.
+<p align="center">
+  <a href="https://github.com/gabrielmelogm/disc-voice/releases"><img src="https://img.shields.io/badge/Baixar%20para%20Windows-0.1.0-6410c9?style=for-the-badge&amp;logo=windows11&amp;logoColor=white" alt="Baixar para Windows" /></a>
+  <a href="DOCS.md"><img src="https://img.shields.io/badge/Documenta%C3%A7%C3%A3o-DOCS.md-262032?style=for-the-badge&amp;logo=readthedocs&amp;logoColor=white" alt="Documentação" /></a>
+  <a href="https://github.com/gabrielmelogm/disc-voice/issues/new"><img src="https://img.shields.io/badge/Reportar%20bug-Abrir%20issue-f397aa?style=for-the-badge&amp;logo=github&amp;logoColor=14111c" alt="Reportar bug" /></a>
+</p>
 
-Com Docker e Node.js instalados, na raiz:
+<p align="center">
+  <img src="https://img.shields.io/badge/vers%C3%A3o-0.1.0-6410c9?style=flat-square" alt="Versão 0.1.0" />
+  <img src="https://img.shields.io/badge/Windows-10%2F11%20x64-0078D4?style=flat-square&amp;logo=windows11&amp;logoColor=white" alt="Windows 10/11 x64" />
+  <img src="https://img.shields.io/badge/Web-navegador-a66bf4?style=flat-square&amp;logo=googlechrome&amp;logoColor=white" alt="Web no navegador" />
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&amp;logo=tauri&amp;logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/Rust-stable-000000?style=flat-square&amp;logo=rust&amp;logoColor=white" alt="Rust" />
+</p>
+
+---
+
+## 🎧 Um lugar para a sua comunidade
+
+O **Disc Voice** reúne contas, servidores com convites, canais de texto e ferramentas
+de voz e vídeo em um aplicativo desktop feito com **Tauri 2, React, TypeScript e Rust**.
+A interface é toda em português e o áudio nativo usa **WASAPI/CPAL** para funcionar de
+verdade com seus dispositivos.
+
+| | |
+|:--|:--|
+| 👤 **Contas e sessões** | Cadastro com e-mail e senha protegida por **Argon2id**. Sessão revogável de até sete dias. |
+| 🏠 **Servidores e convites** | Crie seu servidor, compartilhe um convite e entre em comunidades pelo link ou pelo app. |
+| 💬 **Canais de texto** | Crie, liste e selecione canais. Os nomes são únicos dentro de cada servidor e ficam salvos no PostgreSQL. |
+| 🎙️ **Microfone** | Teste a entrada, veja o pico capturado e o nível em **dBFS** antes de entrar em uma conversa. |
+| 🔊 **Saída de áudio** | Toque um tom de 440 Hz na saída escolhida e ouça a última gravação no mesmo dispositivo. |
+| 📷 **Webcam** | Prévia com resolução, taxa de quadros e opção de espelhamento, com permissões tratadas no WebView2. |
+
+> [!NOTE]
+> 🚧 **Em desenvolvimento:** o envio e o histórico de mensagens nos canais são a próxima etapa.
+> Hoje já é possível criar, persistir, listar e selecionar canais normalmente.
+
+---
+
+## 🖥️ Plataformas e instalação
+
+**Versão atual:** `0.1.0`
+
+| Plataforma | Instalação | Disponibilidade |
+|:--|:--|:--|
+| **Windows 10/11 (x64)** | Instalador **`.exe` (NSIS)** | ✅ App completo |
+| **Web** | Nenhuma — abra no navegador | ✅ Mesma conta e servidores |
+| **Linux / macOS** | Nenhuma — use a versão web | ⚠️ Sem aplicativo nativo |
+
+> [!IMPORTANT]
+> O aplicativo desktop é exclusivo para **Windows 10/11 de 64 bits**. O áudio nativo
+> (**WASAPI/CPAL**) e a integração completa com microfone, saída e webcam só funcionam
+> na versão instalada para Windows. Em outros sistemas, use a versão web.
+
+### Instalar no Windows
+
+1. **Baixe o instalador** `Disc Voice_0.1.0_x64-setup.exe` na página de
+   [Releases](https://github.com/gabrielmelogm/disc-voice/releases). Se ainda não houver
+   uma release publicada, baixe o artefato **`disc-voice-windows`** na execução mais recente
+   do workflow [Windows](https://github.com/gabrielmelogm/disc-voice/actions/workflows/windows.yml).
+2. **Execute o `.exe`** e siga o assistente de instalação. O WebView2 é baixado
+   automaticamente caso ainda não esteja presente.
+3. **Abra o Disc Voice**, crie sua conta e comece a montar sua comunidade.
+
+O instalador também pode ser gerado localmente:
+
+```powershell
+npm ci
+npm run build:windows
+```
+
+O arquivo final fica em `target/release/bundle/nsis/`. Os requisitos completos de
+desenvolvimento estão na [documentação](DOCS.md#executar-no-windows).
+
+### Usar a versão web
+
+Com Docker e Node.js instalados, na raiz do projeto:
 
 ```powershell
 Copy-Item .env.example .env
@@ -14,194 +94,84 @@ npm ci
 npm run services:up
 ```
 
-No Linux, use `cp .env.example .env`. O comando `services:up` compila a API e a interface web, inicia PostgreSQL e aplica as migrações automaticamente. Abra **http://localhost:3001** para usar a versão web.
+Depois abra **<http://localhost:3001>**. No Linux, use `cp .env.example .env`.
+A versão web compartilha a mesma API, contas, servidores e canais do aplicativo desktop.
 
-1. Clique em **Cadastre-se**, informe e-mail e senha (mínimo de 8 caracteres).
-2. Clique em **Criar meu servidor** ou no **+** da lateral e informe um nome.
-3. Copie o convite exibido. Ele também está disponível em **Convidar amigos**.
-4. Outra pessoa pode abrir o link no navegador, entrar/cadastrar-se e **Aceitar convite**, ou colá-lo em **Entrar em servidor** no app.
-5. Dentro do servidor, clique em **Criar canal** e informe o nome. Qualquer membro pode criar canais; nomes são únicos dentro de cada servidor.
-6. O botão de fones na lateral abre **Voz e vídeo**.
+---
 
-Os canais são criados, persistidos, listados e selecionáveis. O envio de mensagens e histórico será uma próxima etapa. Use **Atualizar canais** para buscar canais criados por outros membros.
+## 🐞 Encontrou um bug?
 
-As senhas usam Argon2id. A sessão é revogável, dura no máximo sete dias e seu token fica no `sessionStorage` do cliente (ao fechar o app/aba, faça login novamente). O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
+Toda ajuda é bem-vinda! Antes de abrir uma issue:
 
-Para parar os serviços mantendo os dados:
+- 🔍 Procure nas [issues existentes](https://github.com/gabrielmelogm/disc-voice/issues)
+  para evitar relatos duplicados.
+- ⬆️ Confirme se o problema acontece na versão mais recente (**0.1.0**).
+- 🧪 Se possível, tente reproduzir o bug mais de uma vez.
 
-```powershell
-npm run services:down
+### Como abrir uma issue
+
+1. Acesse **[Nova issue](https://github.com/gabrielmelogm/disc-voice/issues/new)**.
+2. Use um título claro e descritivo, como `[Bug] Microfone não aparece após conectar via USB`.
+3. Descreva o que aconteceu com o máximo de detalhes: passos para reproduzir, comportamento
+   esperado e comportamento atual.
+4. Informe a **versão do Disc Voice** (`0.1.0`), a versão do Windows, o modelo do
+   microfone, da saída de áudio ou da webcam quando o problema for relacionado a dispositivos.
+5. Anexe prints, vídeos ou logs que ajudem a entender o problema.
+6. Clique em **Submit new issue** e acompanhe as respostas.
+
+Você pode copiar este modelo para o corpo da issue:
+
+```markdown
+## Descrição do bug
+Uma descrição curta e clara do que aconteceu.
+
+## Como reproduzir
+1. Abra o Disc Voice
+2. Vá em '...'
+3. Clique em '...'
+4. Veja o erro
+
+## Comportamento esperado
+O que deveria ter acontecido.
+
+## Comportamento atual
+O que realmente aconteceu.
+
+## Ambiente
+- Versão do Disc Voice: 0.1.0
+- Windows: 10/11 (build)
+- Microfone/saída/webcam (se aplicável):
+- Versão instalada ou versão web:
+
+## Evidências
+Prints, vídeos ou logs relevantes.
 ```
 
-### Desenvolvimento da API
+> [!WARNING]
+> Nunca inclua **senhas**, **tokens de sessão**, **códigos de convite** ou outros dados
+> pessoais na issue. Essas informações são sensíveis.
 
-`npm run dev:api` sobe apenas o PostgreSQL no Docker (aguardando o healthcheck) e executa a API localmente:
+Sugestões e ideias de novas funcionalidades também são bem-vindas na
+[página de issues](https://github.com/gabrielmelogm/disc-voice/issues).
 
-```powershell
-npm run dev:api
-```
+---
 
-Em outro terminal, execute `npm run dev:web` ou `npm run dev` no Windows. O Vite encaminha `/api` para `http://127.0.0.1:3001`; o desktop usa essa API local por padrão. O `.env` da raiz é lido pela API e pelo Vite. A API serve o conteúdo de `apps/desktop/dist` quando disponível (`npm run build`).
+## 📚 Documentação
 
-Para iniciar somente o banco (por exemplo, antes de executar `cargo run` diretamente), use `npm run db:up`.
+| Documento | Conteúdo |
+|:--|:--|
+| 📖 [DOCS.md](DOCS.md) | Guia completo de contas, servidores, canais, convites e banco de dados |
+| 🎙️ [Testes de dispositivos](DOCS.md#testes-de-dispositivos) | Microfone, saída de áudio e webcam na prática |
+| 🪟 [Executar no Windows](DOCS.md#executar-no-windows) | Requisitos, desenvolvimento e geração do instalador |
+| 🐧 [WSL ou Linux](DOCS.md#desenvolvimento-no-wsl-ou-linux) | Como rodar a API e a versão web |
+| 🧪 [Testes automatizados](DOCS.md#desenvolvimento-e-testes-automatizados) | Comandos de verificação e testes da API |
+| 🏗️ [Estrutura](DOCS.md#estrutura) | Organização do monorepo, API, desktop e motor de áudio |
 
-Não execute a API local e o container da API ao mesmo tempo: ambos usam a porta 3001. PostgreSQL usa a porta local 5433, configurável por `POSTGRES_PORT`. Se alterar usuário/senha/porta, ajuste também `DATABASE_URL` para execução local.
+---
 
-### Desenvolvimento no WSL ou Linux
-
-No WSL/Linux, `npm run dev:api` usa o toolchain Linux do Rust e precisa das bibliotecas de desenvolvimento do sistema. Se o build falhar com `cannot open Scrt1.o`, `cannot open crti.o` ou `unable to find library -lc`, instale:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential pkg-config
-```
-
-Depois execute novamente:
-
-```bash
-npm run dev:api
-```
-
-Sem acesso a `sudo`, use o Docker, que já contém o toolchain e as bibliotecas necessárias:
-
-```bash
-npm run services:up
-```
-
-A API e a interface web ficam em **http://localhost:3001**. Nesse caso, não rode `npm run dev:api` ao mesmo tempo.
-
-O aplicativo desktop nativo continua sendo exclusivo para Windows; no WSL/Linux, use `npm run dev:web` para visualizar a interface no navegador.
-
-### Se a API não conectar ao PostgreSQL
-
-O erro `PoolTimedOut` significa que a API não conseguiu abrir conexão com o banco dentro do tempo limite. Verifique, nesta ordem:
-
-1. O **Docker Desktop** está aberto e o comando `docker compose ps` mostra o serviço `db` como `healthy`.
-2. Inicie o banco e aguarde o healthcheck: `npm run db:up`.
-3. Confira no `.env` se `DATABASE_URL` usa a mesma porta e senha de `POSTGRES_PORT` e `POSTGRES_PASSWORD`. O padrão é `127.0.0.1:5433`.
-4. Veja os logs do banco: `docker compose logs db`.
-5. Se a porta 5433 já estiver em uso, altere `POSTGRES_PORT` e `DATABASE_URL` juntos no `.env`.
-
-Se você executou `npm run services:up`, a API já está rodando no container: acesse **http://localhost:3001** em vez de rodar `npm run dev:api`, pois os dois usam a porta 3001.
-
-### Convites entre computadores
-
-Publique a API e a interface web em uma origem HTTPS acessível aos participantes. Configure:
-
-```dotenv
-PUBLIC_WEB_URL=https://comunidade.exemplo.com
-CORS_ORIGINS=https://comunidade.exemplo.com,https://tauri.localhost,http://tauri.localhost,tauri://localhost
-VITE_API_URL=https://comunidade.exemplo.com/api
-```
-
-`PUBLIC_WEB_URL` define os links de convite; `CORS_ORIGINS` permite o cliente web e o Tauri. `VITE_API_URL` é incorporada ao **compilar o desktop**, portanto configure-a antes de gerar o instalador. O frontend web do Docker usa `/api` na própria origem. Termine HTTPS no proxy reverso que encaminha para a porta 3001. Configure também uma senha própria para o banco em `POSTGRES_PASSWORD`.
-
-Os links são convites web; no desktop, use **Entrar em servidor** para colar o link. Links `localhost` servem somente para uso no mesmo computador.
-
-## Executar no Windows
-
-Instale:
-
-- **Node.js 22.12+** (recomendado: 24 LTS), com npm.
-- **Rust stable**, toolchain `x86_64-pc-windows-msvc`, via [rustup](https://rustup.rs/).
-- **Visual Studio Build Tools 2022**, com “Desenvolvimento para desktop com C++” e Windows SDK.
-- **Microsoft Edge WebView2 Runtime** (já incluído na maioria das instalações do Windows 10/11).
-- **Docker** com Docker Compose v2.20 ou superior, para executar a API e PostgreSQL com `npm run services:up`.
-
-Na raiz do projeto, em PowerShell:
-
-```powershell
-npm ci
-npm run services:up
-npm run dev
-```
-
-Para gerar o instalador NSIS:
-
-```powershell
-npm run build:windows
-```
-
-O `.exe` fica em `target/release/bundle/nsis/`. O instalador baixa o WebView2 caso necessário, portanto essa etapa precisa de internet se o runtime estiver ausente.
-
-## Testes de dispositivos
-
-1. **Microfone:** selecione uma entrada e clique em **Testar microfone**. O medidor exibe o pico capturado e seu nível em dBFS. Fale por até 10 segundos; também é possível finalizar antes.
-2. **Saída:** selecione a saída física, ajuste o volume do teste e clique em **Tocar som**. Um tom suave de 440 Hz toca por 3 segundos em todos os canais da saída. **Ouvir gravação** reproduz o último trecho capturado nesse mesmo dispositivo.
-3. **Webcam:** selecione uma câmera e clique em **Testar webcam**. Aceite a permissão do WebView2. A prévia mostra resolução e taxa de quadros reportadas pela câmera, com opção de espelhamento.
-4. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
-5. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
-
-A webcam não captura áudio. Antes da primeira permissão, o WebView2 pode ocultar nomes e câmeras; use a câmera padrão para autorizar e atualizar a lista. Se o acesso falhar, habilite câmera/microfone para **aplicativos da área de trabalho** em Configurações do Windows → Privacidade e segurança.
-
-A gravação fica **somente na memória**, é substituída na próxima captura e descartada ao fechar o aplicativo. O volume controla apenas a reprodução do teste, sem alterar o volume do Windows. Captura de microfone e reprodução de áudio são mutuamente exclusivas para evitar gravar o próprio som de teste.
-
-## Estrutura
-
-```text
-apps/
-  api/                  API Rust, autenticação, SeaORM e migrações PostgreSQL
-  desktop/
-    src/                React, contas, servidores, canais, dispositivos e testes
-    src-tauri/          Janela Tauri, comandos IPC, configuração Windows
-    scripts/            Verificação da plataforma
-packages/
-  shared/               Contratos TypeScript da API e IPC
-  audio-engine/         Motor Rust: WASAPI/CPAL, gravação e reprodução
-infra/docker/           Dockerfile da API/web e Compose com PostgreSQL
-compose.yaml            Entrada do Compose na raiz, para carregar o .env
-public/                 Identidade visual e ícone da aplicação
-.github/workflows/      Testes e build do instalador no Windows
-```
-
-- npm workspaces organizam os pacotes JavaScript; Cargo workspace organiza os crates Rust.
-- `public/icon.png` é a arte original; `public/app-icon.png` é o ícone arredondado com cantos transparentes usado na interface e no favicon. Os PNG/ICO em `apps/desktop/src-tauri/icons` e `source.svg` são derivados dessa arte para janela, executável e instalador.
-- Áudio usa **CPAL/WASAPI**, inclusive a reprodução na saída selecionada. Não depende de `HTMLMediaElement.setSinkId`.
-- O motor mantém os dispositivos em uma thread dedicada. A identidade dos endpoints WASAPI preserva seleções mesmo com nomes iguais ou mudanças na ordem da enumeração.
-- PCM mono é limitado a 10 segundos e reamostrado na reprodução quando as taxas dos dispositivos diferem.
-- Webcam usa `getUserMedia` no **WebView2**, com contexto HTTPS no app empacotado. Respostas tardias de permissão são descartadas e seus tracks liberados.
-
-## Desenvolvimento e testes automatizados
-
-```powershell
-npm run check        # TypeScript, Vitest e build da interface
-npm run test:rust    # Testes de todos os crates
-npm run test:audio   # Apenas os testes de processamento de áudio
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-```
-
-Os testes cobrem seleção e troca de dispositivos, comandos IPC, erros, liberação da webcam, cancelamento de permissões pendentes, estados de captura, limite da gravação, reamostragem e geração do tom. Hardware real não é necessário para esses testes.
-
-Também há testes da interface para cadastro, criação de servidor/canal, cópia de convite, entrada após login, sessão expirada e logout.
-
-Os testes de integração da API usam PostgreSQL real. Aponte `TEST_DATABASE_URL` para um banco de teste e execute:
-
-```powershell
-$env:TEST_DATABASE_URL = "postgres://discvoice:discvoice_local@127.0.0.1:5433/discvoice"
-npm run test:api
-```
-
-No Linux: `TEST_DATABASE_URL=postgres://discvoice:discvoice_local@127.0.0.1:5433/discvoice npm run test:api`. O teste cria registros únicos e remove apenas seus próprios registros ao finalizar. Verifica hash de senha/token, login, conflitos, migrações idempotentes, permissões entre usuários e servidores, convites inválidos/repetidos, criação e persistência de canais, expiração e revogação de sessão. O workflow `API` executa esse teste com um PostgreSQL dedicado; `cargo test --workspace` ignora o teste que exige banco.
-
-O workflow `Windows` executa as verificações, compila o aplicativo e publica o instalador como artefato de CI.
-
-### Prévia da interface
-
-```sh
-npm run dev:web
-```
-
-Abra `http://127.0.0.1:1420`. Essa prévia também funciona no Linux, mas o **áudio nativo só funciona no aplicativo Windows**. As listas de áudio não são simuladas. A webcam da prévia depende das permissões do navegador.
-
-### Validação manual no Windows
-
-- Criar duas contas, criar um servidor, criar um canal e entrar pelo convite em outro app/navegador.
-- Testar entrada e saída integradas e USB, incluindo dois dispositivos com nomes iguais.
-- Ouvir o tom e a gravação em uma saída diferente da saída padrão do Windows.
-- Desconectar um dispositivo durante o teste e atualizar a lista.
-- Negar a permissão da webcam, tentar novamente, cancelar enquanto a permissão está pendente e trocar de câmera.
-- Confirmar que o indicador da webcam apaga ao parar ou fechar o app.
-- Instalar o `.exe` e repetir os testes na versão empacotada, além de `npm run dev`.
-
-Os testes automatizados não substituem essa verificação com drivers e hardware reais.
+<p align="center">
+  <img src="public/icon.png" alt="" width="40" />
+  <br />
+  <sub><strong>Disc Voice</strong> · versão 0.1.0 · feito com Tauri, React, Rust e TypeScript</sub><br />
+  <sub>Projeto independente, sem vínculo com o Discord.</sub>
+</p>
