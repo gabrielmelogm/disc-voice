@@ -36,7 +36,11 @@ pub fn manage<R: Runtime>(app: &tauri::App<R>) {
 /// Keeps a file name to letters, digits and dashes so the page cannot pick a path.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn safe_key(key: &str) -> Option<String> {
-    let key: String = key.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
+    let key: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(64)
+        .collect();
     (!key.is_empty()).then_some(key)
 }
 
@@ -56,7 +60,11 @@ mod imp {
     const ICON: &[u8] = include_bytes!("../icons/128x128@2x.png");
 
     fn folder<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-        let dir = app.path().app_local_data_dir().map_err(|error| error.to_string())?.join("notifications");
+        let dir = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("notifications");
         std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         Ok(dir)
     }
@@ -66,11 +74,22 @@ mod imp {
         let result = (|| -> Result<(), String> {
             let icon = folder(app)?.join("app-icon.png");
             std::fs::write(&icon, ICON).map_err(|error| error.to_string())?;
-            let path = format!(r"Software\Classes\AppUserModelId\{}", app.config().identifier);
-            let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(path).map_err(|error| error.to_string())?;
-            let name = app.config().product_name.clone().unwrap_or_else(|| "Disc Voice".into());
-            key.set_value("DisplayName", &name).map_err(|error| error.to_string())?;
-            key.set_value("IconUri", &icon.display().to_string()).map_err(|error| error.to_string())?;
+            let path = format!(
+                r"Software\Classes\AppUserModelId\{}",
+                app.config().identifier
+            );
+            let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+                .create_subkey(path)
+                .map_err(|error| error.to_string())?;
+            let name = app
+                .config()
+                .product_name
+                .clone()
+                .unwrap_or_else(|| "Disc Voice".into());
+            key.set_value("DisplayName", &name)
+                .map_err(|error| error.to_string())?;
+            key.set_value("IconUri", &icon.display().to_string())
+                .map_err(|error| error.to_string())?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -93,7 +112,12 @@ mod imp {
         Some(file)
     }
 
-    pub fn show<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str, avatar: Option<Avatar>) -> Result<(), String> {
+    pub fn show<R: Runtime>(
+        app: &AppHandle<R>,
+        title: &str,
+        body: &str,
+        avatar: Option<Avatar>,
+    ) -> Result<(), String> {
         let mut toast = Toast::new(&app.config().identifier)
             .title(title)
             .text1(body)
@@ -125,8 +149,18 @@ mod imp {
 
     pub fn register<R: Runtime>(_app: &AppHandle<R>) {}
 
-    pub fn show<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str, _avatar: Option<Avatar>) -> Result<(), String> {
-        app.notification().builder().title(title).body(body).show().map_err(|error| error.to_string())
+    pub fn show<R: Runtime>(
+        app: &AppHandle<R>,
+        title: &str,
+        body: &str,
+        _avatar: Option<Avatar>,
+    ) -> Result<(), String> {
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|error| error.to_string())
     }
 }
 
