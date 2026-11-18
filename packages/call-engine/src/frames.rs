@@ -1,6 +1,7 @@
-//! The latest picture of each peer's screen, pulled by the UI as JPEG.
+//! The latest picture of each peer's screen and camera, pulled by the UI as
+//! JPEG. Slots are keyed by peer and source ([`slot`]).
 //!
-//! Each screen has one reader (its canvas), so a picture is handed out once
+//! Each video has one reader (its canvas), so a picture is handed out once
 //! and a slow reader skips pictures instead of queueing them.
 
 use std::{
@@ -8,6 +9,11 @@ use std::{
     sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
+
+/// The slot of one peer's screen or camera.
+pub(crate) fn slot(peer: &str, source: crate::engine::VideoSource) -> String {
+    format!("{peer}/{}", source.name())
+}
 
 struct Slot {
     /// Which receiver owns the slot: a peer can replace its screen track

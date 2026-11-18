@@ -11,8 +11,8 @@ pub fn call_native() -> bool {
 
 #[cfg(target_os = "linux")]
 pub mod native {
-    use disc_call::{CallConfig, CallDevices, CallEngine, CallEvent};
-    use disc_video::ScreenEngine;
+    use disc_call::{CallConfig, CallDevices, CallEngine, CallEvent, VideoSource, SCREEN_BITRATE};
+    use disc_video::{CameraEngine, ScreenEngine};
     use std::{sync::Arc, time::Duration};
     use tauri::{
         ipc::{Channel, Response},
@@ -113,9 +113,11 @@ pub mod native {
     ) -> Result<(), String> {
         let screen = screen.inner().clone();
         blocking(&engine, move |engine| {
-            engine.start_screen(
+            engine.start_video(
+                VideoSource::Screen,
                 Box::new(move |timeout| screen.next_raw_frame(timeout)),
                 frame_rate,
+                SCREEN_BITRATE,
             )
         })
         .await
@@ -124,21 +126,53 @@ pub mod native {
     #[tauri::command]
     pub async fn call_screen_stop(engine: State<'_, CallEngine>) -> Result<(), String> {
         blocking(&engine, |engine| {
-            engine.stop_screen();
+            engine.stop_video(VideoSource::Screen);
             Ok(())
         })
         .await
     }
 
-    /// The next picture of a peer's screen as JPEG bytes. Empty when none
-    /// arrived in time.
+    /// Sends what the camera engine captures (after `camera_start_call`) to
+    /// the call, at most `frame_rate` per second and `bitrate` bits per second
+    /// for each peer. Our own tile is drawn from its JPEGs (`camera_frame`).
     #[tauri::command]
-    pub async fn call_screen_frame(
+    pub async fn call_camera_start(
+        engine: State<'_, CallEngine>,
+        camera: State<'_, CameraEngine>,
+        frame_rate: u32,
+        bitrate: u32,
+    ) -> Result<(), String> {
+        let camera = camera.inner().clone();
+        blocking(&engine, move |engine| {
+            engine.start_video(
+                VideoSource::Camera,
+                Box::new(move |timeout| camera.next_raw_frame(timeout)),
+                frame_rate,
+                bitrate,
+            )
+        })
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn call_camera_stop(engine: State<'_, CallEngine>) -> Result<(), String> {
+        blocking(&engine, |engine| {
+            engine.stop_video(VideoSource::Camera);
+            Ok(())
+        })
+        .await
+    }
+
+    /// The next picture of a peer's screen or camera as JPEG bytes. Empty
+    /// when none arrived in time.
+    #[tauri::command]
+    pub async fn call_video_frame(
         engine: State<'_, CallEngine>,
         peer_id: String,
+        source: VideoSource,
     ) -> Result<Response, String> {
         let frame = blocking(&engine, move |engine| {
-            Ok(engine.screen_frame(&peer_id, FRAME_WAIT))
+            Ok(engine.video_frame(&peer_id, source, FRAME_WAIT))
         })
         .await?;
         Ok(Response::new(frame.unwrap_or_default()))
@@ -195,7 +229,15 @@ pub mod native {
     pub fn call_screen_stop() {}
 
     #[tauri::command]
-    pub fn call_screen_frame() -> Result<Vec<u8>, String> {
+    pub fn call_camera_start() -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    #[tauri::command]
+    pub fn call_camera_stop() {}
+
+    #[tauri::command]
+    pub fn call_video_frame() -> Result<Vec<u8>, String> {
         Err(UNSUPPORTED.into())
     }
 }

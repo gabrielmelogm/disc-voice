@@ -2,19 +2,26 @@
 //! client (`voice.ts`), so both kinds of peers agree on who does what:
 //!
 //! - the peer with the smaller ID makes the first offer;
-//! - later renegotiations (a screen being added) may come from either side,
+//! - later renegotiations (a screen or camera being added) may come from
+//!   either side,
 //!   and a collision is settled by "perfect negotiation": the peer with the
 //!   larger ID is polite and rolls its own offer back.
 //!
-//! Every connection carries our audio and a video track from the start. The
-//! video track is only written to while we share the screen, so starting and
-//! stopping never needs a renegotiation from this side.
+//! Every connection carries our audio and two video tracks (screen, camera)
+//! from the start. A video track is only written to while that video is on,
+//! so starting and stopping never needs a renegotiation from this side.
+//! Peers learn what is on from the API's participant list, not from tracks.
+//!
+//! Browser clients cannot name their streams, so their `voice.signal`
+//! descriptions carry `streams: { [streamId]: "screen" | "camera" }`; ours
+//! have fixed IDs (`disc-call-screen`, `disc-call-camera`).
 
 use crate::{
     audio::Decoder,
-    engine::{CallEvent, Shared},
+    engine::{CallEvent, Shared, VideoSource},
+    frames,
     hub::{PeerSinks, Sink},
-    keyframes::{asks_keyframe, KeyframeRequests},
+    keyframes::{asks_keyframe, KeyframeRequests, UNKNOWN_RTT},
     video,
 };
 use rtc::{
@@ -28,14 +35,17 @@ use rtc::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::hash_map::RandomState,
+    collections::{hash_map::RandomState, HashMap},
     hash::BuildHasher,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
+
+/// How often the round trip to a peer is reported (when it changed).
+const LATENCY_EVERY: Duration = Duration::from_secs(2);
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -213,6 +223,9 @@ struct Connection {
     pc: Arc<dyn PeerConnection>,
     audio: LocalTrack,
     screen: LocalTrack,
+    camera: LocalTrack,
+    /// Round trip in ms, from the peer's RTCP reports.
+    rtt: Arc<AtomicU32>,
 }
 
 async fn connect(
@@ -234,10 +247,11 @@ async fn connect(
         },
         RtpCodecKind::Video,
     )?;
-    // Closest to the application: it only marks PLI/FIR so they reach our
-    // track's events (see `keyframes`).
+    // Closest to the application: it marks PLI/FIR so they reach our
+    // track's events, and measures the round trip (see `keyframes`).
+    let rtt = Arc::new(AtomicU32::new(UNKNOWN_RTT));
     let registry = register_default_interceptors(Registry::new(), &mut media)?
-        .with(Slot::from(14_000), KeyframeRequests::default());
+        .with(Slot::from(14_000), KeyframeRequests::new(rtt.clone()));
     let configuration = RTCConfigurationBuilder::new()
         .with_ice_servers(ice_servers)
         .build();
@@ -261,7 +275,14 @@ async fn connect(
     let pc: Arc<dyn PeerConnection> = Arc::new(pc);
     let audio = add_track(&pc, RtpCodecKind::Audio, "disc-call-audio", opus()).await?;
     let screen = add_track(&pc, RtpCodecKind::Video, "disc-call-screen", h264()).await?;
-    Ok(Connection { pc, audio, screen })
+    let camera = add_track(&pc, RtpCodecKind::Video, "disc-call-camera", h264()).await?;
+    Ok(Connection {
+        pc,
+        audio,
+        screen,
+        camera,
+        rtt,
+    })
 }
 
 fn state_name(state: RTCPeerConnectionState) -> &'static str {
@@ -276,9 +297,9 @@ fn state_name(state: RTCPeerConnectionState) -> &'static str {
     }
 }
 
-/// Whether a local description already sends both of our tracks.
+/// Whether a local description already sends all of our tracks.
 fn carries_our_tracks(sdp: &str) -> bool {
-    ["disc-call-audio", "disc-call-screen"]
+    ["disc-call-audio", "disc-call-screen", "disc-call-camera"]
         .iter()
         .all(|stream| sdp.contains(&format!("a=msid:{stream} ")))
 }
@@ -303,7 +324,16 @@ struct Peer {
     connected: bool,
     /// Candidates that arrived before the description they belong to.
     candidates: Vec<RTCIceCandidateInit>,
+    /// What the peer's video streams are, as its signaling named them.
+    streams: HashMap<String, VideoSource>,
     receivers: Vec<JoinHandle<()>>,
+}
+
+/// The `streams` a browser client sends with its descriptions.
+fn named_streams(data: &Value) -> HashMap<String, VideoSource> {
+    data.get("streams")
+        .and_then(|streams| serde_json::from_value(streams.clone()).ok())
+        .unwrap_or_default()
 }
 
 impl Peer {
@@ -329,7 +359,7 @@ impl Peer {
             // The other side makes the first offer.
             return Ok(());
         }
-        // We never add tracks later, so once both of ours are negotiated
+        // We never add tracks later, so once all of ours are negotiated
         // the only reason to offer again is an ICE restart. (The event of
         // the initial `add_track`s arrives late, after the first exchange.)
         let negotiated = self
@@ -351,6 +381,8 @@ impl Peer {
 
     async fn remote(&mut self, data: Value) -> Result<(), String> {
         if let Some(description) = data.get("description") {
+            // Before the description, whose tracks open afterwards.
+            self.streams.extend(named_streams(&data));
             let description: RTCSessionDescription =
                 serde_json::from_value(description.clone()).map_err(|error| error.to_string())?;
             self.description(description)
@@ -431,6 +463,7 @@ impl Peer {
         let sinks = PeerSinks {
             audio: self.conn.audio.sink().await,
             screen: self.conn.screen.sink().await,
+            camera: self.conn.camera.sink().await,
         };
         self.shared.hub.set(&self.id, sinks);
     }
@@ -444,7 +477,8 @@ impl Peer {
             RTCPeerConnectionState::Connected => {
                 self.connected = true;
                 self.refresh_sinks().await;
-                self.shared.keyframe.store(true, Ordering::Relaxed);
+                self.shared.screen_keyframe.store(true, Ordering::Relaxed);
+                self.shared.camera_keyframe.store(true, Ordering::Relaxed);
             }
             RTCPeerConnectionState::Failed => {
                 self.connected = false;
@@ -474,7 +508,11 @@ impl Peer {
         let id = self.id.clone();
         let task = match track.kind().await {
             RtpCodecKind::Audio => tokio::spawn(receive_audio(id, track, shared)),
-            RtpCodecKind::Video => tokio::spawn(video::receive(id, track, shared)),
+            RtpCodecKind::Video => {
+                let stream = track.stream_id().await;
+                let source = VideoSource::of_stream(&stream, self.streams.get(&stream).copied());
+                tokio::spawn(video::receive(id, source, track, shared))
+            }
             _ => return,
         };
         self.receivers.retain(|task| !task.is_finished());
@@ -488,11 +526,18 @@ impl Peer {
         self.shared.hub.remove(&self.id);
         self.shared.mixer.remove(&self.id);
         self.shared.levels.remove(&self.id);
-        if self.shared.frames.release_any(&self.id) {
-            self.shared.emit(CallEvent::Screen {
-                peer_id: self.id.clone(),
-                active: false,
-            });
+        for source in [VideoSource::Screen, VideoSource::Camera] {
+            if self
+                .shared
+                .frames
+                .release_any(&frames::slot(&self.id, source))
+            {
+                self.shared.emit(CallEvent::Video {
+                    peer_id: self.id.clone(),
+                    source,
+                    active: false,
+                });
+            }
         }
         let _ = self.conn.pc.close().await;
     }
@@ -550,26 +595,48 @@ async fn run(
         ignore_offer: false,
         connected: false,
         candidates: Vec::new(),
+        streams: HashMap::new(),
         receivers: Vec::new(),
     };
     // The negotiation-needed event of the tracks just added waits in the
     // core until its driver wakes up, which (before ICE starts) is never:
     // ask for the first negotiation ourselves.
     let _ = commands.send(PeerCommand::NegotiationNeeded);
-    // A peer that lost a picture of our screen asks for a keyframe.
-    let requests = {
-        let (track, shared) = (peer.conn.screen.track.clone(), peer.shared.clone());
-        tokio::spawn(async move {
+    // A peer that lost a picture of our screen or camera asks for a keyframe.
+    for (source, local) in [
+        (VideoSource::Screen, &peer.conn.screen),
+        (VideoSource::Camera, &peer.conn.camera),
+    ] {
+        let (track, shared) = (local.track.clone(), peer.shared.clone());
+        peer.receivers.push(tokio::spawn(async move {
             while let Some(event) = track.poll().await {
                 if let TrackLocalEvent::OnRtcpPacket(packets) = event {
                     if asks_keyframe(&packets) {
-                        shared.keyframe.store(true, Ordering::Relaxed);
+                        shared.keyframe(source).store(true, Ordering::Relaxed);
                     }
                 }
             }
-        })
-    };
-    peer.receivers.push(requests);
+        }));
+    }
+    // The UI shows the round trip on the peer's tile.
+    {
+        let (rtt, shared, id) = (peer.conn.rtt.clone(), peer.shared.clone(), peer.id.clone());
+        peer.receivers.push(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(LATENCY_EVERY);
+            let mut previous = UNKNOWN_RTT;
+            loop {
+                interval.tick().await;
+                let now = rtt.load(Ordering::Relaxed);
+                if now != previous {
+                    previous = now;
+                    shared.emit(CallEvent::Latency {
+                        peer_id: id.clone(),
+                        ms: (now != UNKNOWN_RTT).then_some(now),
+                    });
+                }
+            }
+        }));
+    }
     drop(commands);
     while let Some(command) = receiver.recv().await {
         match command {
@@ -632,11 +699,29 @@ mod tests {
     #[test]
     fn recognizes_a_description_with_our_tracks() {
         let sdp = "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-audio disc-call-audio-track\r\n\
-                   m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-screen disc-call-screen-track\r\n";
+                   m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-screen disc-call-screen-track\r\n\
+                   m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-camera disc-call-camera-track\r\n";
         assert!(carries_our_tracks(sdp));
+        // A description from before the camera track still needs an offer.
+        assert!(!carries_our_tracks(
+            &sdp[..sdp
+                .find("m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-camera")
+                .unwrap()]
+        ));
         assert!(!carries_our_tracks(
             "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-audio x\r\n"
         ));
+    }
+
+    #[test]
+    fn reads_the_streams_a_browser_names() {
+        let data =
+            json!({ "description": {}, "streams": { "{abc}": "camera", "{def}": "screen" } });
+        let streams = named_streams(&data);
+        assert_eq!(streams["{abc}"], VideoSource::Camera);
+        assert_eq!(streams["{def}"], VideoSource::Screen);
+        assert!(named_streams(&json!({ "description": {} })).is_empty());
+        assert!(named_streams(&json!({ "streams": { "x": "speaker" } })).is_empty());
     }
 
     #[test]
@@ -655,7 +740,7 @@ mod tests {
     /// Two native peers in one process, signaling through each other's
     /// events exactly as the UI relays them over the socket.
     #[test]
-    fn two_native_peers_connect_and_exchange_voice_and_screen() {
+    fn two_native_peers_connect_and_exchange_voice_screen_and_camera() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -721,41 +806,80 @@ mod tests {
                 }
             }
 
-            // Now a's screen, starting mid-stream: b cannot decode P-frames
-            // without the keyframe, asks for one (PLI), and a sends it.
-            let frame = crate::video::tests::raw(320, 180, 0);
-            let mut encoder = crate::video::ScreenEncoder::new(30, (320, 180)).unwrap();
-            let _missed_keyframe = encoder.encoder.encode(&crate::video::planes(&frame)).unwrap().to_vec();
-            a.keyframe.store(false, Ordering::Relaxed);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            let mut ticker = tokio::time::interval(Duration::from_millis(33));
-            let mut shift = 0;
+            // Now a's screen, then a's camera, each starting mid-stream: b
+            // cannot decode P-frames without the keyframe, asks for one
+            // (PLI) on that track, and a sends it. Each arrives as what it is.
+            for source in [VideoSource::Screen, VideoSource::Camera] {
+                let frame = crate::video::tests::raw(320, 180, 0);
+                let mut encoder = crate::video::VideoEncoder::new(
+                    source,
+                    30,
+                    crate::video::SCREEN_BITRATE,
+                    (320, 180),
+                )
+                .unwrap();
+                let _missed_keyframe =
+                    encoder.encoder.encode(&crate::video::planes(&frame)).unwrap().to_vec();
+                a.keyframe(source).store(false, Ordering::Relaxed);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                let mut ticker = tokio::time::interval(Duration::from_millis(33));
+                let mut shift = 0;
+                loop {
+                    tokio::select! {
+                        Some((from, event)) = events.recv() => {
+                            if let ("b", CallEvent::Video { peer_id, source: got, active: true }) = (from, event) {
+                                assert_eq!(peer_id, "a");
+                                assert_eq!(got, source, "video arrived as the wrong source");
+                                break;
+                            }
+                        },
+                        _ = ticker.tick() => {
+                            shift += 2;
+                            if a.keyframe(source).swap(false, Ordering::Relaxed) {
+                                encoder.encoder.force_intra_frame();
+                            }
+                            let frame = crate::video::tests::raw(320, 180, shift);
+                            let bits = encoder.encoder.encode(&crate::video::planes(&frame)).unwrap().to_vec();
+                            let _ = frames_a.send(EncodedFrame {
+                                kind: source.kind(),
+                                data: Bytes::from(bits),
+                                duration: Duration::from_millis(33),
+                            });
+                        }
+                        _ = tokio::time::sleep_until(deadline) => panic!("b never decoded a's {source:?} (no PLI round trip?)"),
+                    }
+                }
+                let jpeg = b
+                    .frames
+                    .next(&frames::slot("a", source), Duration::from_secs(1))
+                    .expect("a decoded picture");
+                assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+            }
+
+            // b's reports on a's audio echo a's sender reports: a learns
+            // the round trip, which is tiny on loopback.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            let mut ticker = tokio::time::interval(Duration::from_millis(20));
             loop {
                 tokio::select! {
                     Some((from, event)) = events.recv() => {
-                        if let ("b", CallEvent::Screen { peer_id, active: true }) = (from, event) {
-                            assert_eq!(peer_id, "a");
+                        if let ("a", CallEvent::Latency { peer_id, ms: Some(ms) }) = (from, event) {
+                            assert_eq!(peer_id, "b");
+                            assert!(ms < 200, "{ms} ms on loopback");
                             break;
                         }
                     },
                     _ = ticker.tick() => {
-                        shift += 2;
-                        if a.keyframe.swap(false, Ordering::Relaxed) {
-                            encoder.encoder.force_intra_frame();
-                        }
-                        let frame = crate::video::tests::raw(320, 180, shift);
-                        let bits = encoder.encoder.encode(&crate::video::planes(&frame)).unwrap().to_vec();
+                        let size = encoder.encode_float(&tone, &mut packet).unwrap();
                         let _ = frames_a.send(EncodedFrame {
-                            kind: Kind::Screen,
-                            data: Bytes::from(bits),
-                            duration: Duration::from_millis(33),
+                            kind: Kind::Audio,
+                            data: Bytes::copy_from_slice(&packet[..size]),
+                            duration: Duration::from_millis(20),
                         });
                     }
-                    _ = tokio::time::sleep_until(deadline) => panic!("b never decoded a's screen (no PLI round trip?)"),
+                    _ = tokio::time::sleep_until(deadline) => panic!("a never measured the round trip to b"),
                 }
             }
-            let jpeg = b.frames.next("a", Duration::from_secs(1)).expect("a decoded picture");
-            assert!(jpeg.starts_with(&[0xFF, 0xD8]));
 
             peer_a.send(PeerCommand::Close);
             peer_b.send(PeerCommand::Close);

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { CameraSession, cameraError } from "../lib/camera";
 import { errorMessage, selectDevice } from "../lib/audio";
-import { nativeCamera } from "../lib/nativeCamera";
+import { nativeCamera, type CameraClaim } from "../lib/nativeCamera";
 
 export interface CameraOption {
   deviceId: string;
@@ -38,6 +38,7 @@ export interface CameraController {
 type Mode = "pending" | "browser" | "native";
 
 const PREVIEW_FAILED = "Não foi possível exibir o vídeo. Tente iniciar a webcam novamente.";
+const CAMERA_TAKEN = "A chamada assumiu a câmera. Desligue a câmera na chamada para testar aqui.";
 
 function useCameraMode(): Mode {
   const [mode, setMode] = useState<Mode>(() => (isTauri() ? "pending" : "browser"));
@@ -168,6 +169,7 @@ function useNativeCamera(enabled: boolean): CameraController {
   const generation = useRef(0);
   const pending = useRef(false);
   const mounted = useRef(false);
+  const claim = useRef<CameraClaim | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -186,7 +188,9 @@ function useNativeCamera(enabled: boolean): CameraController {
     setLive(false);
     setSettings({});
     setBusy(false);
-    void nativeCamera.stop().catch(() => {});
+    // Only stops the camera if a call did not take it since.
+    claim.current?.release();
+    claim.current = null;
   }, []);
 
   const start = useCallback(async () => {
@@ -195,17 +199,36 @@ function useNativeCamera(enabled: boolean): CameraController {
     const request = ++generation.current;
     setBusy(true);
     setError(null);
+    const mine: CameraClaim = nativeCamera.claim(() => {
+      if (claim.current !== mine) return;
+      claim.current = null;
+      generation.current += 1;
+      pending.current = false;
+      if (!mounted.current) return;
+      setLive(false);
+      setSettings({});
+      setBusy(false);
+      setError(CAMERA_TAKEN);
+    });
+    claim.current = mine;
     try {
       const info = await nativeCamera.start(deviceId);
       if (!mounted.current || generation.current !== request) {
         // Cancelled while the camera was opening: release it again.
-        void nativeCamera.stop().catch(() => {});
+        if (claim.current === mine) {
+          mine.release();
+          claim.current = null;
+        } else nativeCamera.releaseLate();
         return;
       }
       setSettings({ deviceId: info.deviceId, width: info.width, height: info.height, frameRate: info.frameRate });
       setDeviceId(info.deviceId);
       setLive(true);
     } catch (cause) {
+      if (claim.current === mine) {
+        mine.release();
+        claim.current = null;
+      }
       if (mounted.current && generation.current === request) setError(errorMessage(cause));
     } finally {
       if (mounted.current && generation.current === request) {

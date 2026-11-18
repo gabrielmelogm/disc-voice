@@ -1,17 +1,26 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 
-/** A `voice.signal` payload, in the browser's JSON format. */
+/** Which of a participant's videos. */
+export type VideoSource = "screen" | "camera";
+
+/**
+ * A `voice.signal` payload, in the browser's JSON format. Descriptions from
+ * the webview also name their video streams, since a browser cannot choose
+ * stream IDs (the native engine uses `disc-call-screen`/`disc-call-camera`).
+ */
 export interface SignalData {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  streams?: Record<string, VideoSource>;
 }
 
 export type CallEvent =
   | { type: "signal"; peerId: string; data: SignalData }
   | { type: "peerState"; peerId: string; state: RTCPeerConnectionState }
+  | { type: "latency"; peerId: string; ms: number | null }
   | { type: "speaking"; peerIds: string[] }
-  | { type: "screen"; peerId: string; active: boolean }
-  | { type: "screenEnded"; message: string }
+  | { type: "video"; peerId: string; source: VideoSource; active: boolean }
+  | { type: "videoEnded"; source: VideoSource; message: string }
   | { type: "error"; message: string };
 
 export interface CallDevice {
@@ -56,8 +65,11 @@ export const nativeCall = {
   /** Sends what the screen engine captures (after its picker) to the call. */
   startScreen: (frameRate: number) => invoke<void>("call_screen_start", { frameRate }),
   stopScreen: () => invoke<void>("call_screen_stop"),
-  /** Next JPEG of a peer's screen; empty when none arrived in time. */
-  frame: (peerId: string) => invoke<ArrayBuffer>("call_screen_frame", { peerId }),
+  /** Sends what the camera engine captures (after `startForCall`) to the call. */
+  startCamera: (frameRate: number, bitrate: number) => invoke<void>("call_camera_start", { frameRate, bitrate }),
+  stopCamera: () => invoke<void>("call_camera_stop"),
+  /** Next JPEG of a peer's screen or camera; empty when none arrived in time. */
+  frame: (peerId: string, source: VideoSource) => invoke<ArrayBuffer>("call_video_frame", { peerId, source }),
 };
 
 /** Native devices in the shape the call settings list (MediaDeviceInfo). */

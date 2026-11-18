@@ -661,7 +661,7 @@ async fn accounts_invites_channels_and_authorization() {
     );
     emit(
         &mut guest_ws,
-        json!({ "type": "voice.state", "muted": false, "deafened": false, "screen": true }),
+        json!({ "type": "voice.state", "muted": false, "deafened": false, "screen": true, "camera": true }),
     )
     .await;
     loop {
@@ -670,12 +670,12 @@ async fn accounts_invites_channels_and_authorization() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p["peerId"] == guest_peer && p["screen"] == true)
+            .any(|p| p["peerId"] == guest_peer && p["screen"] == true && p["camera"] == true)
         {
             break;
         }
     }
-    // Clients without screen sharing omit the field: it means not sharing.
+    // Older clients omit screen/camera: it means not sharing.
     emit(
         &mut guest_ws,
         json!({ "type": "voice.state", "muted": true, "deafened": true }),
@@ -688,6 +688,7 @@ async fn accounts_invites_channels_and_authorization() {
                 && p["muted"] == true
                 && p["deafened"] == true
                 && p["screen"] == false
+                && p["camera"] == false
         }) {
             break;
         }

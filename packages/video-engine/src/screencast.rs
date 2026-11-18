@@ -503,7 +503,7 @@ fn build_pipeline(
 }
 
 /// An I420 sample's planes without the row padding GStreamer may add.
-fn packed_i420(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn packed_i420(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
     let info = gstreamer_video::VideoInfo::from_caps(sample.caps()?).ok()?;
     if info.format() != gstreamer_video::VideoFormat::I420 {
         return None;

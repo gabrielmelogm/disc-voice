@@ -13,7 +13,7 @@ mod screencast;
 #[cfg(windows)]
 mod wgc;
 
-pub use backend::RawFrame;
+pub use backend::{RawFrame, RawSize};
 pub use engine::*;
 #[cfg(target_os = "linux")]
 pub use pipewire::PipeWireBackend;

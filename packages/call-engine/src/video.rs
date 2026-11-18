@@ -1,11 +1,12 @@
-//! Shared screens as H.264 (OpenH264, built from source): ours is encoded
-//! once, straight from the capture's I420 frames, for every peer; each
-//! peer's is reassembled from RTP, decoded, and compressed to JPEG for the
-//! UI on a second thread, so decoding and compressing overlap.
+//! Shared screens and cameras as H.264 (OpenH264, built from source): ours
+//! is encoded once, straight from the capture's I420 frames, for every peer;
+//! each peer's is reassembled from RTP, decoded, and compressed to JPEG for
+//! the UI on a second thread, so decoding and compressing overlap.
 
 use crate::{
-    engine::{CallEvent, FrameSource, Shared},
-    hub::{EncodedFrame, Kind},
+    engine::{CallEvent, FrameSource, Shared, VideoSource},
+    frames,
+    hub::EncodedFrame,
 };
 use bytes::Bytes;
 use disc_video::RawFrame;
@@ -31,8 +32,9 @@ use std::{
 use tokio::sync::mpsc::UnboundedSender;
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 
-/// Upload per participant, as the browser client: sharp enough for text.
-const BITRATE: u32 = 2_500_000;
+/// Screen upload per participant, as the browser client: sharp enough for
+/// text.
+pub const SCREEN_BITRATE: u32 = 2_500_000;
 const FRAME_WAIT: Duration = Duration::from_millis(250);
 /// Screens only produce frames when their content changes; the last one is
 /// sent again this often so a still screen keeps flowing.
@@ -53,18 +55,27 @@ pub(crate) fn planes(frame: &RawFrame) -> YUVSlices<'_> {
     YUVSlices::new((y, u, v), (width, height), (width, width / 2, width / 2))
 }
 
-pub(crate) struct ScreenEncoder {
+pub(crate) struct VideoEncoder {
     pub(crate) encoder: Encoder,
     size: (usize, usize),
 }
 
-impl ScreenEncoder {
-    pub(crate) fn new(frame_rate: u32, size: (usize, usize)) -> Result<Self, String> {
+impl VideoEncoder {
+    pub(crate) fn new(
+        source: VideoSource,
+        frame_rate: u32,
+        bitrate: u32,
+        size: (usize, usize),
+    ) -> Result<Self, String> {
+        let usage = match source {
+            VideoSource::Screen => UsageType::ScreenContentRealTime,
+            VideoSource::Camera => UsageType::CameraVideoRealTime,
+        };
         let config = EncoderConfig::new()
-            .bitrate(BitRate::from_bps(BITRATE))
+            .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(frame_rate.max(1) as f32))
             .rate_control_mode(RateControlMode::Bitrate)
-            .usage_type(UsageType::ScreenContentRealTime)
+            .usage_type(usage)
             // With skipping on, every keyframe (~250 KB at 1080p) made the
             // rate control drop ~15 frames to stay on budget: the screen
             // froze for half a second. Without it the average stays the
@@ -76,25 +87,33 @@ impl ScreenEncoder {
     }
 }
 
-/// Our screen, encoded for the hub.
-pub(crate) struct ScreenSender {
+/// Our screen or camera, encoded for the hub.
+pub(crate) struct VideoSender {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl ScreenSender {
+impl VideoSender {
     pub fn start(
+        video: VideoSource,
         mut source: FrameSource,
         frame_rate: u32,
+        bitrate: u32,
         shared: Arc<Shared>,
         out: UnboundedSender<EncodedFrame>,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let ended = move |shared: &Shared, message| {
+            shared.emit(CallEvent::VideoEnded {
+                source: video,
+                message,
+            })
+        };
         let thread = thread::Builder::new()
-            .name("disc-call-screen".into())
+            .name(format!("disc-call-{}", video.name()))
             .spawn(move || {
-                let mut encoder: Option<ScreenEncoder> = None;
+                let mut encoder: Option<VideoEncoder> = None;
                 let mut last: Option<Arc<RawFrame>> = None;
                 let mut sent = Instant::now();
                 while !flag.load(Ordering::Relaxed) {
@@ -104,7 +123,7 @@ impl ScreenSender {
                         Ok(None) => continue,
                         Err(message) => {
                             if !flag.load(Ordering::Relaxed) {
-                                shared.emit(CallEvent::ScreenEnded { message });
+                                ended(&shared, message);
                             }
                             break;
                         }
@@ -113,19 +132,19 @@ impl ScreenSender {
                     let yuv = planes(frame);
                     let size = yuv.dimensions();
                     if encoder.as_ref().is_none_or(|current| current.size != size) {
-                        match ScreenEncoder::new(frame_rate, size) {
+                        match VideoEncoder::new(video, frame_rate, bitrate, size) {
                             Ok(created) => encoder = Some(created),
                             Err(message) => {
-                                shared.emit(CallEvent::ScreenEnded { message });
+                                ended(&shared, message);
                                 break;
                             }
                         }
-                        shared.keyframe.store(true, Ordering::Relaxed);
+                        shared.keyframe(video).store(true, Ordering::Relaxed);
                     }
                     let encoder = &mut encoder.as_mut().expect("created above").encoder;
                     // Keyframes only when needed: a new peer, a new size, or
                     // a peer that lost a picture (PLI/FIR).
-                    if shared.keyframe.swap(false, Ordering::Relaxed) {
+                    if shared.keyframe(video).swap(false, Ordering::Relaxed) {
                         encoder.force_intra_frame();
                     }
                     let Ok(bitstream) = encoder.encode(&yuv) else {
@@ -136,7 +155,7 @@ impl ScreenSender {
                     sent = Instant::now();
                     if !data.is_empty() {
                         let _ = out.send(EncodedFrame {
-                            kind: Kind::Screen,
+                            kind: video.kind(),
                             data: Bytes::from(data),
                             duration,
                         });
@@ -151,7 +170,7 @@ impl ScreenSender {
     }
 }
 
-impl Drop for ScreenSender {
+impl Drop for VideoSender {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         // The thread wakes within one frame wait; never block the caller
@@ -225,20 +244,26 @@ impl Latest {
     }
 }
 
-/// Receives one peer's screen until its track ends.
-pub(crate) async fn receive(peer: String, track: Arc<dyn TrackRemote>, shared: Arc<Shared>) {
+/// Receives one peer's screen or camera until its track ends.
+pub(crate) async fn receive(
+    peer: String,
+    source: VideoSource,
+    track: Arc<dyn TrackRemote>,
+    shared: Arc<Shared>,
+) {
     let owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
+    let slot = frames::slot(&peer, source);
     let (units, decode) = mpsc::channel::<Bytes>();
     let (wants_keyframe, mut keyframe_requests) = tokio::sync::mpsc::unbounded_channel::<()>();
     let pictures = Arc::new(Latest::default());
     let compressor = {
-        let (pictures, shared, peer) = (pictures.clone(), shared.clone(), peer.clone());
+        let (pictures, shared, slot) = (pictures.clone(), shared.clone(), slot.clone());
         thread::Builder::new()
             .name("disc-call-jpeg".into())
             .spawn(move || {
                 while let Some(picture) = pictures.take() {
                     if let Some(jpeg) = jpeg(&picture) {
-                        shared.frames.publish(&peer, owner, jpeg);
+                        shared.frames.publish(&slot, owner, jpeg);
                     }
                 }
             })
@@ -280,8 +305,9 @@ pub(crate) async fn receive(peer: String, track: Arc<dyn TrackRemote>, shared: A
                         });
                         if !active {
                             active = true;
-                            shared.emit(CallEvent::Screen {
+                            shared.emit(CallEvent::Video {
                                 peer_id: decoder_peer.clone(),
+                                source,
                                 active: true,
                             });
                         }
@@ -292,9 +318,10 @@ pub(crate) async fn receive(peer: String, track: Arc<dyn TrackRemote>, shared: A
                 }
             }
             decoder_pictures.close();
-            if shared.frames.release(&decoder_peer, owner) && active {
-                shared.emit(CallEvent::Screen {
+            if shared.frames.release(&slot, owner) && active {
+                shared.emit(CallEvent::Video {
                     peer_id: decoder_peer,
+                    source,
                     active: false,
                 });
             }
@@ -365,7 +392,8 @@ pub(crate) mod tests {
     fn raw_frames_survive_an_encode_decode_round_trip() {
         let frame = raw(160, 90, 0);
         let yuv = planes(&frame);
-        let mut encoder = ScreenEncoder::new(30, yuv.dimensions()).unwrap();
+        let mut encoder =
+            VideoEncoder::new(VideoSource::Screen, 30, SCREEN_BITRATE, yuv.dimensions()).unwrap();
         encoder.encoder.force_intra_frame();
         let mut decoder = Decoder::new().unwrap();
         let mut decoded = None;
@@ -381,7 +409,8 @@ pub(crate) mod tests {
     #[test]
     fn keyframes_do_not_make_the_encoder_drop_frames() {
         let frames: Vec<RawFrame> = (0..60).map(|i| raw(1280, 720, i * 4)).collect();
-        let mut encoder = ScreenEncoder::new(30, (1280, 720)).unwrap();
+        let mut encoder =
+            VideoEncoder::new(VideoSource::Screen, 30, SCREEN_BITRATE, (1280, 720)).unwrap();
         let mut sent = 0;
         for (i, frame) in frames.iter().enumerate() {
             if i % 20 == 0 {

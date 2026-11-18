@@ -35,6 +35,7 @@ it("authenticates in a frame and synchronizes history after the server acknowled
   expect(JSON.parse(socket.send.mock.calls[0][0])).toEqual({ type: "authenticate", token: sessionToken.get() });
   socket.event({ type: "ready", peerId: "peer" });
   expect(JSON.parse(socket.send.mock.calls[1][0])).toEqual({ type: "server.watch", serverId: "server-1" });
+  expect(JSON.parse(socket.send.mock.calls[2][0])).toEqual({ type: "ping" });
   const revision = client.getSnapshot().revision;
   socket.event({ type: "server.snapshot", serverId: "server-1", channels: {} });
   expect(client.getSnapshot().revision).toBeGreaterThan(revision);
@@ -59,4 +60,25 @@ it("reconnects after loss and ignores events from the old socket", async () => {
   client.stop();
   await vi.advanceTimersByTimeAsync(60_000);
   expect(Socket.instances).toHaveLength(2);
+});
+
+it("measures the round trip to the server from the heartbeat", async () => {
+  const client = new Realtime();
+  const seen: (number | null)[] = [];
+  client.onLatency(ms => seen.push(ms));
+  client.start();
+  const socket = Socket.instances[0];
+  socket.open();
+  socket.event({ type: "ready", peerId: "peer" });
+  await vi.advanceTimersByTimeAsync(42);
+  socket.event({ type: "pong" });
+  expect(client.latency).toBe(42);
+  // A pong nobody waits for (duplicate) changes nothing.
+  await vi.advanceTimersByTimeAsync(100);
+  socket.event({ type: "pong" });
+  expect(client.latency).toBe(42);
+  socket.close();
+  expect(client.latency).toBeNull();
+  expect(seen).toEqual([42, null]);
+  client.stop();
 });

@@ -14,6 +14,29 @@ export class Realtime {
   private listeners = new Set<(event: RealtimeEvent) => void>();
   private changes = new Set<() => void>();
   private snapshot = { status: "connecting" as RealtimeStatus, revision: 0 };
+  /** When the unanswered ping left; 0 when none is out. */
+  private pingSent = 0;
+  private latencyMs: number | null = null;
+  private latencyListeners = new Set<(ms: number | null) => void>();
+
+  /**
+   * Round trip to the API in milliseconds, from the heartbeat; `null` while
+   * disconnected. Kept out of the snapshot so it never re-renders the app.
+   */
+  get latency() { return this.latencyMs; }
+  onLatency = (listener: (ms: number | null) => void) => {
+    this.latencyListeners.add(listener);
+    return () => { this.latencyListeners.delete(listener); };
+  };
+  private setLatency(ms: number | null) {
+    if (ms === this.latencyMs) return;
+    this.latencyMs = ms;
+    this.latencyListeners.forEach(listener => listener(ms));
+  }
+  private ping() {
+    this.pingSent = Date.now();
+    this.send({ type: "ping" });
+  }
 
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
@@ -26,6 +49,10 @@ export class Realtime {
   };
 
   private status(status: RealtimeStatus) {
+    if (status !== "connected") {
+      this.pingSent = 0;
+      this.setLatency(null);
+    }
     this.snapshot = { status, revision: this.snapshot.revision + (status === "connected" ? 1 : 0) };
     this.changes.forEach(listener => listener());
   }
@@ -79,10 +106,16 @@ export class Realtime {
         window.dispatchEvent(new Event("discvoice:session-expired"));
         return;
       }
+      if (data.type === "pong" && this.pingSent) {
+        this.setLatency(Date.now() - this.pingSent);
+        this.pingSent = 0;
+      }
       if (data.type === "ready") {
         this.attempts = 0;
         this.status("connected");
         this.watch(this.watching);
+        // Measure right away instead of after the first heartbeat.
+        this.ping();
       }
       if (data.type === "server.snapshot" && data.serverId === this.watching) {
         // Synchronize history after the subscription is acknowledged, closing
@@ -107,7 +140,7 @@ export class Realtime {
         socket.close();
         socket.onclose?.(new CloseEvent("close"));
       } else if (this.snapshot.status === "connected") {
-        this.send({ type: "ping" });
+        this.ping();
       }
     }, 5_000);
   }

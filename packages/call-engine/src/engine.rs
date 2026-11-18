@@ -2,10 +2,10 @@
 
 use crate::{
     audio::{Capture, Levels, Mixer, Playback},
-    frames::Frames,
-    hub::{EncodedFrame, MediaHub},
+    frames::{self, Frames},
+    hub::{EncodedFrame, Kind, MediaHub},
     peer::{self, PeerCommand, PeerHandle},
-    video::ScreenSender,
+    video::VideoSender,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,6 +18,8 @@ use std::{
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use webrtc::peer_connection::RTCIceServer;
+
+pub use crate::video::SCREEN_BITRATE;
 
 /// How often the speaking indicators are recomputed (as in the browser).
 const SPEAKING_INTERVAL: Duration = Duration::from_millis(150);
@@ -55,6 +57,41 @@ pub struct CallConfig {
     pub deafened: bool,
 }
 
+/// Which of a participant's videos: each has its own track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoSource {
+    Screen,
+    Camera,
+}
+
+impl VideoSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Screen => "screen",
+            Self::Camera => "camera",
+        }
+    }
+
+    pub(crate) fn kind(self) -> Kind {
+        match self {
+            Self::Screen => Kind::Screen,
+            Self::Camera => Kind::Camera,
+        }
+    }
+
+    /// The source of a peer's video track, from its stream ID. Browser
+    /// clients name their streams in `voice.signal` (`streams`); native ones
+    /// use fixed IDs (`disc-call-camera`). Older clients only sent screens.
+    pub(crate) fn of_stream(stream_id: &str, named: Option<VideoSource>) -> Self {
+        named.unwrap_or(if stream_id.contains("camera") {
+            Self::Camera
+        } else {
+            Self::Screen
+        })
+    }
+}
+
 /// What the engine tells the UI. Peer IDs are the API's call peer IDs.
 #[derive(Clone, Debug, Serialize)]
 #[serde(
@@ -71,12 +108,23 @@ pub enum CallEvent {
     },
     /// `RTCPeerConnectionState` of one peer, as the browser names it.
     PeerState { peer_id: String, state: String },
+    /// Round trip to a peer in milliseconds, when it changes; `None` until
+    /// measured.
+    Latency { peer_id: String, ms: Option<u32> },
     /// Who is speaking now; includes our own peer ID while unmuted.
     Speaking { peer_ids: Vec<String> },
-    /// A peer's screen started (first picture decoded) or ended.
-    Screen { peer_id: String, active: bool },
-    /// Our screen capture ended by itself (stopped from the system UI...).
-    ScreenEnded { message: String },
+    /// A peer's screen or camera started (first picture decoded) or ended.
+    Video {
+        peer_id: String,
+        source: VideoSource,
+        active: bool,
+    },
+    /// Our screen or camera capture ended by itself (stopped from the
+    /// system UI, camera unplugged...).
+    VideoEnded {
+        source: VideoSource,
+        message: String,
+    },
     /// The call cannot go on (the microphone or speakers failed...).
     Error { message: String },
 }
@@ -96,9 +144,9 @@ pub struct CallDevices {
 }
 
 pub type EventSink = Arc<dyn Fn(CallEvent) + Send + Sync>;
-/// Pulls the next raw (I420) frame of the screen being shared, waiting at
-/// most the given time (`None`: no new frame). An error means the capture
-/// ended. Our own preview is drawn by the UI from the capture's JPEGs.
+/// Pulls the next raw (I420) frame of the screen or camera being sent,
+/// waiting at most the given time (`None`: no new frame). An error means the
+/// capture ended. Our own preview is drawn by the UI from the capture's JPEGs.
 pub type FrameSource =
     Box<dyn FnMut(Duration) -> Result<Option<Arc<disc_video::RawFrame>>, String> + Send>;
 
@@ -110,8 +158,11 @@ pub(crate) struct Shared {
     pub mixer: Mixer,
     pub levels: Levels,
     pub frames: Frames,
-    /// Set when a new peer connects: the next screen frame is a keyframe.
-    pub keyframe: AtomicBool,
+    /// Set when a new peer connects or one lost a picture: the next screen
+    /// frame is a keyframe.
+    pub screen_keyframe: AtomicBool,
+    /// The same, for the camera.
+    pub camera_keyframe: AtomicBool,
     pub muted: AtomicBool,
     pub deafened: AtomicBool,
 }
@@ -120,6 +171,13 @@ impl Shared {
     pub fn emit(&self, event: CallEvent) {
         if self.alive.load(Ordering::Acquire) {
             (self.events)(event);
+        }
+    }
+
+    pub fn keyframe(&self, source: VideoSource) -> &AtomicBool {
+        match source {
+            VideoSource::Screen => &self.screen_keyframe,
+            VideoSource::Camera => &self.camera_keyframe,
         }
     }
 
@@ -137,7 +195,8 @@ impl Shared {
             mixer: Mixer::default(),
             levels: Levels::default(),
             frames: Frames::default(),
-            keyframe: AtomicBool::new(true),
+            screen_keyframe: AtomicBool::new(true),
+            camera_keyframe: AtomicBool::new(true),
             muted: AtomicBool::new(false),
             deafened: AtomicBool::new(false),
         })
@@ -153,15 +212,24 @@ struct Session {
     encoded: mpsc::UnboundedSender<EncodedFrame>,
     capture: Option<Capture>,
     playback: Option<Playback>,
-    screen: Option<ScreenSender>,
+    screen: Option<VideoSender>,
+    camera: Option<VideoSender>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl Session {
+    fn video(&mut self, source: VideoSource) -> &mut Option<VideoSender> {
+        match source {
+            VideoSource::Screen => &mut self.screen,
+            VideoSource::Camera => &mut self.camera,
+        }
+    }
+
     fn close(mut self) {
         self.shared.alive.store(false, Ordering::Release);
         // Stopping the threads first keeps them from feeding closing peers.
         self.screen = None;
+        self.camera = None;
         self.capture = None;
         self.playback = None;
         for (_, peer) in self.peers.drain() {
@@ -221,7 +289,8 @@ impl CallEngine {
             mixer: Mixer::default(),
             levels: Levels::default(),
             frames: Frames::default(),
-            keyframe: AtomicBool::new(true),
+            screen_keyframe: AtomicBool::new(true),
+            camera_keyframe: AtomicBool::new(true),
             muted: AtomicBool::new(config.muted || config.deafened),
             deafened: AtomicBool::new(config.deafened),
         });
@@ -244,6 +313,7 @@ impl CallEngine {
             capture: Some(capture),
             playback: Some(playback),
             screen: None,
+            camera: None,
             tasks,
         });
         Ok(id)
@@ -350,34 +420,54 @@ impl CallEngine {
         Ok(())
     }
 
-    /// Sends the frames of `source` to everyone in the call.
-    pub fn start_screen(&self, source: FrameSource, frame_rate: u32) -> Result<(), String> {
+    /// Sends the frames of `frames` as our `source` video to everyone in
+    /// the call, at most `frame_rate` per second and `bitrate` bits per
+    /// second for each peer.
+    pub fn start_video(
+        &self,
+        source: VideoSource,
+        frames: FrameSource,
+        frame_rate: u32,
+        bitrate: u32,
+    ) -> Result<(), String> {
         let mut current = self.session();
-        let session = current
-            .as_mut()
-            .ok_or("Entre em um canal de voz para compartilhar a tela.")?;
-        session.screen = None;
-        session.shared.keyframe.store(true, Ordering::Relaxed);
-        session.screen = Some(ScreenSender::start(
+        let session = current.as_mut().ok_or(match source {
+            VideoSource::Screen => "Entre em um canal de voz para compartilhar a tela.",
+            VideoSource::Camera => "Entre em um canal de voz para ligar a câmera.",
+        })?;
+        *session.video(source) = None;
+        session
+            .shared
+            .keyframe(source)
+            .store(true, Ordering::Relaxed);
+        let sender = VideoSender::start(
             source,
+            frames,
             frame_rate,
+            bitrate,
             session.shared.clone(),
             session.encoded.clone(),
-        )?);
+        )?;
+        *session.video(source) = Some(sender);
         Ok(())
     }
 
-    pub fn stop_screen(&self) {
+    pub fn stop_video(&self, source: VideoSource) {
         if let Some(session) = self.session().as_mut() {
-            session.screen = None;
+            *session.video(source) = None;
         }
     }
 
-    /// The next picture of a peer's screen as JPEG. `None` when no new one
-    /// arrived in time.
-    pub fn screen_frame(&self, peer_id: &str, timeout: Duration) -> Option<Vec<u8>> {
+    /// The next picture of a peer's screen or camera as JPEG. `None` when no
+    /// new one arrived in time.
+    pub fn video_frame(
+        &self,
+        peer_id: &str,
+        source: VideoSource,
+        timeout: Duration,
+    ) -> Option<Vec<u8>> {
         let shared = self.session().as_ref()?.shared.clone();
-        shared.frames.next(peer_id, timeout)
+        shared.frames.next(&frames::slot(peer_id, source), timeout)
     }
 
     /// Microphones and speakers, identified by their PulseAudio names.
@@ -478,5 +568,34 @@ mod tests {
             event,
             serde_json::json!({ "type": "speaking", "peerIds": ["p1"] })
         );
+        let event = serde_json::to_value(CallEvent::Video {
+            peer_id: "p1".into(),
+            source: VideoSource::Camera,
+            active: true,
+        })
+        .unwrap();
+        assert_eq!(
+            event,
+            serde_json::json!({ "type": "video", "peerId": "p1", "source": "camera", "active": true })
+        );
+    }
+
+    #[test]
+    fn video_sources_follow_named_streams_then_native_ids() {
+        assert_eq!(
+            VideoSource::of_stream("disc-call-camera", None),
+            VideoSource::Camera
+        );
+        assert_eq!(
+            VideoSource::of_stream("disc-call-screen", None),
+            VideoSource::Screen
+        );
+        // Browser stream IDs are random: they say what they are in signaling,
+        // and an unnamed one comes from a client that only shared screens.
+        assert_eq!(
+            VideoSource::of_stream("{a1b2}", Some(VideoSource::Camera)),
+            VideoSource::Camera
+        );
+        assert_eq!(VideoSource::of_stream("{a1b2}", None), VideoSource::Screen);
     }
 }

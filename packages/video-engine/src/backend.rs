@@ -31,13 +31,39 @@ pub trait Backend {
     fn devices(&mut self) -> Result<Vec<BackendDevice<Self::Device>>, String>;
 
     /// Starts capturing `device` in `mode`. Frames must be delivered as
-    /// complete JPEG images through `sink`, from any thread.
+    /// complete JPEG images through `sink`, from any thread. With `raw`, the
+    /// capture also publishes I420 frames of that size
+    /// ([`FrameSink::publish_raw`]) for the call encoder.
     fn open(
         &mut self,
         device: &Self::Device,
         mode: &Mode,
         sink: FrameSink,
+        raw: Option<RawSize>,
     ) -> Result<Self::Stream, String>;
+}
+
+/// Size of the raw frames a capture publishes besides its JPEGs. Even
+/// dimensions, as I420 needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl RawSize {
+    /// `width` × `height` scaled down to at most `max_height` rows, keeping
+    /// the aspect ratio. Never scales up.
+    pub fn fit(width: u32, height: u32, max_height: u32) -> Self {
+        let even = |value: u32| (value & !1).max(2);
+        let rows = even(height.min(max_height));
+        let columns =
+            (u64::from(width) * u64::from(rows) + u64::from(height) / 2) / u64::from(height.max(1));
+        Self {
+            width: even(u32::try_from(columns).unwrap_or(u32::MAX)),
+            height: rows,
+        }
+    }
 }
 
 /// Where a capture delivers frames and fatal errors. Cheap to clone and
