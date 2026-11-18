@@ -12,12 +12,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
+disc-audio = { path = "../../../packages/audio-engine" }
+disc-video = { path = "../../../packages/video-engine" }
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8"
 winreg = "0.56"
-disc-audio = { path = "../../../packages/audio-engine" }
-disc-video = { path = "../../../packages/video-engine" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 disc-call = { path = "../../../packages/call-engine" }
