@@ -10,6 +10,12 @@ tauri-build = { version = "2", features = [] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+winreg = "0.56"
 disc-audio = { path = "../../../packages/audio-engine" }
 disc-video = { path = "../../../packages/video-engine" }
 
