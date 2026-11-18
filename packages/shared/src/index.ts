@@ -79,10 +79,46 @@ export interface ScreenInfo {
   cursor: boolean;
 }
 
+/** Banner colors from the design system palette. */
+export type BannerColor = "brand" | "green" | "amber" | "red" | "graphite";
+
 export interface User {
   id: string;
   email: string;
   name: string;
+  /** Profile fields; absent from older servers. */
+  pronouns?: string;
+  bio?: string;
+  banner?: BannerColor;
+}
+
+export type ProfileUpdate = Partial<Pick<User, "name" | "pronouns" | "bio" | "banner">>;
+
+export interface ChannelHit {
+  id: string;
+  serverId: string;
+  serverName: string;
+  name: string;
+  type: Channel["type"];
+}
+
+export interface MessageHit {
+  id: string;
+  channelId: string;
+  channelName: string;
+  serverId: string;
+  serverName: string;
+  author: User;
+  content: string;
+  createdAt: string;
+}
+
+export interface SearchResults {
+  channels: ChannelHit[];
+  people: User[];
+  messages: MessageHit[];
+  /** Pass as `before` for older messages; null on the last page. */
+  nextCursor: string | null;
 }
 
 export interface AuthSession {
@@ -152,6 +188,7 @@ export type RealtimeEvent =
   | { type: "error"; operation: string; message: string }
   | { type: "channel.created"; channel: Channel }
   | { type: "message.created"; message: ChatMessage }
+  | { type: "user.updated"; user: User }
   | { type: "server.snapshot"; serverId: string | null; channels: Record<string, VoiceParticipant[]> }
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }
   | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }

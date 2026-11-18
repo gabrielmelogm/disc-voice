@@ -1,6 +1,7 @@
 import { Headphones, MoreHorizontal, MessageSquareText, Search, Users } from "lucide-react";
 import type { Channel, User, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
+import { ProfileButton } from "./ProfileCard";
 import { Avatar, LiveTag, SoonTag } from "./ui";
 
 export function ChannelHeader({ channel }: { channel: Channel }) {
@@ -50,8 +51,8 @@ export function ChannelDetails({ user, voiceChannels, participants, voiceState, 
     <section className="detail-card">
       <div className="detail-heading"><h2 className="eyebrow">Pessoas</h2><button className="icon-button small" disabled aria-label="Buscar pessoas (em breve)"><Search size={16} /></button></div>
       <ul className="people-list">
-        <li><Avatar name={user.name} status="online" /><div><strong>{user.name}</strong><small>{connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"}</small></div></li>
-        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} status="online" /><div><strong>{p.user.name}</strong><small>{p.screen ? "Compartilhando a tela" : `Em ${live!.name}`}</small></div></li>)}
+        <li><Avatar name={user.name} status="online" /><div><strong><ProfileButton user={user} /></strong><small>{connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"}</small></div></li>
+        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} status="online" /><div><strong><ProfileButton user={p.user} /></strong><small>{p.screen ? "Compartilhando a tela" : `Em ${live!.name}`}</small></div></li>)}
       </ul>
       <p className="detail-footnote"><Users size={14} />Lista de membros e presença em breve</p>
     </section>

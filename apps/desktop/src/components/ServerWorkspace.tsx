@@ -8,20 +8,22 @@ import { AppBar } from "./AppBar";
 import { ChannelDetails, ChannelHeader } from "./ChannelDetails";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar } from "./DirectMessages";
+import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
+import { SearchDialog, type SearchPick } from "./SearchDialog";
 import { ServerDialog, type DialogMode } from "./ServerDialog";
 import { Settings, type SettingsPage } from "./Settings";
 import { TextChannel } from "./TextChannel";
 import { CallStatus, VoiceChannel, VoiceDevices } from "./VoiceChannel";
 
-type View = "server" | "dms" | "settings";
+type View = "server" | "dms";
 
-export function ServerWorkspace({ user, joinedServer, onLogout }: {
-  user: User; joinedServer: Server | null; onLogout: () => Promise<void>;
+export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: {
+  user: User; joinedServer: Server | null; onLogout: () => Promise<void>; onUserChange: (user: User) => void;
 }) {
   const [servers, setServers] = useState<Server[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<View>("server");
-  const [lastView, setLastView] = useState<Exclude<View, "settings">>("server");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("overview");
   const [channels, setChannels] = useState<Channel[]>([]);
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -34,11 +36,16 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
   const [reload, setReload] = useState(0);
   const [channelReload, setChannelReload] = useState(0);
   const [leaving, setLeaving] = useState(false);
+  const [searching, setSearching] = useState(false);
+  // Message to scroll to when its text channel opens (from a search result).
+  const [focusMessage, setFocusMessage] = useState<{ channelId: string; messageId: string; nonce: number } | null>(null);
   // Channel to open once another server's channel list arrives (e.g. returning to a call).
   const pendingChannel = useRef<string | null>(null);
   const realtime = useRealtime(selected);
   const { voice, state: voiceState } = useVoice(realtime.client);
   const [participants, setParticipants] = useState<Record<string, VoiceParticipant[]>>({});
+  // Latest profile of each user seen in a profile update, for the profile cards.
+  const [profiles, setProfiles] = useState<Record<string, User>>({});
   const server = servers.find(s => s.id === selected);
   const channel = channels.find(c => c.id === channelId);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
@@ -54,9 +61,25 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
     if (event.type === "voice.participants" && event.serverId === selected) {
       setParticipants(current => ({ ...current, [event.channelId]: event.participants }));
     }
-  }), [realtime.client, selected]);
+    if (event.type === "user.updated") {
+      setProfiles(current => ({ ...current, [event.user.id]: event.user }));
+      if (event.user.id === user.id) onUserChange(event.user);
+    }
+  }), [realtime.client, selected, user.id, onUserChange]);
 
   useEffect(() => { if (realtime.status !== "connected") setParticipants({}); }, [realtime.status]);
+
+  // Ctrl+K (⌘K on macOS) opens the search from anywhere in the app.
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearching(true);
+      }
+    };
+    window.addEventListener("keydown", open);
+    return () => window.removeEventListener("keydown", open);
+  }, []);
   useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); }, [selected]);
 
   useEffect(() => {
@@ -91,14 +114,13 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
     return () => controller.abort();
   }, [selected, channelReload, realtime.revision]);
 
-  function show(next: Exclude<View, "settings">) {
+  function show(next: View) {
     setView(next);
-    setLastView(next);
   }
 
   function openSettings(page: SettingsPage) {
     setSettingsPage(page);
-    setView("settings");
+    setSettingsOpen(true);
   }
 
   function acceptServer(next: Server) {
@@ -109,13 +131,33 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
   }
 
   function selectServer(next: Server) {
+    setFocusMessage(null);
     setSelected(next.id);
     show("server");
   }
 
   function openChannel(next: Channel) {
+    setFocusMessage(null);
     if (next.serverId === selected) setChannelId(next.id);
     show("server");
+  }
+
+  /** Opens a channel of any of the user's servers. */
+  function goToChannel(serverId: string, id: string) {
+    if (serverId !== selected) {
+      pendingChannel.current = id;
+      setSelected(serverId);
+    } else setChannelId(id);
+    show("server");
+  }
+
+  function pickResult(pick: SearchPick) {
+    setSettingsOpen(false);
+    if (pick.kind === "channel") goToChannel(pick.channel.serverId, pick.channel.id);
+    if (pick.kind === "message") {
+      setFocusMessage({ channelId: pick.message.channelId, messageId: pick.message.id, nonce: Date.now() });
+      goToChannel(pick.message.serverId, pick.message.channelId);
+    }
   }
 
   function joinVoice(next: Channel) {
@@ -145,17 +187,13 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
   }
 
   const callDevices = <VoiceDevices voice={voice} state={voiceState} />;
-  if (view === "settings") {
-    return <div className="app-shell">
-      <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setView(lastView)} onLogout={() => void logout()}
-        leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} />
-    </div>;
-  }
+  const visibleProfiles = { ...profiles, [user.id]: user };
+  const search = searching && <SearchResultsHost onClose={() => setSearching(false)} onPick={pickResult} />;
 
   const viewingCall = view === "server" && channel?.type === "voice";
   const showDetails = view === "server" && channel?.type === "text";
 
-  return <div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
+  return <ProfileCardProvider profiles={visibleProfiles}><div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
     {view === "dms" ? <DirectMessagesSidebar /> : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId}
       participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
       onSelect={openChannel} onJoin={joinVoice} onCreate={type => setDialog({ kind: "channel", server, channelType: type })}
@@ -171,7 +209,8 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
       {view === "dms" ? <DirectMessages /> : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
-        : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} /><TextChannel key={channel.id} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user} /></main>
+        : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
+          focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
@@ -189,20 +228,34 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
 
       <div className="bar-dock">
         <CallStatus voice={voice} state={voiceState} serverName={servers.find(s => s.id === voiceState.channel?.serverId)?.name} onOpen={goToVoice} />
-        <AppBar user={user} servers={servers} server={server} view={view === "dms" ? "dms" : "server"} voice={voice} voiceState={voiceState}
+        <AppBar user={user} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
           canJoinVoice={voiceChannels.length > 0} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
-          onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} />
+          onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} onSearch={() => setSearching(true)} />
       </div>
     </div>
 
     {showDetails && <ChannelDetails user={user} voiceChannels={voiceChannels} participants={participants} voiceState={voiceState} onJoin={joinVoice} />}
 
+    {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
+      leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} />}
+    {search}
     {dialog && !loading && <ServerDialog mode={dialog} onClose={() => setDialog(null)} onServer={acceptServer} onChannel={next => {
       if (next.serverId === selected) {
         setChannels(current => current.some(c => c.id === next.id) ? current : [...current, next]); setChannelId(next.id);
       }
     }} />}
-  </div>;
+  </div></ProfileCardProvider>;
+}
+
+/** The search dialog, inside the profile card host so people results open their card. */
+function SearchResultsHost({ onClose, onPick }: { onClose: () => void; onPick: (pick: SearchPick) => void }) {
+  const openProfile = useProfileCard();
+  // Focus returns where it was, which also anchors a person's profile card.
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : document.body);
+  return <SearchDialog onClose={() => { onClose(); opener.focus(); }} onPick={pick => {
+    if (pick.kind === "person") openProfile(pick.user, opener);
+    else onPick(pick);
+  }} />;
 }
