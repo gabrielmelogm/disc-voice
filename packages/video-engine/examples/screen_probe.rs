@@ -4,7 +4,7 @@
 //! given time (default 10 s) the probe stops, dismissing the picker if it
 //! is still open, so cancellation can be checked too.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
     use disc_video::{ScreenEngine, ScreenRequest};
     use std::time::{Duration, Instant};
@@ -13,7 +13,12 @@ fn main() {
         .nth(1)
         .and_then(|arg| arg.parse().ok())
         .unwrap_or(10);
+    #[cfg(target_os = "linux")]
     let engine = ScreenEngine::new().expect("screen engine");
+    // The Windows picker needs an owner window: the console running us.
+    #[cfg(windows)]
+    let engine = ScreenEngine::new_for_window(unsafe { GetConsoleWindow() } as isize)
+        .expect("screen engine");
     let stopper = engine.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(seconds));
@@ -42,7 +47,13 @@ fn main() {
     engine.shutdown();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetConsoleWindow() -> *mut std::ffi::c_void;
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn main() {
-    eprintln!("Screen capture is only implemented on Linux.");
+    eprintln!("Screen capture is only implemented on Windows and Linux.");
 }

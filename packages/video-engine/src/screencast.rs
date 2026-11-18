@@ -10,7 +10,9 @@
 use crate::backend::FrameSink;
 use crate::pipewire::{element, init};
 use crate::portal::{self, Outcome};
-use crate::screen::{CancelToken, ScreenBackend, ScreenRequest, ScreenSource, SourceKind};
+use crate::screen::{
+    fit, CancelToken, ScreenBackend, ScreenRequest, ScreenSource, SourceKind, Throttle,
+};
 use gio::{glib, prelude::*};
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -286,54 +288,6 @@ fn parse_streams(streams: &glib::Variant) -> Vec<PortalStream> {
         .collect()
 }
 
-/// Lets through at most one frame per `interval` on average. Screen casts
-/// send frames when the screen changes, at up to the display's refresh
-/// rate, so a 144 Hz monitor must not cost 144 encodes per second.
-struct Throttle {
-    interval: Duration,
-    /// When the next frame is due; frames slightly early still pass, so
-    /// a 60 Hz source is not halved to 20 fps by timing jitter.
-    next: Option<Instant>,
-}
-
-impl Throttle {
-    fn new(frame_rate: u32) -> Self {
-        Self {
-            interval: Duration::from_secs(1) / frame_rate.max(1),
-            next: None,
-        }
-    }
-
-    fn admit(&mut self, now: Instant) -> bool {
-        let slack = self.interval / 4;
-        if self.next.is_some_and(|next| now + slack < next) {
-            return false;
-        }
-        // Keep the cadence while frames flow; restart it after a pause so a
-        // burst after an idle screen is not let through at full rate.
-        let base = self
-            .next
-            .filter(|&next| now < next + self.interval)
-            .unwrap_or(now);
-        self.next = Some(base + self.interval);
-        true
-    }
-}
-
-/// The largest size within `max` with the aspect ratio of `source`, never
-/// larger than the source. Even dimensions keep 4:2:0 chroma JPEG exact.
-fn fit(source: (u32, u32), max: (u32, u32)) -> (u32, u32) {
-    let (width, height) = (source.0.max(1), source.1.max(1));
-    let scale = (f64::from(max.0) / f64::from(width))
-        .min(f64::from(max.1) / f64::from(height))
-        .min(1.0);
-    let even = |value: f64| ((value.round() as u32) & !1).max(2);
-    (
-        even(f64::from(width) * scale),
-        even(f64::from(height) * scale),
-    )
-}
-
 /// Fixed output caps for a source of `size`. The size filter must be fixed:
 /// with a range, `pipewiresrc` negotiates a 1 x 1 stream and fails.
 fn scaled_caps(size: (u32, u32), request: &ScreenRequest) -> gst::Caps {
@@ -548,58 +502,11 @@ mod tests {
     }
 
     #[test]
-    fn fit_scales_down_keeping_the_aspect_ratio() {
-        assert_eq!(fit((2560, 1440), (1280, 720)), (1280, 720));
-        assert_eq!(fit((3440, 1440), (1920, 1080)), (1920, 804));
-        // Portrait windows are limited by height.
-        assert_eq!(fit((1000, 1800), (1280, 720)), (400, 720));
-        // Smaller sources are never scaled up, but stay even.
-        assert_eq!(fit((801, 599), (1280, 720)), (800, 598));
-        assert_eq!(fit((1, 1), (1280, 720)), (2, 2));
-    }
-
-    #[test]
     fn cursor_mode_only_asks_for_supported_modes() {
         assert_eq!(cursor_mode(true, Some(7)), Some(CURSOR_EMBEDDED));
         assert_eq!(cursor_mode(false, Some(7)), Some(CURSOR_HIDDEN));
         assert_eq!(cursor_mode(true, Some(CURSOR_HIDDEN)), None);
         assert_eq!(cursor_mode(true, None), None);
-    }
-
-    /// Frames per second let through when frames arrive at `source_hz`,
-    /// measured over ten seconds (early frames may cross a window edge).
-    fn admitted_rate(frame_rate: u32, source_hz: u32) -> f64 {
-        let mut throttle = Throttle::new(frame_rate);
-        let period = Duration::from_secs(1) / source_hz;
-        let start = Instant::now();
-        let count = (0..)
-            .map(|index| start + period * index)
-            .take_while(|&time| time < start + Duration::from_secs(10))
-            .filter(|&time| throttle.admit(time))
-            .count();
-        count as f64 / 10.0
-    }
-
-    #[test]
-    fn throttle_holds_the_requested_rate() {
-        let close = |actual: f64, expected: f64| (actual - expected).abs() < 0.15;
-        assert!(close(admitted_rate(30, 60), 30.0));
-        assert!(close(admitted_rate(30, 144), 30.0));
-        assert!(close(admitted_rate(60, 60), 60.0));
-        assert!(close(admitted_rate(15, 60), 15.0));
-        // A slower source is never held back.
-        assert!(close(admitted_rate(60, 24), 24.0));
-    }
-
-    #[test]
-    fn throttle_restarts_after_an_idle_screen() {
-        let mut throttle = Throttle::new(30);
-        let start = Instant::now();
-        assert!(throttle.admit(start));
-        let later = start + Duration::from_secs(5);
-        assert!(throttle.admit(later));
-        assert!(!throttle.admit(later + Duration::from_millis(5)));
-        assert!(throttle.admit(later + Duration::from_millis(34)));
     }
 
     /// Reads a local PipeWire video node through the real pipeline, e.g.

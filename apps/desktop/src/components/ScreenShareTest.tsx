@@ -49,7 +49,7 @@ export function ScreenShareTest({ screen }: { screen: ScreenShareController }) {
         <div><h2 id="screen-title">Testar compartilhamento de tela</h2><p>Escolha uma tela ou janela e veja como ela seria transmitida.</p></div>
         {live && <span className="badge live">Compartilhando</span>}
       </div>
-      {status === "unavailable" && <p className="inline-error screen-unavailable">O compartilhamento de tela está disponível somente no aplicativo para Linux por enquanto.</p>}
+      {status === "unavailable" && <p className="inline-error screen-unavailable">O compartilhamento de tela está disponível somente no aplicativo para Windows e Linux.</p>}
       <div className="screen-test">
         <div className="screen-options">
           <div className="field"><label htmlFor="screen-resolution">Resolução máxima</label>

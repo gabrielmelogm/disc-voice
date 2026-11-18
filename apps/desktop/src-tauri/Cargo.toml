@@ -11,7 +11,7 @@ tauri-build = { version = "2", features = [] }
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 tauri = { version = "2", features = [] }
 disc-audio = { path = "../../../packages/audio-engine" }
+disc-video = { path = "../../../packages/video-engine" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-disc-video = { path = "../../../packages/video-engine" }
 webkit2gtk = { version = "2.0", features = ["v2_38"] }

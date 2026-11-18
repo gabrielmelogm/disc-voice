@@ -53,7 +53,7 @@ describe("screen share test card", () => {
 
   it("explains that sharing is not available on this platform", () => {
     render(<ScreenShareTest screen={controller({ status: "unavailable" })} />);
-    expect(screen.getByText(/disponível somente no aplicativo para Linux/)).toBeVisible();
+    expect(screen.getByText(/disponível somente no aplicativo para Windows e Linux/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Compartilhar tela" })).toBeDisabled();
   });
 

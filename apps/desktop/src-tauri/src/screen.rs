@@ -1,14 +1,14 @@
-//! Screen sharing commands, backed by the native engine (Linux only for
-//! now: the ScreenCast portal plus PipeWire). Other platforms report that
-//! the feature is unavailable so the UI can say so.
+//! Screen sharing commands, backed by the native engine: the ScreenCast
+//! portal plus PipeWire on Linux, Windows.Graphics.Capture on Windows.
+//! Other platforms report that the feature is unavailable.
 
 /// Whether native screen capture exists on this platform.
 #[tauri::command]
 pub fn screen_native() -> bool {
-    cfg!(target_os = "linux")
+    cfg!(any(windows, target_os = "linux"))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod native {
     use disc_video::{ScreenEngine, ScreenInfo, ScreenRequest};
     use std::time::Duration;
@@ -58,7 +58,7 @@ pub mod native {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub mod native {
     const UNSUPPORTED: &str =
         "O compartilhamento de tela ainda não está disponível nesta plataforma.";
@@ -80,27 +80,29 @@ pub mod native {
     }
 }
 
-/// Registers the native engine (Linux only).
+/// Registers the native engine.
 pub fn manage(app: &tauri::App) -> Result<(), String> {
+    use tauri::Manager;
     #[cfg(target_os = "linux")]
+    app.manage(disc_video::ScreenEngine::new()?);
+    #[cfg(windows)]
     {
-        use tauri::Manager;
-        app.manage(disc_video::ScreenEngine::new()?);
+        // The Windows picker is a dialog owned by the main window.
+        let window = app
+            .get_webview_window("main")
+            .ok_or("A janela principal não foi encontrada.")?;
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        app.manage(disc_video::ScreenEngine::new_for_window(hwnd.0 as isize)?);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = app;
     Ok(())
 }
 
 /// Ends any sharing (and closes an open picker) when the window closes.
 pub fn shutdown(window: &tauri::Window) {
-    #[cfg(target_os = "linux")]
-    {
-        use tauri::Manager;
-        if let Some(engine) = window.try_state::<disc_video::ScreenEngine>() {
-            engine.shutdown();
-        }
+    use tauri::Manager;
+    if let Some(engine) = window.try_state::<disc_video::ScreenEngine>() {
+        engine.shutdown();
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = window;
 }

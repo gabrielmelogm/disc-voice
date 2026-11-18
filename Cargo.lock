@@ -1025,6 +1025,8 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "serde",
+ "windows 0.62.2",
+ "windows-future",
 ]
 
 [[package]]

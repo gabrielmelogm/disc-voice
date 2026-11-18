@@ -10,6 +10,8 @@ mod pipewire;
 mod portal;
 #[cfg(target_os = "linux")]
 mod screencast;
+#[cfg(windows)]
+mod wgc;
 
 pub use engine::*;
 #[cfg(target_os = "linux")]
@@ -19,3 +21,5 @@ pub use screen::{
 };
 #[cfg(target_os = "linux")]
 pub use screencast::ScreenCastBackend;
+#[cfg(windows)]
+pub use wgc::WgcBackend;
