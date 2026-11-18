@@ -1,11 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeCommand, RealtimeEvent } from "@disc-voice/shared";
 import { api } from "./api";
+import { nativeScreen } from "./nativeScreen";
 import { Voice } from "./voice";
 import type { Realtime } from "./realtime";
 
+const share = vi.hoisted(() => ({
+  stop: vi.fn(),
+  track: { kind: "video" } as unknown as MediaStreamTrack,
+  stream: { id: "screen" } as unknown as MediaStream,
+  onError: (_message: string) => {},
+}));
+vi.mock("./screenTrack", () => ({
+  screenTrack: vi.fn((_pull: unknown, _rate: number, onError: (message: string) => void) => {
+    share.onError = onError;
+    return { stream: share.stream, track: share.track, stop: share.stop };
+  }),
+}));
+
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
-const participant = { peerId: "self", user: { id: "user-1", email: "amigo@example.com", name: "Amigo" }, muted: false, deafened: false };
+const participant = { peerId: "self", user: { id: "user-1", email: "amigo@example.com", name: "Amigo" }, muted: false, deafened: false, screen: false };
 
 function setup() {
   let listener: (event: RealtimeEvent) => void = () => {};
@@ -76,7 +90,7 @@ describe("voice lifecycle", () => {
     expect(voice.getSnapshot().status).toBe("connected");
     voice.toggleDeafen();
     expect(first.track.enabled).toBe(false);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true, screen: false });
     status("reconnecting");
     expect(first.track.stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot().status).toBe("reconnecting");
@@ -138,5 +152,133 @@ describe("voice lifecycle", () => {
     expect(send).toHaveBeenLastCalledWith({ type: "voice.signal", peerId: "remote", data: { description: { type: "answer", sdp: "answer" } } });
     voice.dispose();
     expect(peer.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("screen sharing in a call", () => {
+  const info = { source: "unknown" as const, width: 2560, height: 1440, maxWidth: 1920, maxHeight: 1080, frameRate: 30, cursor: true };
+
+  class ScreenPeer {
+    static all: ScreenPeer[] = [];
+    remoteDescription = null;
+    signalingState = "stable";
+    connectionState = "new";
+    ontrack: ((event: { track: { kind: string; onended?: () => void }; streams: MediaStream[] }) => void) | null = null;
+    senders: { track: unknown; setParameters: ReturnType<typeof vi.fn> }[] = [];
+    addTrack = vi.fn((track: unknown) => {
+      const sender = { track, getParameters: () => ({ encodings: [{}] }), setParameters: vi.fn().mockResolvedValue(undefined) };
+      this.senders.push(sender);
+      return sender;
+    });
+    removeTrack = vi.fn();
+    close = vi.fn();
+    constructor() { ScreenPeer.all.push(this); }
+  }
+
+  const screenSenders = (peer: ScreenPeer) => peer.addTrack.mock.calls.filter(([track]) => track === share.track);
+
+  async function inCall() {
+    const media = stream();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue(media.media),
+      enumerateDevices: vi.fn().mockResolvedValue([]), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    ScreenPeer.all = [];
+    vi.stubGlobal("RTCPeerConnection", ScreenPeer);
+    vi.stubGlobal("MediaStream", class { constructor(public tracks: unknown[]) {} });
+    const stop = vi.spyOn(nativeScreen, "stop").mockResolvedValue(undefined);
+    const start = vi.spyOn(nativeScreen, "start").mockResolvedValue(info);
+    const call = setup();
+    await call.voice.join(channel);
+    call.event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [
+      participant, { ...participant, peerId: "remote" },
+    ] });
+    return { ...call, start, stop };
+  }
+
+  it("sends the screen to every peer, including later ones, and stops it", async () => {
+    const { voice, send, event, start, stop } = await inCall();
+    await voice.startScreen();
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ maxWidth: 1920, maxHeight: 1080, frameRate: 30 }));
+    expect(voice.getSnapshot()).toMatchObject({ screen: "live", screenInfo: info, localScreen: share.stream });
+    expect(screenSenders(ScreenPeer.all[0])).toHaveLength(1);
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true });
+
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [
+      participant, { ...participant, peerId: "remote" }, { ...participant, peerId: "late" },
+    ] });
+    expect(ScreenPeer.all).toHaveLength(2);
+    expect(screenSenders(ScreenPeer.all[1])).toHaveLength(1);
+
+    voice.stopScreen();
+    for (const peer of ScreenPeer.all) expect(peer.removeTrack).toHaveBeenCalledOnce();
+    expect(share.stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(voice.getSnapshot()).toMatchObject({ screen: "idle", localScreen: null });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false });
+    voice.dispose();
+  });
+
+  it("returns to idle when the picker is dismissed", async () => {
+    const { voice, start } = await inCall();
+    start.mockResolvedValueOnce(null);
+    await voice.startScreen();
+    expect(voice.getSnapshot().screen).toBe("idle");
+    expect(screenSenders(ScreenPeer.all[0])).toHaveLength(0);
+    voice.dispose();
+  });
+
+  it("cancelling while picking closes the picker and ignores the late answer", async () => {
+    const { voice, start, stop } = await inCall();
+    let answer!: (value: typeof info) => void;
+    start.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+    const starting = voice.startScreen();
+    expect(voice.getSnapshot().screen).toBe("picking");
+    voice.stopScreen();
+    expect(stop).toHaveBeenCalledOnce();
+    answer(info);
+    await starting;
+    expect(voice.getSnapshot().screen).toBe("idle");
+    expect(screenSenders(ScreenPeer.all[0])).toHaveLength(0);
+    voice.dispose();
+  });
+
+  it("ends sharing when leaving the call or when the capture ends", async () => {
+    const { voice, stop } = await inCall();
+    await voice.startScreen();
+    share.onError("O compartilhamento de tela foi encerrado.");
+    expect(voice.getSnapshot()).toMatchObject({ screen: "idle", error: "O compartilhamento de tela foi encerrado." });
+    expect(stop).toHaveBeenCalledOnce();
+
+    await voice.startScreen();
+    voice.leave();
+    expect(share.stop).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(voice.getSnapshot().screen).toBe("idle");
+    voice.dispose();
+  });
+
+  it("the settings test taking the engine ends the call's sharing without stopping the capture", async () => {
+    const { voice, stop } = await inCall();
+    await voice.startScreen();
+    const test = nativeScreen.claim(() => {});
+    expect(voice.getSnapshot()).toMatchObject({ screen: "idle", error: expect.stringMatching(/teste/) });
+    expect(stop).not.toHaveBeenCalled();
+    test.release();
+    voice.dispose();
+  });
+
+  it("shows screens received from peers until they leave", async () => {
+    const { voice, event } = await inCall();
+    const track: { kind: string; onended?: () => void } = { kind: "video" };
+    ScreenPeer.all[0].ontrack!({ track, streams: [] });
+    expect(Object.keys(voice.getSnapshot().remoteScreens)).toEqual(["remote"]);
+    track.onended!();
+    expect(voice.getSnapshot().remoteScreens).toEqual({});
+    ScreenPeer.all[0].ontrack!({ track, streams: [] });
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant] });
+    expect(voice.getSnapshot().remoteScreens).toEqual({});
+    voice.dispose();
   });
 });

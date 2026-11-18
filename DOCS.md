@@ -215,12 +215,18 @@ npm run build:windows
 
 O `.exe` fica em `target/release/bundle/nsis/`. O instalador baixa o WebView2 caso necessário, portanto essa etapa precisa de internet se o runtime estiver ausente.
 
+### Compartilhamento de tela no Windows
+
+A tela é capturada pelo motor nativo (`packages/video-engine/src/wgc.rs`) com **Windows.Graphics.Capture**: o seletor do próprio Windows escolhe a tela ou janela, os quadros chegam como texturas Direct3D 11, são reduzidos e codificados em JPEG pelo WIC em uma thread separada. Requer Windows 10 versão 1903 ou mais recente; esconder o cursor exige a versão 2004 e remover a borda amarela de captura exige o Windows 11 (nas versões anteriores a borda continua aparecendo). O seletor não informa se foi escolhida uma tela ou uma janela, então a fonte aparece como “Fonte do sistema”.
+
+Sem o app, `cargo run -p disc-video --example screen_probe 20` abre o seletor a partir do terminal e informa quantos quadros chegaram. `cargo test -p disc-video -- --ignored captures_valid_jpeg_frames_from_the_primary_monitor` captura o monitor principal por 3 s sem passar pelo seletor (os quadros são descartados).
+
 ## Testes de dispositivos
 
 1. **Microfone:** selecione uma entrada e clique em **Testar microfone**. O medidor exibe o pico capturado e seu nível em dBFS. Fale por até 10 segundos; também é possível finalizar antes.
 2. **Saída:** selecione a saída física, ajuste o volume do teste e clique em **Tocar som**. Um tom suave de 440 Hz toca por 3 segundos em todos os canais da saída. **Ouvir gravação** reproduz o último trecho capturado nesse mesmo dispositivo.
 3. **Webcam:** selecione uma câmera e clique em **Testar webcam**. Aceite a permissão do WebView2. A prévia mostra resolução e taxa de quadros reportadas pela câmera, com opção de espelhamento.
-4. **Tela (Linux):** escolha a resolução máxima, a taxa de quadros e se o cursor aparece, clique em **Compartilhar tela** e selecione uma tela ou janela no seletor do sistema. A prévia mostra a fonte, o tamanho real dos quadros e os fps recebidos. Uma tela parada envia menos quadros. **Cancelar** fecha o seletor, e encerrar o compartilhamento pelo indicador do desktop também encerra o teste.
+4. **Tela (Windows e Linux):** escolha a resolução máxima, a taxa de quadros e se o cursor aparece, clique em **Compartilhar tela** e selecione uma tela ou janela no seletor do sistema. A prévia mostra a fonte, o tamanho real dos quadros e os fps recebidos. Uma tela parada envia menos quadros. **Cancelar** fecha o seletor, e encerrar o compartilhamento pelo indicador do desktop também encerra o teste.
 5. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
 6. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
 
@@ -305,5 +311,14 @@ Abra `http://127.0.0.1:1420`. Essa prévia também funciona no Linux, mas o **á
 - Interromper a rede e confirmar reconexão, remoção de participantes inativos e liberação dos dispositivos.
 - Repetir em duas redes distintas; verificar uso do candidato `relay` nas estatísticas WebRTC quando TURN for necessário.
 - Repetir no Tauri empacotado para Windows e Linux, usando dispositivos reais.
+
+### Validação manual do compartilhamento de tela na chamada
+
+Na chamada, o botão de tela (ao lado do microfone) abre o seletor do sistema e envia a tela a todos os participantes como vídeo WebRTC nas mesmas conexões do áudio (até 1920 × 1080, 30 fps, ~2,5 Mbps por participante). Quem compartilha aparece com o ícone de tela na lista; as telas recebidas ficam acima dos participantes (clique em ampliar, ou duplo clique para tela cheia). O motor tem uma captura só: iniciar o teste das configurações encerra o compartilhamento da chamada e vice-versa.
+
+- Com duas contas (Windows ↔ Windows e Windows ↔ Linux) no mesmo canal, compartilhar uma tela e uma janela; o outro lado deve ver o vídeo e o ícone.
+- Cancelar o seletor; parar o compartilhamento; fechar a janela compartilhada (deve aparecer “O compartilhamento de tela foi encerrado.”).
+- Entrar no canal com a tela já sendo compartilhada: o novo participante deve recebê-la.
+- Sair do canal compartilhando: o indicador/borda do sistema deve sumir.
 
 Os testes automatizados não substituem essa verificação com drivers e hardware reais.

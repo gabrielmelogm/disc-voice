@@ -1,7 +1,15 @@
-import type { Channel, RealtimeEvent, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, RealtimeEvent, ScreenInfo, ScreenRequest, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "./api";
 import { nativeAudio } from "./audio";
+import { nativeScreen, type ScreenClaim } from "./nativeScreen";
 import type { Realtime } from "./realtime";
+import { screenTrack, type ScreenTrack } from "./screenTrack";
+
+/** What a call shares: sharp enough for text, light enough for a P2P mesh. */
+export const CALL_SCREEN: ScreenRequest = { maxWidth: 1920, maxHeight: 1080, frameRate: 30, cursor: true };
+/** Upload per participant; every peer gets its own copy of the screen. */
+const SCREEN_BITRATE = 2_500_000;
+const SCREEN_TAKEN = "O teste de compartilhamento de tela assumiu a captura.";
 
 export interface VoiceState {
   status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
@@ -16,11 +24,23 @@ export interface VoiceState {
   outputId: string;
   playbackBlocked: boolean;
   deviceBusy: boolean;
+  /** Our own peer ID in the current call. */
+  peerId: string;
+  /** Whether this app can capture the screen natively. */
+  screenSupported: boolean;
+  /** `picking`: the system picker is open, waiting for the user. */
+  screen: "idle" | "picking" | "live";
+  screenInfo: ScreenInfo | null;
+  /** What we send, for the local preview. */
+  localScreen: MediaStream | null;
+  /** Screens received, by peer ID. */
+  remoteScreens: Record<string, MediaStream>;
 }
 
 interface Peer {
   pc: RTCPeerConnection;
   audio: HTMLAudioElement;
+  screenSender?: RTCRtpSender;
   makingOffer: boolean;
   ignoreOffer: boolean;
   settingAnswer: boolean;
@@ -47,6 +67,7 @@ export class Voice {
   private state: VoiceState = {
     status: "idle", channel: null, participants: [], muted: false, deafened: false, error: "",
     speaking: [], devices: [], inputId: preference("input"), outputId: preference("output"), playbackBlocked: false, deviceBusy: false,
+    peerId: "", screenSupported: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
   };
   private changes = new Set<() => void>();
   private stream?: MediaStream;
@@ -62,6 +83,10 @@ export class Voice {
   private offEvent?: () => void;
   private offStatus?: () => void;
   private wasConnected = false;
+  private share?: ScreenTrack;
+  private screenClaim?: ScreenClaim;
+  /** Increments on every screen start/stop, so a late picker answer is ignored. */
+  private screenAttempt = 0;
 
   constructor(private realtime: Realtime) {}
 
@@ -89,6 +114,7 @@ export class Voice {
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshDevices);
     window.addEventListener("pagehide", this.leave);
     void this.refreshDevices();
+    void nativeScreen.supported().then(screenSupported => this.update({ screenSupported }), () => {});
   }
 
   dispose() {
@@ -151,7 +177,7 @@ export class Voice {
       try { this.send({ type: "voice.leave" }); } catch { /* Socket closed concurrently. */ }
     }
     this.cleanup();
-    this.update({ status: "idle", channel: null, participants: [], speaking: [], error: "", playbackBlocked: false, deviceBusy: false });
+    this.update({ status: "idle", channel: null, participants: [], speaking: [], error: "", playbackBlocked: false, deviceBusy: false, peerId: "" });
   };
 
   private fail(error: string) {
@@ -181,9 +207,106 @@ export class Voice {
     this.stream?.getAudioTracks().forEach(track => { track.enabled = !this.state.muted && !this.state.deafened; });
     this.peers.forEach(peer => { peer.audio.muted = this.state.deafened; });
     if (this.joined) {
-      try { this.send({ type: "voice.state", muted: this.state.muted || this.state.deafened, deafened: this.state.deafened }); }
-      catch { /* Reconnect restores controls. */ }
+      try {
+        this.send({
+          type: "voice.state", muted: this.state.muted || this.state.deafened, deafened: this.state.deafened,
+          screen: this.state.screen === "live",
+        });
+      } catch { /* Reconnect restores controls. */ }
     }
+  }
+
+  /**
+   * Opens the system picker and sends what the user chose to everyone in
+   * the call, as a video track on the existing peer connections (adding it
+   * renegotiates them). Peers that join later get it too.
+   */
+  startScreen = async (request: ScreenRequest = CALL_SCREEN) => {
+    if (!this.joined || this.state.screen !== "idle") return;
+    const generation = this.generation;
+    const attempt = ++this.screenAttempt;
+    const claim: ScreenClaim = nativeScreen.claim(() => {
+      if (this.screenClaim !== claim) return;
+      this.screenClaim = undefined;
+      this.endScreen();
+      this.update({ error: SCREEN_TAKEN });
+      this.syncControls();
+    });
+    this.screenClaim = claim;
+    this.update({ screen: "picking", error: "" });
+    const current = () => generation === this.generation && attempt === this.screenAttempt && this.screenClaim === claim;
+    try {
+      const info = await nativeScreen.start(request);
+      if (!current()) return;
+      if (!info) {
+        this.screenClaim = undefined;
+        this.update({ screen: "idle" });
+        return;
+      }
+      const share: ScreenTrack = screenTrack(nativeScreen.frame, info.frameRate, error => {
+        if (this.share !== share) return;
+        this.stopScreen();
+        this.update({ error });
+      });
+      this.share = share;
+      this.peers.forEach(peer => this.sendScreen(peer));
+      this.update({ screen: "live", screenInfo: info, localScreen: share.stream });
+      this.syncControls();
+    } catch (error) {
+      if (!current()) return;
+      this.screenClaim = undefined;
+      claim.release();
+      this.update({ screen: "idle", error: voiceError(error) });
+    }
+  };
+
+  /** Stops sharing, or closes the picker while it is open. */
+  stopScreen = () => {
+    if (this.state.screen === "idle" && !this.share) return;
+    const claim = this.screenClaim;
+    this.screenClaim = undefined;
+    this.endScreen();
+    claim?.release();
+    this.syncControls();
+  };
+
+  /** Removes our screen from the call; the capture itself is the claim's. */
+  private endScreen() {
+    this.screenAttempt++;
+    const share = this.share;
+    this.share = undefined;
+    this.peers.forEach(peer => {
+      if (!peer.screenSender) return;
+      try { if (peer.pc.signalingState !== "closed") peer.pc.removeTrack(peer.screenSender); }
+      catch { /* The connection is closing. */ }
+      peer.screenSender = undefined;
+    });
+    share?.stop();
+    if (this.state.screen !== "idle" || this.state.localScreen) this.update({ screen: "idle", screenInfo: null, localScreen: null });
+  }
+
+  private sendScreen(peer: Peer) {
+    if (!this.share || peer.screenSender) return;
+    const sender = peer.pc.addTrack(this.share.track, this.share.stream);
+    peer.screenSender = sender;
+    void (async () => {
+      try {
+        const parameters = sender.getParameters();
+        if (!parameters.encodings?.length) return;
+        parameters.encodings[0].maxBitrate = SCREEN_BITRATE;
+        await sender.setParameters(parameters);
+      } catch { /* The default bitrate also works. */ }
+    })();
+  }
+
+  private remoteScreen(id: string, peer: Peer, track: MediaStreamTrack) {
+    const stream = new MediaStream([track]);
+    track.onended = () => {
+      if (this.state.remoteScreens[id] !== stream) return;
+      const { [id]: _ended, ...rest } = this.state.remoteScreens;
+      this.update({ remoteScreens: rest });
+    };
+    if (this.peers.get(id) === peer) this.update({ remoteScreens: { ...this.state.remoteScreens, [id]: stream } });
   }
 
   setInput = async (inputId: string) => {
@@ -247,6 +370,7 @@ export class Voice {
     if (event.type === "voice.joined" && event.channelId === channel.id && this.stream) {
       this.peerId = event.peerId;
       this.joined = true;
+      this.update({ peerId: event.peerId });
       this.analyse(this.peerId, this.stream);
       this.participants(event.participants);
     }
@@ -298,6 +422,8 @@ export class Voice {
     };
     pc.ontrack = event => {
       if (this.peers.get(id) !== peer) return;
+      // Screens come in their own stream; audio stays as before.
+      if (event.track.kind === "video") { this.remoteScreen(id, peer, event.track); return; }
       const stream = event.streams[0] || new MediaStream([event.track]);
       audio.srcObject = stream;
       this.analyse(id, stream);
@@ -321,6 +447,7 @@ export class Voice {
       this.connectionState();
     };
     this.stream.getTracks().forEach(track => pc.addTrack(track, this.stream!));
+    this.sendScreen(peer);
   }
 
   private async signal(id: string, peer: Peer, data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit }) {
@@ -407,8 +534,18 @@ export class Voice {
     peer.audio.pause();
     peer.audio.srcObject = null;
     this.removeAnalyser(id);
+    if (this.state.remoteScreens[id]) {
+      const { [id]: _removed, ...rest } = this.state.remoteScreens;
+      this.update({ remoteScreens: rest });
+    }
   }
   private cleanup() {
+    // Sharing ends with the call; the voice.leave (or the lost socket)
+    // already tells the others.
+    const claim = this.screenClaim;
+    this.screenClaim = undefined;
+    this.endScreen();
+    claim?.release();
     this.generation++;
     this.joined = false;
     clearTimeout(this.deadline);

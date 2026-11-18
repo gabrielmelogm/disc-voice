@@ -56,7 +56,7 @@ export interface CameraInfo {
   passthrough: boolean;
 }
 
-/** Native screen capture (Linux). Keep in sync with packages/video-engine/src/screen.rs. */
+/** Native screen capture (Windows and Linux). Keep in sync with packages/video-engine/src/screen.rs. */
 export type ScreenSourceKind = "monitor" | "window" | "virtual" | "unknown";
 
 export interface ScreenRequest {
@@ -128,6 +128,8 @@ export interface VoiceParticipant {
   user: User;
   muted: boolean;
   deafened: boolean;
+  /** Sharing the screen; the video arrives over the peer connection. */
+  screen: boolean;
 }
 
 export type RealtimeEvent =
@@ -148,5 +150,5 @@ export type RealtimeCommand =
   | { type: "server.watch"; serverId: string | null }
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
-  | { type: "voice.state"; muted: boolean; deafened: boolean }
+  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean }
   | { type: "voice.signal"; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };

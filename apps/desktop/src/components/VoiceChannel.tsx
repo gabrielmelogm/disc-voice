@@ -1,4 +1,5 @@
-import { Headphones, Mic, MicOff, PhoneOff, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Headphones, Maximize2, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Volume2, VolumeX } from "lucide-react";
 import type { Channel, VoiceParticipant } from "@disc-voice/shared";
 import type { Voice, VoiceState } from "../lib/voice";
 
@@ -7,8 +8,19 @@ const labels: Record<VoiceState["status"], string> = {
   reconnecting: "Reconectando…", error: "Falha na conexão",
 };
 
+function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
+  if (!state.screenSupported) return null;
+  const active = state.screen !== "idle";
+  const label = state.screen === "picking" ? "Cancelar escolha da tela" : active ? "Parar compartilhamento de tela" : "Compartilhar tela";
+  return <button className={`icon-button ${state.screen === "live" ? "sharing" : ""}`} aria-label={label} aria-pressed={active} title={label}
+    disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : void voice.startScreen())}>
+    {active ? <MonitorOff size={19} /> : <MonitorUp size={19} />}
+  </button>;
+}
+
 export function VoiceControls({ voice, state }: { voice: Voice; state: VoiceState }) {
   return <div className="voice-controls">
+    <ScreenButton voice={voice} state={state} />
     <button className="icon-button" aria-label={state.muted ? "Ativar microfone" : "Silenciar microfone"} aria-pressed={state.muted} title={state.muted ? "Ativar microfone" : "Silenciar microfone"} onClick={voice.toggleMute}>{state.muted || state.deafened ? <MicOff size={19} /> : <Mic size={19} />}</button>
     <button className="icon-button" aria-label={state.deafened ? "Ativar áudio recebido" : "Desativar áudio recebido"} aria-pressed={state.deafened} title="Áudio recebido" onClick={voice.toggleDeafen}>{state.deafened ? <VolumeX size={19} /> : <Headphones size={19} />}</button>
     <button className="icon-button disconnect" aria-label="Sair do canal de voz" title="Sair do canal de voz" onClick={voice.leave}><PhoneOff size={19} /></button>
@@ -27,6 +39,44 @@ export function VoicePanel({ voice, state }: { voice: Voice; state: VoiceState }
   </section>;
 }
 
+function ScreenVideo({ stream, label, expanded, onToggle }: {
+  stream: MediaStream; label: string; expanded: boolean; onToggle: () => void;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    video.srcObject = stream;
+    void video.play?.()?.catch(() => {});
+    return () => { video.srcObject = null; };
+  }, [stream]);
+  return <figure className={`voice-screen ${expanded ? "expanded" : ""}`}>
+    <video ref={ref} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />
+    <figcaption><span>{label}</span>
+      <button className="icon-button" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir" : "Ampliar"} onClick={onToggle}><Maximize2 size={15} /></button>
+    </figcaption>
+  </figure>;
+}
+
+/** Screens shared in the call: ours (what we send) and the ones received. */
+function VoiceScreens({ state, participants }: { state: VoiceState; participants: VoiceParticipant[] }) {
+  const [expanded, setExpanded] = useState("");
+  const remote = participants.filter(p => p.screen && p.peerId !== state.peerId);
+  const local = state.localScreen;
+  if (!local && !remote.length && state.screen !== "picking") return null;
+  const toggle = (id: string) => setExpanded(current => (current === id ? "" : id));
+  return <div className="voice-screens" aria-label="Telas compartilhadas">
+    {state.screen === "picking" && <div className="voice-screen pending" role="status">Escolha uma tela ou janela na janela do sistema.</div>}
+    {local && <ScreenVideo stream={local} label="Sua tela" expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
+    {remote.map(p => {
+      const stream = state.remoteScreens[p.peerId];
+      return stream
+        ? <ScreenVideo key={p.peerId} stream={stream} label={`Tela de ${p.user.name}`} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
+        : <div key={p.peerId} className="voice-screen pending" role="status">Recebendo a tela de {p.user.name}…</div>;
+    })}
+  </div>;
+}
+
 export function VoiceChannel({ channel, voice, state, participants, online }: {
   channel: Channel; voice: Voice; state: VoiceState; participants: VoiceParticipant[]; online: boolean;
 }) {
@@ -35,11 +85,13 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
     <Volume2 size={40} />
     <h2>{channel.name}</h2>
     <p>{active ? labels[state.status] : "Entre no canal para conversar com sua comunidade."}</p>
+    {active && <VoiceScreens state={state} participants={participants} />}
     <ul className="voice-members" aria-label="Participantes do canal de voz">
       {participants.map(participant => <li key={participant.peerId} className={state.speaking.includes(participant.peerId) ? "speaking" : ""}>
         {participant.muted ? <MicOff size={18} /> : <Mic size={18} />}
         <span title={participant.user.email}>{participant.user.name}</span>
         {participant.deafened && <VolumeX size={16} aria-label="Áudio desativado" />}
+        {participant.screen && <MonitorUp size={16} aria-label="Compartilhando a tela" />}
         {state.speaking.includes(participant.peerId) && <small>Falando</small>}
       </li>)}
     </ul>
