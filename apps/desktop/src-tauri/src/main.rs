@@ -1,15 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod app;
+#[cfg(target_os = "linux")]
+mod linux;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
+    #[cfg(target_os = "linux")]
+    linux::prepare_environment();
     app::run();
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn main() {
-    eprintln!("Disc Voice está disponível somente para Windows.");
+    eprintln!("Disc Voice está disponível somente para Windows e Linux.");
     std::process::exit(1);
 }

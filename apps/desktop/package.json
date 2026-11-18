@@ -8,8 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tauri:dev": "node scripts/windows-only.mjs && tauri dev",
-    "tauri:build": "node scripts/windows-only.mjs && tauri build --bundles nsis"
+    "tauri:dev": "node scripts/native-platform.mjs && tauri dev",
+    "tauri:build": "node scripts/native-platform.mjs win32 && tauri build --bundles nsis",
+    "tauri:build:linux": "node scripts/native-platform.mjs linux && tauri build --bundles deb,rpm"
   },
   "dependencies": {
     "@disc-voice/shared": "*",
