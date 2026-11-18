@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react";
 import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
+import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
 import { useVoice } from "../hooks/useVoice";
@@ -76,6 +77,33 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   }), [realtime.client, selected, user.id, onUserChange]);
 
   useEffect(() => { if (realtime.status !== "connected") setParticipants({}); }, [realtime.status]);
+
+  // The tray icon shows whether the user is in a call; its menu lists the recent servers.
+  useEffect(() => { if (selected) rememberServer(selected); }, [selected]);
+  const callName = inCall ? voiceState.channel?.name ?? null : null;
+  useEffect(() => {
+    syncTray({ call: callName, muted: voiceState.muted, recent: recentServers(servers) });
+  }, [callName, voiceState.muted, servers, selected]);
+  // Logged out: back to the plain icon, with no servers in the menu.
+  useEffect(() => () => syncTray({ call: null, muted: false, recent: [] }), []);
+
+  const trayActions = useRef({ openServer: (_id: string) => {}, toggleMute: () => {} });
+  useEffect(() => {
+    trayActions.current = {
+      openServer: id => {
+        const next = servers.find(s => s.id === id);
+        if (!next) return;
+        setSettingsOpen(false);
+        setSearching(false);
+        selectServer(next);
+      },
+      toggleMute: () => { if (inCall) voice.toggleMute(); },
+    };
+  });
+  useEffect(() => onTrayAction({
+    openServer: id => trayActions.current.openServer(id),
+    toggleMute: () => trayActions.current.toggleMute(),
+  }), []);
 
   // Ctrl+K (⌘K on macOS) opens the search from anywhere in the app.
   useEffect(() => {

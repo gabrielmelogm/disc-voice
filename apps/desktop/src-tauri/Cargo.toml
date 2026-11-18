@@ -14,6 +14,9 @@ tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
+# The system tray is Windows only for now.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
 tauri-winrt-notification = "0.8"
 winreg = "0.56"
 disc-audio = { path = "../../../packages/audio-engine" }
