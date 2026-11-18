@@ -15,6 +15,7 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 pub(crate) enum Kind {
     Audio,
     Screen,
+    Camera,
 }
 
 /// An Opus packet or an H.264 access unit (Annex B).
@@ -37,6 +38,7 @@ pub(crate) struct Sink {
 pub(crate) struct PeerSinks {
     pub audio: Option<Sink>,
     pub screen: Option<Sink>,
+    pub camera: Option<Sink>,
 }
 
 impl PeerSinks {
@@ -44,6 +46,7 @@ impl PeerSinks {
         match kind {
             Kind::Audio => self.audio.as_ref(),
             Kind::Screen => self.screen.as_ref(),
+            Kind::Camera => self.camera.as_ref(),
         }
     }
 }

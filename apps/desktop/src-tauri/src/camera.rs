@@ -42,6 +42,20 @@ pub mod native {
         blocking(&engine, move |engine| engine.start(&device_id)).await
     }
 
+    /// Like `camera_start`, also producing the raw frames a call encodes,
+    /// at most `max_height` rows tall.
+    #[tauri::command]
+    pub async fn camera_start_call(
+        engine: State<'_, CameraEngine>,
+        device_id: String,
+        max_height: u32,
+    ) -> Result<CameraInfo, String> {
+        blocking(&engine, move |engine| {
+            engine.start_for_call(&device_id, max_height)
+        })
+        .await
+    }
+
     #[tauri::command]
     pub async fn camera_stop(engine: State<'_, CameraEngine>) -> Result<(), String> {
         blocking(&engine, |engine| {
@@ -75,6 +89,11 @@ pub mod native {
     #[tauri::command]
     pub fn camera_start(device_id: String) -> Result<(), String> {
         let _ = device_id;
+        Err(UNSUPPORTED.into())
+    }
+
+    #[tauri::command]
+    pub fn camera_start_call() -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
 

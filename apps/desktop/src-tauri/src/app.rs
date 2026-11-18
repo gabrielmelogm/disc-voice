@@ -56,6 +56,7 @@ pub fn run() {
             camera::camera_native,
             camera::native::camera_devices,
             camera::native::camera_start,
+            camera::native::camera_start_call,
             camera::native::camera_stop,
             camera::native::camera_frame,
             screen::screen_native,
@@ -74,7 +75,9 @@ pub fn run() {
             call::native::call_devices,
             call::native::call_screen_start,
             call::native::call_screen_stop,
-            call::native::call_screen_frame,
+            call::native::call_camera_start,
+            call::native::call_camera_stop,
+            call::native::call_video_frame,
         ])
         .run(tauri::generate_context!())
         .expect("Não foi possível iniciar o Disc Voice");

@@ -130,6 +130,19 @@ export interface VoiceParticipant {
   deafened: boolean;
   /** Sharing the screen; the video arrives over the peer connection. */
   screen: boolean;
+  /** Webcam on; the video arrives over the peer connection. Absent from older servers. */
+  camera?: boolean;
+}
+
+/**
+ * WebRTC signaling between two call peers, relayed as is by the API.
+ * Descriptions name the sender's video streams, since browsers cannot
+ * choose stream IDs.
+ */
+export interface SignalPayload {
+  description?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+  streams?: Record<string, "screen" | "camera">;
 }
 
 export type RealtimeEvent =
@@ -143,12 +156,12 @@ export type RealtimeEvent =
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }
   | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }
   | { type: "voice.left"; channelId: string; reason: "left" | "replaced" }
-  | { type: "voice.signal"; channelId: string; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };
+  | { type: "voice.signal"; channelId: string; peerId: string; data: SignalPayload };
 
 export type RealtimeCommand =
   | { type: "ping" }
   | { type: "server.watch"; serverId: string | null }
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
-  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean }
-  | { type: "voice.signal"; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };
+  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean }
+  | { type: "voice.signal"; peerId: string; data: SignalPayload };

@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeCommand, RealtimeEvent } from "@disc-voice/shared";
 import { api } from "./api";
 import { nativeCall, type CallEvent } from "./nativeCall";
+import { nativeCamera } from "./nativeCamera";
 import { nativeScreen } from "./nativeScreen";
-import { Voice } from "./voice";
+import { CAMERA_QUALITIES, Voice, videoSource } from "./voice";
 import type { Realtime } from "./realtime";
 
 const share = vi.hoisted(() => ({
@@ -91,7 +92,7 @@ describe("voice lifecycle", () => {
     expect(voice.getSnapshot().status).toBe("connected");
     voice.toggleDeafen();
     expect(first.track.enabled).toBe(false);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true, screen: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true, screen: false, camera: false });
     status("reconnecting");
     expect(first.track.stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot().status).toBe("reconnecting");
@@ -150,7 +151,7 @@ describe("voice lifecycle", () => {
     event({ type: "voice.signal", channelId: channel.id, peerId: "remote", data: { candidate: { candidate: "candidate", usernameFragment: "ice" } } });
     event({ type: "voice.signal", channelId: channel.id, peerId: "remote", data: { description: { type: "offer", sdp: "a=ice-ufrag:ice\r\n" } } });
     await vi.waitFor(() => expect(peer.addIceCandidate).toHaveBeenCalledOnce());
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.signal", peerId: "remote", data: { description: { type: "answer", sdp: "answer" } } });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.signal", peerId: "remote", data: { description: { type: "answer", sdp: "answer" }, streams: {} } });
     voice.dispose();
     expect(peer.close).toHaveBeenCalledOnce();
   });
@@ -204,7 +205,7 @@ describe("screen sharing in a call", () => {
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ maxWidth: 1920, maxHeight: 1080, frameRate: 30 }));
     expect(voice.getSnapshot()).toMatchObject({ screen: "live", screenInfo: info, localScreen: share.stream });
     expect(screenSenders(ScreenPeer.all[0])).toHaveLength(1);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false });
 
     event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [
       participant, { ...participant, peerId: "remote" }, { ...participant, peerId: "late" },
@@ -217,7 +218,7 @@ describe("screen sharing in a call", () => {
     expect(share.stop).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot()).toMatchObject({ screen: "idle", localScreen: null });
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false });
     voice.dispose();
   });
 
@@ -284,6 +285,119 @@ describe("screen sharing in a call", () => {
   });
 });
 
+describe("webcam in a call (webview)", () => {
+  class CameraPeer {
+    static all: CameraPeer[] = [];
+    remoteDescription = null;
+    localDescription = { toJSON: () => ({ type: "offer", sdp: "offer" }) };
+    signalingState = "stable";
+    connectionState = "new";
+    onnegotiationneeded: (() => Promise<void>) | null = null;
+    ontrack: ((event: { track: { kind: string; onended?: () => void }; streams: { id: string }[] }) => void) | null = null;
+    senders: { track: unknown; setParameters: ReturnType<typeof vi.fn> }[] = [];
+    addTrack = vi.fn((track: unknown) => {
+      const sender = { track, getParameters: () => ({ encodings: [{}] }), setParameters: vi.fn().mockResolvedValue(undefined) };
+      this.senders.push(sender);
+      return sender;
+    });
+    removeTrack = vi.fn();
+    close = vi.fn();
+    setLocalDescription = vi.fn().mockResolvedValue(undefined);
+    setRemoteDescription = vi.fn().mockResolvedValue(undefined);
+    constructor() { CameraPeer.all.push(this); }
+  }
+
+  function camera(id = "cam-stream") {
+    const track = { kind: "video", stop: vi.fn(), onended: null as null | (() => void), contentHint: "" };
+    return { track, media: { id, getTracks: () => [track], getVideoTracks: () => [track], getAudioTracks: () => [] } as unknown as MediaStream };
+  }
+
+  async function inCall() {
+    const mic = stream();
+    const cams = [camera("cam-1"), camera("cam-2")];
+    let next = 0;
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => constraints.video ? cams[next++].media : mic.media);
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    CameraPeer.all = [];
+    vi.stubGlobal("RTCPeerConnection", CameraPeer);
+    vi.stubGlobal("MediaStream", class { id = "received"; constructor(public tracks: unknown[]) {} });
+    const call = setup();
+    await call.voice.join(channel);
+    call.event({ type: "voice.joined", channelId: channel.id, peerId: "a-self", participants: [
+      { ...participant, peerId: "a-self" }, { ...participant, peerId: "remote" },
+    ] });
+    return { ...call, getUserMedia, cams };
+  }
+
+  const cameraSenders = (peer: CameraPeer, track: unknown) => peer.addTrack.mock.calls.filter(([sent]) => sent === track);
+
+  it("sends the camera to every peer at the chosen quality, names its stream, and stops it", async () => {
+    const { voice, send, event, getUserMedia, cams } = await inCall();
+    await voice.startCamera();
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: false, video: expect.objectContaining({ width: { ideal: 640 }, height: { ideal: 360 } }) });
+    expect(voice.getSnapshot()).toMatchObject({ camera: "live", localCamera: cams[0].media });
+    expect(cameraSenders(CameraPeer.all[0], cams[0].track)).toHaveLength(1);
+    await vi.waitFor(() => expect(CameraPeer.all[0].senders.at(-1)!.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 600_000 }] }));
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true });
+
+    // The offer that adds the camera tells the peer which stream it is.
+    await CameraPeer.all[0].onnegotiationneeded!();
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.signal", peerId: "remote", data: { description: { type: "offer", sdp: "offer" }, streams: { "cam-1": "camera" } } });
+
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [
+      { ...participant, peerId: "a-self" }, { ...participant, peerId: "remote" }, { ...participant, peerId: "late" },
+    ] });
+    expect(cameraSenders(CameraPeer.all[1], cams[0].track)).toHaveLength(1);
+
+    voice.stopCamera();
+    for (const peer of CameraPeer.all) expect(peer.removeTrack).toHaveBeenCalledOnce();
+    expect(cams[0].track.stop).toHaveBeenCalledOnce();
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", localCamera: null });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false });
+    voice.dispose();
+  });
+
+  it("switching quality reopens the camera at the new size", async () => {
+    const { voice, getUserMedia, cams } = await inCall();
+    await voice.startCamera();
+    voice.setCameraQuality("720p");
+    await vi.waitFor(() => expect(voice.getSnapshot().localCamera).toBe(cams[1].media));
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: false, video: expect.objectContaining({ width: { ideal: 1280 }, height: { ideal: 720 } }) });
+    expect(cams[0].track.stop).toHaveBeenCalledOnce();
+    expect(localStorage.getItem("discvoice.voice.cameraQuality")).toBe("720p");
+    voice.dispose();
+  });
+
+  it("turns the camera off with an error when the webcam is unplugged", async () => {
+    const { voice, cams } = await inCall();
+    await voice.startCamera();
+    cams[0].track.onended!();
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: expect.stringMatching(/desconectada/) });
+    voice.dispose();
+  });
+
+  it("files received videos as camera or screen by the stream names the peer sent", async () => {
+    const { voice, event } = await inCall();
+    event({ type: "voice.signal", channelId: channel.id, peerId: "remote", data: { description: { type: "answer", sdp: "x" }, streams: { "{cam}": "camera" } } });
+    await vi.waitFor(() => expect(CameraPeer.all[0].setRemoteDescription).toHaveBeenCalled());
+    CameraPeer.all[0].ontrack!({ track: { kind: "video" }, streams: [{ id: "{cam}" }] });
+    expect(Object.keys(voice.getSnapshot().remoteCameras)).toEqual(["remote"]);
+    expect(voice.getSnapshot().remoteScreens).toEqual({});
+    CameraPeer.all[0].ontrack!({ track: { kind: "video" }, streams: [{ id: "{other}" }] });
+    expect(Object.keys(voice.getSnapshot().remoteScreens)).toEqual(["remote"]);
+    voice.dispose();
+  });
+
+  it("recognizes native peers' fixed stream IDs", () => {
+    expect(videoSource("disc-call-camera", {})).toBe("camera");
+    expect(videoSource("disc-call-screen", {})).toBe("screen");
+    expect(videoSource("{abc}", { "{abc}": "camera" })).toBe("camera");
+  });
+});
+
 describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
   function nativeEngine() {
     let emit: (event: CallEvent) => void = () => {};
@@ -302,6 +416,8 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
       startScreen: vi.spyOn(nativeCall, "startScreen").mockResolvedValue(undefined),
       stopScreen: vi.spyOn(nativeCall, "stopScreen").mockResolvedValue(undefined),
       frame: vi.spyOn(nativeCall, "frame").mockResolvedValue(new ArrayBuffer(0)),
+      startCamera: vi.spyOn(nativeCall, "startCamera").mockResolvedValue(undefined),
+      stopCamera: vi.spyOn(nativeCall, "stopCamera").mockResolvedValue(undefined),
     };
     return { ...spies, emit: (event: CallEvent) => emit(event) };
   }
@@ -389,20 +505,67 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     expect(engine.startScreen).toHaveBeenCalledWith(30);
     const local = voice.getSnapshot().localScreen as { pull: () => Promise<ArrayBuffer> };
     expect(local.pull).toBe(nativeScreen.frame);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false });
 
-    engine.emit({ type: "screenEnded", message: "O compartilhamento de tela foi encerrado." });
+    engine.emit({ type: "videoEnded", source: "screen", message: "O compartilhamento de tela foi encerrado." });
     expect(voice.getSnapshot()).toMatchObject({ screen: "idle", localScreen: null, error: "O compartilhamento de tela foi encerrado." });
     expect(engine.stopScreen).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
 
-    engine.emit({ type: "screen", peerId: "remote", active: true });
+    engine.emit({ type: "video", peerId: "remote", source: "screen", active: true });
     const remote = voice.getSnapshot().remoteScreens.remote as { pull: () => Promise<ArrayBuffer> };
     await remote.pull();
-    expect(engine.frame).toHaveBeenLastCalledWith("remote");
+    expect(engine.frame).toHaveBeenLastCalledWith("remote", "screen");
     event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant] });
     expect(voice.getSnapshot().remoteScreens).toEqual({});
     expect(engine.peers).toHaveBeenLastCalledWith("self", []);
+    voice.dispose();
+  });
+  it("sends the camera through the engine and shows received cameras as frames", async () => {
+    const startForCall = vi.spyOn(nativeCamera, "startForCall").mockResolvedValue({ deviceId: "camera-2", width: 1280, height: 720, frameRate: 30, passthrough: true });
+    const stopCamera = vi.spyOn(nativeCamera, "stop").mockResolvedValue(undefined);
+    const { voice, send, event, engine } = await inNativeCall();
+    voice.setCamera("camera-2");
+    await voice.startCamera();
+    expect(startForCall).toHaveBeenCalledWith("camera-2", 360);
+    expect(engine.startCamera).toHaveBeenCalledWith(30, CAMERA_QUALITIES["360p"].bitrate);
+    expect((voice.getSnapshot().localCamera as { pull: unknown }).pull).toBe(nativeCamera.frame);
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true });
+
+    // A new quality restarts the camera; the others keep seeing it on.
+    send.mockClear();
+    voice.setCameraQuality("720p");
+    await vi.waitFor(() => expect(startForCall).toHaveBeenLastCalledWith("camera-2", 720));
+    await vi.waitFor(() => expect(voice.getSnapshot().camera).toBe("live"));
+    expect(engine.startCamera).toHaveBeenLastCalledWith(30, CAMERA_QUALITIES["720p"].bitrate);
+    expect(send.mock.calls.every(([command]) => command.type !== "voice.state" || command.camera)).toBe(true);
+
+    engine.emit({ type: "videoEnded", source: "camera", message: "A webcam parou de enviar vídeo." });
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", localCamera: null, error: "A webcam parou de enviar vídeo." });
+    expect(stopCamera).toHaveBeenCalled();
+
+    engine.emit({ type: "video", peerId: "remote", source: "camera", active: true });
+    expect(voice.getSnapshot().remoteScreens).toEqual({});
+    const remote = voice.getSnapshot().remoteCameras.remote as { pull: () => Promise<ArrayBuffer> };
+    await remote.pull();
+    expect(engine.frame).toHaveBeenLastCalledWith("remote", "camera");
+    engine.emit({ type: "video", peerId: "remote", source: "camera", active: false });
+    expect(voice.getSnapshot().remoteCameras).toEqual({});
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant] });
+    voice.dispose();
+  });
+
+  it("the settings test taking the camera turns the call's camera off without stopping the test", async () => {
+    vi.spyOn(nativeCamera, "startForCall").mockResolvedValue({ deviceId: "camera-1", width: 640, height: 360, frameRate: 30, passthrough: true });
+    const stopCamera = vi.spyOn(nativeCamera, "stop").mockResolvedValue(undefined);
+    const { voice, send, engine } = await inNativeCall();
+    await voice.startCamera();
+    const test = nativeCamera.claim(() => {});
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: expect.stringMatching(/teste de câmera/) });
+    expect(engine.stopCamera).toHaveBeenCalledOnce();
+    expect(stopCamera).not.toHaveBeenCalled();
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "voice.state", camera: false }));
+    test.release();
     voice.dispose();
   });
 });

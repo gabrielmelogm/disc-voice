@@ -1,7 +1,9 @@
-import type { Channel, RealtimeEvent, ScreenInfo, ScreenRequest, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, RealtimeEvent, ScreenInfo, ScreenRequest, SignalPayload, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "./api";
 import { nativeAudio } from "./audio";
-import { deviceInfos, nativeCall, type CallEvent } from "./nativeCall";
+import { cameraError, stopStream } from "./camera";
+import { nativeCamera, type CameraClaim } from "./nativeCamera";
+import { deviceInfos, nativeCall, type CallEvent, type VideoSource } from "./nativeCall";
 import { nativeScreen, type ScreenClaim } from "./nativeScreen";
 import type { Realtime } from "./realtime";
 import { screenTrack, type ScreenTrack } from "./screenTrack";
@@ -11,12 +13,33 @@ export const CALL_SCREEN: ScreenRequest = { maxWidth: 1920, maxHeight: 1080, fra
 /** Upload per participant; every peer gets its own copy of the screen. */
 const SCREEN_BITRATE = 2_500_000;
 const SCREEN_TAKEN = "O teste de compartilhamento de tela assumiu a captura.";
+const CAMERA_TAKEN = "O teste de câmera nas configurações assumiu a webcam.";
+const CAMERA_LOST = "A webcam foi desconectada ou o acesso à câmera foi interrompido.";
+const CAMERA_FRAME_RATE = 30;
+
+export type CameraQuality = "360p" | "720p";
 
 /**
- * A screen to draw: a media stream (the webview's WebRTC) or JPEG frames
- * pulled from the native call engine.
+ * Camera sizes a call offers. Every peer gets its own copy (P2P mesh), so
+ * the upload is the bitrate times the others in the call.
  */
-export type ScreenFeed = MediaStream | { pull: () => Promise<ArrayBuffer> };
+export const CAMERA_QUALITIES: Record<CameraQuality, { width: number; height: number; bitrate: number; label: string }> = {
+  "360p": { width: 640, height: 360, bitrate: 600_000, label: "360p · usa menos internet" },
+  "720p": { width: 1280, height: 720, bitrate: 1_500_000, label: "720p · mais nítida" },
+};
+
+/**
+ * A video to draw: a media stream (the webview's WebRTC) or JPEG frames
+ * pulled from a native engine.
+ */
+export type VideoFeed = MediaStream | { pull: () => Promise<ArrayBuffer> };
+/** A shared screen. */
+export type ScreenFeed = VideoFeed;
+
+export interface CameraOption {
+  deviceId: string;
+  label: string;
+}
 
 export interface VoiceState {
   status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
@@ -44,12 +67,26 @@ export interface VoiceState {
   localScreen: ScreenFeed | null;
   /** Screens received, by peer ID. */
   remoteScreens: Record<string, ScreenFeed>;
+  /** Whether this app can send a webcam in calls. */
+  cameraSupported: boolean;
+  camera: "idle" | "starting" | "live";
+  /** Chosen webcam; empty for the default one. */
+  cameraId: string;
+  cameraQuality: CameraQuality;
+  cameras: CameraOption[];
+  /** Our webcam, for our own tile. */
+  localCamera: VideoFeed | null;
+  /** Webcams received, by peer ID. */
+  remoteCameras: Record<string, VideoFeed>;
 }
 
 interface Peer {
   pc: RTCPeerConnection;
   audio: HTMLAudioElement;
   screenSender?: RTCRtpSender;
+  cameraSender?: RTCRtpSender;
+  /** What the peer's video streams are, as its signaling named them. */
+  streams: Record<string, VideoSource>;
   makingOffer: boolean;
   ignoreOffer: boolean;
   settingAnswer: boolean;
@@ -60,6 +97,23 @@ interface Peer {
 
 function preference(key: string) {
   try { return localStorage.getItem(`discvoice.voice.${key}`) || ""; } catch { return ""; }
+}
+
+function savePreference(key: string, value: string) {
+  try { localStorage.setItem(`discvoice.voice.${key}`, value); } catch { /* Optional preference. */ }
+}
+
+function savedQuality(): CameraQuality {
+  const saved = preference("cameraQuality");
+  return saved in CAMERA_QUALITIES ? saved as CameraQuality : "360p";
+}
+
+/**
+ * What a peer's video stream is. Webview peers name theirs in signaling;
+ * native peers use fixed IDs; older clients only sent screens.
+ */
+export function videoSource(streamId: string, named: Record<string, VideoSource>): VideoSource {
+  return named[streamId] ?? (streamId.includes("camera") ? "camera" : "screen");
 }
 
 export interface AudioProcessing {
@@ -103,6 +157,8 @@ export class Voice {
     status: "idle", channel: null, participants: [], muted: false, deafened: false, error: "",
     speaking: [], devices: [], inputId: preference("input"), outputId: preference("output"), playbackBlocked: false, deviceBusy: false,
     peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
+    cameraSupported: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
+    camera: "idle", cameraId: preference("camera"), cameraQuality: savedQuality(), cameras: [], localCamera: null, remoteCameras: {},
   };
   private changes = new Set<() => void>();
   private stream?: MediaStream;
@@ -130,6 +186,13 @@ export class Voice {
   private nativeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The native engine is sending our screen. */
   private nativeShare = false;
+  /** Our webcam in the webview's peer connections. */
+  private cameraShare?: { stream: MediaStream; track: MediaStreamTrack };
+  private cameraClaim?: CameraClaim;
+  /** Increments on every camera start/stop, so a late answer is ignored. */
+  private cameraAttempt = 0;
+  /** The native engine is sending our webcam. */
+  private nativeCamera = false;
 
   constructor(private realtime: Realtime) {}
 
@@ -173,6 +236,8 @@ export class Voice {
       this.update({ native });
       void this.refreshDevices();
     });
+    // Linux sends the native camera; the webview's getUserMedia corrupts it.
+    void nativeCamera.supported().then(cameraSupported => { if (cameraSupported) this.update({ cameraSupported }); }, () => {});
   }
 
   dispose() {
@@ -289,7 +354,7 @@ export class Voice {
       try {
         this.send({
           type: "voice.state", muted: this.state.muted || this.state.deafened, deafened: this.state.deafened,
-          screen: this.state.screen === "live",
+          screen: this.state.screen === "live", camera: this.state.camera === "live",
         });
       } catch { /* Reconnect restores controls. */ }
     }
@@ -381,16 +446,168 @@ export class Voice {
 
   private sendScreen(peer: Peer) {
     if (!this.share || peer.screenSender) return;
-    const sender = peer.pc.addTrack(this.share.track, this.share.stream);
-    peer.screenSender = sender;
+    peer.screenSender = this.sendVideo(peer, this.share, SCREEN_BITRATE);
+  }
+
+  private sendCamera(peer: Peer) {
+    if (!this.cameraShare || peer.cameraSender) return;
+    peer.cameraSender = this.sendVideo(peer, this.cameraShare, CAMERA_QUALITIES[this.state.cameraQuality].bitrate);
+  }
+
+  /** Adds a video track to a peer (renegotiating it), capped to `bitrate`. */
+  private sendVideo(peer: Peer, video: { stream: MediaStream; track: MediaStreamTrack }, bitrate: number) {
+    const sender = peer.pc.addTrack(video.track, video.stream);
     void (async () => {
       try {
         const parameters = sender.getParameters();
         if (!parameters.encodings?.length) return;
-        parameters.encodings[0].maxBitrate = SCREEN_BITRATE;
+        parameters.encodings[0].maxBitrate = bitrate;
         await sender.setParameters(parameters);
       } catch { /* The default bitrate also works. */ }
     })();
+    return sender;
+  }
+
+  /** Our streams, named for the peer (browsers cannot choose stream IDs). */
+  private streamNames(): Record<string, VideoSource> {
+    const names: Record<string, VideoSource> = {};
+    if (this.share) names[this.share.stream.id] = "screen";
+    if (this.cameraShare) names[this.cameraShare.stream.id] = "camera";
+    return names;
+  }
+
+  private describe(pc: RTCPeerConnection): SignalPayload {
+    return { description: pc.localDescription!.toJSON(), streams: this.streamNames() };
+  }
+
+  setCamera = (cameraId: string) => {
+    savePreference("camera", cameraId);
+    this.update({ cameraId });
+    if (this.state.camera !== "idle") this.restartCamera();
+  };
+
+  setCameraQuality = (cameraQuality: CameraQuality) => {
+    if (!(cameraQuality in CAMERA_QUALITIES)) return;
+    savePreference("cameraQuality", cameraQuality);
+    this.update({ cameraQuality });
+    if (this.state.camera !== "idle") this.restartCamera();
+  };
+
+  /** Webcams to choose from (asking for camera access on Linux). */
+  refreshCameras = async () => {
+    try {
+      const cameras = this.state.native || await nativeCamera.supported().catch(() => false)
+        ? (await nativeCamera.devices()).map(device => ({ deviceId: device.id, label: device.name }))
+        : (await navigator.mediaDevices?.enumerateDevices() ?? [])
+          .filter(device => device.kind === "videoinput" && device.deviceId)
+          .map((device, index) => ({ deviceId: device.deviceId, label: device.label || `Webcam ${index + 1}` }));
+      this.update({ cameras });
+    } catch (error) { this.update({ error: cameraError(error) }); }
+  };
+
+  /** Applies a new camera or quality: the others keep seeing the camera on. */
+  private restartCamera() {
+    this.endCamera();
+    void this.startCamera();
+  }
+
+  /**
+   * Turns our webcam on for everyone in the call: a video track on the
+   * webview's peer connections, or the native engine's camera track.
+   */
+  startCamera = async () => {
+    if (!this.joined || this.state.camera !== "idle") return;
+    const generation = this.generation;
+    const attempt = ++this.cameraAttempt;
+    const quality = CAMERA_QUALITIES[this.state.cameraQuality];
+    const current = () => generation === this.generation && attempt === this.cameraAttempt;
+    this.update({ camera: "starting", error: "" });
+    try {
+      if (this.nativeId !== undefined) {
+        const claim: CameraClaim = nativeCamera.claim(() => {
+          if (this.cameraClaim !== claim) return;
+          this.cameraClaim = undefined;
+          this.endCamera();
+          this.update({ error: CAMERA_TAKEN });
+          this.syncControls();
+        });
+        this.cameraClaim = claim;
+        const info = await nativeCamera.startForCall(this.state.cameraId, quality.height);
+        if (!current()) { nativeCamera.releaseLate(); return; }
+        this.nativeCamera = true;
+        await nativeCall.startCamera(Math.min(CAMERA_FRAME_RATE, Math.round(info.frameRate) || CAMERA_FRAME_RATE), quality.bitrate);
+        if (!current()) { void nativeCall.stopCamera().catch(() => {}); return; }
+        this.update({ camera: "live", localCamera: { pull: nativeCamera.frame } });
+      } else {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error("A câmera não está disponível neste ambiente.");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            ...(this.state.cameraId ? { deviceId: { exact: this.state.cameraId } } : {}),
+            width: { ideal: quality.width }, height: { ideal: quality.height },
+            frameRate: { ideal: CAMERA_FRAME_RATE, max: CAMERA_FRAME_RATE },
+          },
+        });
+        if (!current()) { stopStream(stream); return; }
+        const track = stream.getVideoTracks()[0];
+        if (!track) { stopStream(stream); throw new Error("A webcam não forneceu uma faixa de vídeo."); }
+        // Favors smooth motion over detail when the bandwidth is short.
+        track.contentHint = "motion";
+        track.onended = () => {
+          if (this.cameraShare?.track !== track) return;
+          this.stopCamera();
+          this.update({ error: CAMERA_LOST });
+        };
+        this.cameraShare = { stream, track };
+        this.peers.forEach(peer => this.sendCamera(peer));
+        this.update({ camera: "live", localCamera: stream });
+      }
+      this.syncControls();
+    } catch (error) {
+      if (!current()) return;
+      this.endCamera();
+      this.update({ error: cameraError(error) });
+      this.syncControls();
+    }
+  };
+
+  stopCamera = () => {
+    if (this.state.camera === "idle" && !this.cameraShare && !this.cameraClaim) return;
+    this.endCamera();
+    this.syncControls();
+  };
+
+  /** Removes our webcam from the call and releases it. */
+  private endCamera() {
+    this.cameraAttempt++;
+    if (this.nativeCamera) {
+      this.nativeCamera = false;
+      void nativeCall.stopCamera().catch(() => {});
+    }
+    const claim = this.cameraClaim;
+    this.cameraClaim = undefined;
+    claim?.release();
+    const share = this.cameraShare;
+    this.cameraShare = undefined;
+    this.peers.forEach(peer => {
+      if (!peer.cameraSender) return;
+      try { if (peer.pc.signalingState !== "closed") peer.pc.removeTrack(peer.cameraSender); }
+      catch { /* The connection is closing. */ }
+      peer.cameraSender = undefined;
+    });
+    if (share) {
+      share.track.onended = null;
+      stopStream(share.stream);
+    }
+    if (this.state.camera !== "idle" || this.state.localCamera) this.update({ camera: "idle", localCamera: null });
+  }
+
+  /** Sets (or, without a feed, removes) a peer's received video. */
+  private remoteVideo(source: VideoSource, id: string, feed?: VideoFeed) {
+    const key = source === "camera" ? "remoteCameras" : "remoteScreens";
+    const { [id]: previous, ...rest } = this.state[key];
+    if (feed) this.update({ [key]: { ...rest, [id]: feed } });
+    else if (previous) this.update({ [key]: rest });
   }
 
   /** What the native engine reports about the call. */
@@ -421,17 +638,20 @@ export class Voice {
       case "speaking":
         if (event.peerIds.join() !== this.state.speaking.join()) this.update({ speaking: event.peerIds });
         return;
-      case "screen": {
-        const { [event.peerId]: _previous, ...rest } = this.state.remoteScreens;
-        if (event.active && this.nativeStates.has(event.peerId)) {
-          const id = event.peerId;
-          this.update({ remoteScreens: { ...rest, [id]: { pull: () => nativeCall.frame(id) } } });
-        } else if (_previous) this.update({ remoteScreens: rest });
+      case "video": {
+        const { peerId: id, source } = event;
+        const live = event.active && this.nativeStates.has(id);
+        this.remoteVideo(source, id, live ? { pull: () => nativeCall.frame(id, source) } : undefined);
         return;
       }
-      case "screenEnded":
-        if (!this.nativeShare) return;
-        this.stopScreen();
+      case "videoEnded":
+        if (event.source === "screen") {
+          if (!this.nativeShare) return;
+          this.stopScreen();
+        } else {
+          if (!this.nativeCamera) return;
+          this.stopCamera();
+        }
         this.update({ error: event.message });
         return;
       case "error":
@@ -445,23 +665,20 @@ export class Voice {
       this.nativeStates.delete(id);
       clearTimeout(this.nativeTimers.get(id));
       this.nativeTimers.delete(id);
-      if (this.state.remoteScreens[id]) {
-        const { [id]: _removed, ...rest } = this.state.remoteScreens;
-        this.update({ remoteScreens: rest });
-      }
+      this.remoteVideo("screen", id);
+      this.remoteVideo("camera", id);
     }
     for (const id of ids) if (!this.nativeStates.has(id)) this.nativeStates.set(id, "new");
     void nativeCall.peers(this.peerId, [...ids]).catch(error => this.fail(voiceError(error)));
   }
 
-  private remoteScreen(id: string, peer: Peer, track: MediaStreamTrack) {
+  private remoteTrack(id: string, peer: Peer, track: MediaStreamTrack, source: VideoSource) {
     const stream = new MediaStream([track]);
+    const key = source === "camera" ? "remoteCameras" : "remoteScreens";
     track.onended = () => {
-      if (this.state.remoteScreens[id] !== stream) return;
-      const { [id]: _ended, ...rest } = this.state.remoteScreens;
-      this.update({ remoteScreens: rest });
+      if (this.state[key][id] === stream) this.remoteVideo(source, id);
     };
-    if (this.peers.get(id) === peer) this.update({ remoteScreens: { ...this.state.remoteScreens, [id]: stream } });
+    if (this.peers.get(id) === peer) this.remoteVideo(source, id, stream);
   }
 
   setInput = async (inputId: string) => {
@@ -567,7 +784,7 @@ export class Voice {
     const audio = new Audio();
     audio.autoplay = true;
     audio.muted = this.state.deafened;
-    const peer: Peer = { pc, audio, makingOffer: false, ignoreOffer: false, settingAnswer: false, candidates: [], queue: Promise.resolve() };
+    const peer: Peer = { pc, audio, streams: {}, makingOffer: false, ignoreOffer: false, settingAnswer: false, candidates: [], queue: Promise.resolve() };
     this.peers.set(id, peer);
     pc.onicecandidate = event => {
       if (event.candidate && this.peers.get(id) === peer) {
@@ -584,15 +801,18 @@ export class Voice {
         peer.makingOffer = true;
         await pc.setLocalDescription();
         if (this.peers.get(id) !== peer) return;
-        this.send({ type: "voice.signal", peerId: id, data: { description: pc.localDescription!.toJSON() } });
+        this.send({ type: "voice.signal", peerId: id, data: this.describe(pc) });
       } catch (error) {
         if (this.peers.get(id) === peer && pc.signalingState !== "closed") this.fail(voiceError(error));
       } finally { peer.makingOffer = false; }
     };
     pc.ontrack = event => {
       if (this.peers.get(id) !== peer) return;
-      // Screens come in their own stream; audio stays as before.
-      if (event.track.kind === "video") { this.remoteScreen(id, peer, event.track); return; }
+      // Screens and cameras come in their own streams; audio stays as before.
+      if (event.track.kind === "video") {
+        this.remoteTrack(id, peer, event.track, videoSource(event.streams[0]?.id ?? "", peer.streams));
+        return;
+      }
       const stream = event.streams[0] || new MediaStream([event.track]);
       audio.srcObject = stream;
       this.analyse(id, stream);
@@ -617,11 +837,14 @@ export class Voice {
     };
     this.stream.getTracks().forEach(track => pc.addTrack(track, this.stream!));
     this.sendScreen(peer);
+    this.sendCamera(peer);
   }
 
-  private async signal(id: string, peer: Peer, data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit }) {
+  private async signal(id: string, peer: Peer, data: SignalPayload) {
     if (this.peers.get(id) !== peer) return;
     const pc = peer.pc;
+    // Before the description: its tracks arrive while it is applied.
+    if (data.streams) peer.streams = { ...peer.streams, ...data.streams };
     if (data.description) {
       const readyForOffer = !peer.makingOffer && (pc.signalingState === "stable" || peer.settingAnswer);
       const collision = data.description.type === "offer" && !readyForOffer;
@@ -640,7 +863,7 @@ export class Voice {
       }
       if (data.description.type === "offer") {
         await pc.setLocalDescription();
-        if (this.peers.get(id) === peer) this.send({ type: "voice.signal", peerId: id, data: { description: pc.localDescription!.toJSON() } });
+        if (this.peers.get(id) === peer) this.send({ type: "voice.signal", peerId: id, data: this.describe(pc) });
       }
     } else if (data.candidate) {
       if (pc.remoteDescription) {
@@ -705,10 +928,8 @@ export class Voice {
     peer.audio.pause();
     peer.audio.srcObject = null;
     this.removeAnalyser(id);
-    if (this.state.remoteScreens[id]) {
-      const { [id]: _removed, ...rest } = this.state.remoteScreens;
-      this.update({ remoteScreens: rest });
-    }
+    this.remoteVideo("screen", id);
+    this.remoteVideo("camera", id);
   }
   private cleanup() {
     // Sharing ends with the call; the voice.leave (or the lost socket)
@@ -717,6 +938,7 @@ export class Voice {
     this.screenClaim = undefined;
     this.endScreen();
     claim?.release();
+    this.endCamera();
     this.generation++;
     this.joined = false;
     clearTimeout(this.deadline);
@@ -731,6 +953,7 @@ export class Voice {
     this.nativeTimers.clear();
     this.nativeStates.clear();
     if (Object.keys(this.state.remoteScreens).length) this.update({ remoteScreens: {} });
+    if (Object.keys(this.state.remoteCameras).length) this.update({ remoteCameras: {} });
     this.stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
     this.stream = undefined;
     void this.context?.close().catch(() => {});

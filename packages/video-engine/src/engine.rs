@@ -1,4 +1,4 @@
-use crate::backend::{Backend, BackendDevice, Frames};
+use crate::backend::{Backend, BackendDevice, Frames, RawFrame, RawSize};
 use crate::format::{self, Encoding, Mode};
 use crate::worker::{self, Reply};
 use serde::Serialize;
@@ -35,7 +35,8 @@ pub struct CameraInfo {
 
 enum Request {
     Devices(Reply<Vec<CameraDevice>>),
-    Start(String, Reply<CameraInfo>),
+    /// Device ID and, for a call, the height of its raw frames.
+    Start(String, Option<u32>, Reply<CameraInfo>),
     Stop(Reply<()>),
     Shutdown,
 }
@@ -83,7 +84,14 @@ impl CameraEngine {
     /// replacing any running capture.
     pub fn start(&self, device_id: &str) -> Result<CameraInfo, String> {
         let device_id = device_id.to_owned();
-        self.request(|reply| Request::Start(device_id, reply))
+        self.request(|reply| Request::Start(device_id, None, reply))
+    }
+
+    /// Like [`Self::start`], also producing raw I420 frames at most
+    /// `max_height` rows tall for a call ([`Self::next_raw_frame`]).
+    pub fn start_for_call(&self, device_id: &str, max_height: u32) -> Result<CameraInfo, String> {
+        let device_id = device_id.to_owned();
+        self.request(|reply| Request::Start(device_id, Some(max_height), reply))
     }
 
     pub fn stop(&self) {
@@ -99,6 +107,12 @@ impl CameraEngine {
     /// means the capture stopped and should be shown to the user.
     pub fn next_frame(&self, timeout: Duration) -> Result<Option<Arc<Vec<u8>>>, String> {
         self.frames.next(timeout)
+    }
+
+    /// Like [`Self::next_frame`], for the raw frames of
+    /// [`Self::start_for_call`].
+    pub fn next_raw_frame(&self, timeout: Duration) -> Result<Option<Arc<RawFrame>>, String> {
+        self.frames.next_raw(timeout)
     }
 }
 
@@ -139,8 +153,8 @@ impl<B: Backend> Worker<B> {
                 Ok(Request::Devices(reply)) => {
                     let _ = reply.send(self.devices());
                 }
-                Ok(Request::Start(device_id, reply)) => {
-                    let _ = reply.send(self.start(&device_id));
+                Ok(Request::Start(device_id, raw, reply)) => {
+                    let _ = reply.send(self.start(&device_id, raw));
                 }
                 Ok(Request::Stop(reply)) => {
                     self.stop();
@@ -181,7 +195,7 @@ impl<B: Backend> Worker<B> {
             .collect())
     }
 
-    fn start(&mut self, device_id: &str) -> Result<CameraInfo, String> {
+    fn start(&mut self, device_id: &str, raw: Option<u32>) -> Result<CameraInfo, String> {
         self.stop();
         let entry = self
             .devices
@@ -190,9 +204,10 @@ impl<B: Backend> Worker<B> {
             .ok_or(NOT_FOUND)?;
         let mode = format::choose(&entry.modes).ok_or(NO_MODE)?;
         let sink = self.frames.begin();
+        let raw = raw.map(|max_height| RawSize::fit(mode.width, mode.height, max_height));
         let stream = self
             .backend
-            .open(&entry.device, &mode, sink)
+            .open(&entry.device, &mode, sink, raw)
             .inspect_err(|_| self.frames.end())?;
         let info = CameraInfo {
             device_id: entry.info.id.clone(),
@@ -277,6 +292,7 @@ mod tests {
         devices: Vec<(u32, &'static str)>,
         fail_open: Option<String>,
         opened: Vec<(u32, Mode)>,
+        raw: Vec<Option<RawSize>>,
         open_streams: usize,
     }
 
@@ -320,12 +336,14 @@ mod tests {
             device: &u32,
             mode: &Mode,
             sink: FrameSink,
+            raw: Option<RawSize>,
         ) -> Result<FakeStream, String> {
             let mut state = self.state.borrow_mut();
             if let Some(error) = state.fail_open.clone() {
                 return Err(error);
             }
             state.opened.push((*device, mode.clone()));
+            state.raw.push(raw);
             state.open_streams += 1;
             self.sinks.lock().unwrap().push(sink);
             Ok(FakeStream(self.state.clone()))
@@ -347,6 +365,12 @@ mod tests {
         );
         worker.devices().unwrap();
         (worker, state, sinks)
+    }
+
+    impl Worker<FakeBackend> {
+        fn start_test(&mut self, device_id: &str) -> Result<CameraInfo, String> {
+            self.start(device_id, None)
+        }
     }
 
     fn sink(sinks: &Sinks, index: usize) -> FrameSink {
@@ -376,7 +400,7 @@ mod tests {
     #[test]
     fn start_opens_the_best_mode_and_frames_flow() {
         let (mut worker, state, sinks) = worker();
-        let info = worker.start("camera-2").unwrap();
+        let info = worker.start_test("camera-2").unwrap();
         assert_eq!(
             info,
             CameraInfo {
@@ -403,18 +427,77 @@ mod tests {
     }
 
     #[test]
+    fn calls_get_raw_frames_scaled_to_their_quality() {
+        let (mut worker, state, sinks) = worker();
+        worker.start("camera-1", Some(360)).unwrap();
+        assert_eq!(
+            state.borrow().raw,
+            [Some(RawSize {
+                width: 640,
+                height: 360
+            })]
+        );
+        sink(&sinks, 0).publish_raw(640, 360, vec![0; 640 * 360 * 3 / 2]);
+        let frame = worker.frames.next_raw(Duration::ZERO).unwrap().unwrap();
+        assert_eq!((frame.width, frame.height), (640, 360));
+        // The settings preview asks for JPEG only.
+        worker.start_test("camera-1").unwrap();
+        assert_eq!(state.borrow().raw[1], None);
+    }
+
+    #[test]
+    fn raw_sizes_keep_the_aspect_ratio_and_never_upscale() {
+        assert_eq!(
+            RawSize::fit(1280, 720, 360),
+            RawSize {
+                width: 640,
+                height: 360
+            }
+        );
+        assert_eq!(
+            RawSize::fit(1280, 720, 720),
+            RawSize {
+                width: 1280,
+                height: 720
+            }
+        );
+        assert_eq!(
+            RawSize::fit(640, 480, 720),
+            RawSize {
+                width: 640,
+                height: 480
+            }
+        );
+        assert_eq!(
+            RawSize::fit(640, 480, 360),
+            RawSize {
+                width: 480,
+                height: 360
+            }
+        );
+        // Odd results are rounded down to even sizes.
+        assert_eq!(
+            RawSize::fit(1366, 768, 361),
+            RawSize {
+                width: 640,
+                height: 360
+            }
+        );
+    }
+
+    #[test]
     fn empty_id_starts_the_first_camera_and_unknown_id_fails() {
         let (mut worker, state, _) = worker();
-        assert_eq!(worker.start("").unwrap().device_id, "camera-1");
-        assert_eq!(worker.start("camera-9").unwrap_err(), NOT_FOUND);
+        assert_eq!(worker.start_test("").unwrap().device_id, "camera-1");
+        assert_eq!(worker.start_test("camera-9").unwrap_err(), NOT_FOUND);
         assert_eq!(state.borrow().open_streams, 0);
     }
 
     #[test]
     fn restarting_ignores_frames_of_the_previous_capture() {
         let (mut worker, state, sinks) = worker();
-        worker.start("camera-1").unwrap();
-        worker.start("camera-2").unwrap();
+        worker.start_test("camera-1").unwrap();
+        worker.start_test("camera-2").unwrap();
         assert_eq!(state.borrow().open_streams, 1);
         sink(&sinks, 0).publish(&JPEG);
         assert_eq!(worker.frames.next(Duration::ZERO), Ok(None));
@@ -425,7 +508,7 @@ mod tests {
     #[test]
     fn backend_errors_release_the_capture_and_reach_the_ui() {
         let (mut worker, state, sinks) = worker();
-        worker.start("camera-1").unwrap();
+        worker.start_test("camera-1").unwrap();
         sink(&sinks, 0).fail("parou");
         worker.tick();
         assert_eq!(state.borrow().open_streams, 0);
@@ -438,14 +521,14 @@ mod tests {
     fn failed_open_reports_the_error_and_leaves_nothing_running() {
         let (mut worker, state, _) = worker();
         state.borrow_mut().fail_open = Some("ocupada".into());
-        assert_eq!(worker.start("camera-1").unwrap_err(), "ocupada");
+        assert_eq!(worker.start_test("camera-1").unwrap_err(), "ocupada");
         assert_eq!(worker.frames.next(Duration::ZERO), Ok(None));
     }
 
     #[test]
     fn disconnected_camera_stops_with_an_error() {
         let (mut worker, state, _) = worker();
-        worker.start("camera-2").unwrap();
+        worker.start_test("camera-2").unwrap();
         state
             .borrow_mut()
             .devices
@@ -458,7 +541,7 @@ mod tests {
     #[test]
     fn next_frame_waits_for_a_frame_from_another_thread() {
         let (mut worker, _, sinks) = worker();
-        worker.start("camera-1").unwrap();
+        worker.start_test("camera-1").unwrap();
         let sink = sink(&sinks, 0);
         let (started_tx, started_rx) = mpsc::channel();
         let producer = thread::spawn(move || {

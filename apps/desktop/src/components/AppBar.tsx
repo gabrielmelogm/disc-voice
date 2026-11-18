@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, ChevronUp, Headphones, Home, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
-  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VolumeX, Volume2,
+  Check, ChevronUp, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
+  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX, Volume2,
 } from "lucide-react";
 import type { Server, User } from "@disc-voice/shared";
-import type { Voice, VoiceState } from "../lib/voice";
+import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
 import { Avatar } from "./ui";
 
 export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
@@ -17,6 +17,45 @@ export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState
     disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : void voice.startScreen())}>
     {active ? <MonitorOff size={20} /> : <MonitorUp size={20} />}
   </button>;
+}
+
+/**
+ * Turns our webcam on or off in the call. The arrow opens the camera and
+ * quality to use; they apply the next time it turns on (or at once, if on).
+ */
+export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
+  voice: Voice; state: VoiceState; menuOpen: boolean; onMenu: () => void; onPicked: () => void;
+}) {
+  if (!state.cameraSupported) {
+    return <button className="bar-button" disabled aria-label="Ligar câmera (indisponível)" title="A câmera não está disponível neste ambiente."><Video size={20} /></button>;
+  }
+  const on = state.camera !== "idle";
+  const label = state.camera === "starting" ? "Cancelar câmera" : on ? "Desligar câmera" : "Ligar câmera";
+  const pick = (action: () => void) => () => { onPicked(); action(); };
+  const hasChosen = !state.cameraId || state.cameras.some(camera => camera.deviceId === state.cameraId);
+  return <div className="split-button">
+    <button className={`bar-button ${state.camera === "live" ? "current" : ""}`} aria-label={label} aria-pressed={on} title={label}
+      disabled={!on && state.status !== "connected"} onClick={() => (on ? voice.stopCamera() : void voice.startCamera())}>
+      {state.camera === "starting" ? <LoaderCircle size={20} className="spin" /> : on ? <VideoOff size={20} /> : <Video size={20} />}
+    </button>
+    <div className="menu-anchor">
+      <button className="bar-button narrow" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher câmera e qualidade" title="Câmera e qualidade"
+        onClick={() => { if (!menuOpen) void voice.refreshCameras(); onMenu(); }}><ChevronUp size={16} /></button>
+      {menuOpen && <div className="popover-menu" role="menu" aria-label="Câmera e qualidade">
+        <span className="menu-label">Câmera</span>
+        <button role="menuitemradio" aria-checked={!state.cameraId} onClick={pick(() => voice.setCamera(""))}><span>Câmera padrão</span>{!state.cameraId && <Check size={16} />}</button>
+        {state.cameras.map(camera => <button key={camera.deviceId} role="menuitemradio" aria-checked={camera.deviceId === state.cameraId} onClick={pick(() => voice.setCamera(camera.deviceId))}>
+          <span>{camera.label}</span>{camera.deviceId === state.cameraId && <Check size={16} />}
+        </button>)}
+        {!hasChosen && <p className="menu-empty">A câmera escolhida não está conectada.</p>}
+        <hr />
+        <span className="menu-label">Qualidade</span>
+        {(Object.keys(CAMERA_QUALITIES) as CameraQuality[]).map(quality => <button key={quality} role="menuitemradio" aria-checked={quality === state.cameraQuality} onClick={pick(() => voice.setCameraQuality(quality))}>
+          <span>{CAMERA_QUALITIES[quality].label}</span>{quality === state.cameraQuality && <Check size={16} />}
+        </button>)}
+      </div>}
+    </div>
+  </div>;
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
@@ -37,7 +76,7 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
   onSettings: () => void;
   onVoiceSettings: () => void;
 }) {
-  const [menu, setMenu] = useState<"servers" | "call" | null>(null);
+  const [menu, setMenu] = useState<"servers" | "call" | "camera" | null>(null);
   const ref = useRef<HTMLElement>(null);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
 
@@ -79,8 +118,7 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
       <span className="bar-divider" />
       <div role="toolbar" aria-label="Controles da chamada" className="bar-group">
         <button className={`bar-button ${voiceState.muted || voiceState.deafened ? "off" : ""}`} aria-pressed={voiceState.muted} aria-label={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} title={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} onClick={voice.toggleMute}>{voiceState.muted || voiceState.deafened ? <MicOff size={20} /> : <Mic size={20} />}</button>
-        {/* Camera video in calls is designed but not implemented yet (#22). */}
-        <button className="bar-button" disabled aria-label="Ligar câmera (em breve)" title="Câmera na chamada em breve"><Video size={20} /></button>
+        <CameraButton voice={voice} state={voiceState} menuOpen={menu === "camera"} onMenu={() => setMenu(menu === "camera" ? null : "camera")} onPicked={() => setMenu(null)} />
         <ScreenButton voice={voice} state={voiceState} />
         <div className="menu-anchor">
           <button className="bar-button" aria-haspopup="menu" aria-expanded={menu === "call"} aria-label="Mais opções da chamada" title="Mais opções" onClick={() => setMenu(menu === "call" ? null : "call")}><MoreHorizontal size={20} /></button>

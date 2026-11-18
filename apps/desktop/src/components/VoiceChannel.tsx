@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Volume2, VolumeX, X } from "lucide-react";
+import { Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Video, Volume2, VolumeX, X } from "lucide-react";
 import type { Channel, VoiceParticipant } from "@disc-voice/shared";
-import type { ScreenFeed, Voice, VoiceState } from "../lib/voice";
+import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
 import { Avatar, LiveTag, SoonTag } from "./ui";
 
@@ -28,10 +28,10 @@ export function CallStatus({ voice, state, serverName, onOpen }: {
   </section>;
 }
 
-/** A screen ends with its sharing; draw errors only mean a frame was skipped. */
+/** A video ends with its sharing; draw errors only mean a frame was skipped. */
 const ignoreFrameError = () => {};
 
-function StreamVideo({ stream, label }: { stream: MediaStream; label: string }) {
+function StreamVideo({ stream, label, mirrored = false }: { stream: MediaStream; label: string; mirrored?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = ref.current;
@@ -40,7 +40,16 @@ function StreamVideo({ stream, label }: { stream: MediaStream; label: string }) 
     void video.play?.()?.catch(() => {});
     return () => { video.srcObject = null; };
   }, [stream]);
-  return <video ref={ref} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />;
+  return <video ref={ref} className={mirrored ? "mirrored" : undefined} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />;
+}
+
+/** A webcam: a media stream (webview) or JPEG frames from a native engine. */
+function CameraVideo({ feed, label, mirrored }: { feed: VideoFeed; label: string; mirrored: boolean }) {
+  return <div className="tile-video">
+    {"pull" in feed
+      ? <NativeFramePreview active pull={feed.pull} label={label} mirrored={mirrored} onError={ignoreFrameError} />
+      : <StreamVideo stream={feed} label={label} mirrored={mirrored} />}
+  </div>;
 }
 
 function ScreenVideo({ feed, label, expanded, onToggle }: {
@@ -77,9 +86,20 @@ function CallScreens({ state, participants }: { state: VoiceState; participants:
   </div>;
 }
 
-function Tile({ participant, speaking, self }: { participant: VoiceParticipant; speaking: boolean; self: boolean }) {
-  return <li className={`call-tile ${speaking ? "is-speaking" : ""}`}>
-    <Avatar name={participant.user.name} size="xl" />
+function Tile({ participant, speaking, self, camera, feed }: {
+  participant: VoiceParticipant; speaking: boolean; self: boolean;
+  /** The camera is on (for us: sending). */
+  camera: boolean;
+  feed: VideoFeed | null | undefined;
+}) {
+  const name = participant.user.name;
+  const video = camera && feed;
+  return <li className={`call-tile ${speaking ? "is-speaking" : ""} ${video ? "has-video" : ""}`}>
+    {video
+      // Our own camera is mirrored, as in any video call; others see it as is.
+      ? <CameraVideo feed={feed} label={self ? "Sua câmera" : `Câmera de ${name}`} mirrored={self} />
+      : <Avatar name={name} size="xl" />}
+    {camera && !feed && <span className="tile-loading" role="status"><Video size={14} />Carregando câmera…</span>}
     {participant.screen && <span className="tile-badge"><MonitorUp size={14} aria-label="Compartilhando a tela" /></span>}
     <span className="tile-name">
       {participant.muted && <MicOff size={14} aria-label="Microfone desligado" />}
@@ -113,7 +133,12 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
 
       {active && <CallScreens state={state} participants={participants} />}
       {participants.length > 0 && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
-        {participants.map(p => <Tile key={p.peerId} participant={p} speaking={state.speaking.includes(p.peerId)} self={!!state.peerId && p.peerId === state.peerId} />)}
+        {participants.map(p => {
+          const self = !!state.peerId && p.peerId === state.peerId;
+          const camera = active && (self ? state.camera === "live" : !!p.camera);
+          const feed = self ? state.localCamera : state.remoteCameras[p.peerId];
+          return <Tile key={p.peerId} participant={p} speaking={state.speaking.includes(p.peerId)} self={self} camera={camera} feed={feed} />;
+        })}
       </ul>}
 
       {!active && <div className="call-lobby">

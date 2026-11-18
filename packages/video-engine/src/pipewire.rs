@@ -6,7 +6,7 @@
 //! asks the portal for a PipeWire remote (the same path a Flatpak sandbox
 //! uses), keeps the buffer pool on and delivers JPEG frames.
 
-use crate::backend::{Backend, BackendDevice, FrameSink};
+use crate::backend::{Backend, BackendDevice, FrameSink, RawSize};
 use crate::format::{Encoding, Mode};
 use crate::portal::{self, Outcome};
 use gio::glib;
@@ -88,9 +88,10 @@ impl Backend for PipeWireBackend {
         device: &PipeWireDevice,
         mode: &Mode,
         sink: FrameSink,
+        raw: Option<RawSize>,
     ) -> Result<PipeWireStream, String> {
         let remote = self.open_remote()?;
-        let pipeline = build_pipeline(&remote, &device.node, mode, sink)?;
+        let pipeline = build_pipeline(&remote, &device.node, mode, sink, raw)?;
         let stream = PipeWireStream {
             pipeline,
             _remote: remote,
@@ -232,6 +233,7 @@ fn build_pipeline(
     node: &str,
     mode: &Mode,
     sink: FrameSink,
+    raw: Option<RawSize>,
 ) -> Result<gst::Pipeline, String> {
     let pipeline = gst::Pipeline::new();
     let source = gst::ElementFactory::make("pipewiresrc")
@@ -257,22 +259,95 @@ fn build_pipeline(
         .property("caps", &caps)
         .build()
         .map_err(|_| NO_PROVIDER)?;
-    let appsink = gst_app::AppSink::builder()
-        .max_buffers(1)
-        .drop(true)
-        .sync(false)
-        .build();
+    let sink_element = || {
+        gst_app::AppSink::builder()
+            .max_buffers(1)
+            .drop(true)
+            .sync(false)
+            .build()
+    };
+    let appsink = sink_element();
 
-    let mut chain = vec![source, filter];
+    // The JPEG branch: the preview (and our own tile in a call).
+    let mut jpeg_branch = Vec::new();
     if mode.encoding == Encoding::Raw {
-        chain.push(element("videoconvert")?);
+        jpeg_branch.push(element("videoconvert")?);
         let encoder = element("jpegenc")?;
         encoder.set_property("quality", JPEG_QUALITY);
-        chain.push(encoder);
+        jpeg_branch.push(encoder);
     }
-    chain.push(appsink.clone().upcast());
-    pipeline.add_many(&chain).map_err(|_| BUILD_FAILED)?;
-    gst::Element::link_many(&chain).map_err(|_| "A câmera recusou o formato escolhido.")?;
+    jpeg_branch.push(appsink.clone().upcast());
+
+    let refused = "A câmera recusou o formato escolhido.";
+    let head = [source, filter];
+    pipeline.add_many(&head).map_err(|_| BUILD_FAILED)?;
+    gst::Element::link_many(&head).map_err(|_| refused)?;
+    match raw {
+        None => {
+            pipeline.add_many(&jpeg_branch).map_err(|_| BUILD_FAILED)?;
+            head[1].link(&jpeg_branch[0]).map_err(|_| refused)?;
+            gst::Element::link_many(&jpeg_branch).map_err(|_| refused)?;
+        }
+        Some(size) => {
+            // A call also needs I420 at its own size for the H.264 encoder.
+            // Each branch drops frames on its own, so a slow preview never
+            // slows the call down (or the reverse).
+            let branch_queue = || {
+                gst::ElementFactory::make("queue")
+                    .property("max-size-buffers", 1u32)
+                    .property("max-size-bytes", 0u32)
+                    .property("max-size-time", 0u64)
+                    .property_from_str("leaky", "downstream")
+                    .build()
+                    .map_err(|_| BUILD_FAILED)
+            };
+            let tee = element("tee")?;
+            let raw_sink = sink_element();
+            let mut raw_branch = vec![branch_queue()?];
+            if mode.encoding == Encoding::Jpeg {
+                raw_branch.push(element("jpegdec")?);
+            }
+            raw_branch.push(element("videoconvert")?);
+            raw_branch.push(element("videoscale")?);
+            raw_branch.push(
+                gst::ElementFactory::make("capsfilter")
+                    .property(
+                        "caps",
+                        gst::Caps::builder("video/x-raw")
+                            .field("format", "I420")
+                            .field("width", size.width as i32)
+                            .field("height", size.height as i32)
+                            .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+                            .build(),
+                    )
+                    .build()
+                    .map_err(|_| BUILD_FAILED)?,
+            );
+            raw_branch.push(raw_sink.clone().upcast());
+            jpeg_branch.insert(0, branch_queue()?);
+            pipeline.add(&tee).map_err(|_| BUILD_FAILED)?;
+            pipeline.add_many(&jpeg_branch).map_err(|_| BUILD_FAILED)?;
+            pipeline.add_many(&raw_branch).map_err(|_| BUILD_FAILED)?;
+            head[1].link(&tee).map_err(|_| refused)?;
+            for branch in [&jpeg_branch, &raw_branch] {
+                tee.link(&branch[0]).map_err(|_| BUILD_FAILED)?;
+                gst::Element::link_many(branch.as_slice()).map_err(|_| refused)?;
+            }
+            let raw_frames = sink.clone();
+            raw_sink.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |appsink| {
+                        let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        if let Some((width, height, i420)) = crate::screencast::packed_i420(&sample)
+                        {
+                            raw_frames.publish_raw(width, height, i420);
+                        }
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+        }
+    }
 
     let frames = sink.clone();
     appsink.set_callbacks(
@@ -333,6 +408,35 @@ mod tests {
 
         engine.stop();
         assert_eq!(engine.next_frame(Duration::from_millis(50)), Ok(None));
+        engine.shutdown();
+    }
+
+    /// A call also gets raw I420 frames at its quality, beside the JPEGs.
+    #[test]
+    #[ignore = "needs a webcam and xdg-desktop-portal with PipeWire"]
+    fn captures_raw_frames_for_a_call() {
+        let engine = CameraEngine::new().unwrap();
+        let devices = engine.devices().unwrap();
+        assert!(!devices.is_empty(), "no camera found");
+        let info = engine.start_for_call(&devices[0].id, 360).unwrap();
+        let expected = crate::RawSize::fit(info.width, info.height, 360);
+
+        let started = Instant::now();
+        let (mut jpegs, mut raws) = (0, 0);
+        while started.elapsed() < Duration::from_secs(4) {
+            if let Some(frame) = engine.next_raw_frame(Duration::from_millis(100)).unwrap() {
+                assert_eq!((frame.width, frame.height), (expected.width, expected.height));
+                assert_eq!(frame.i420.len(), (frame.width * frame.height * 3 / 2) as usize);
+                raws += 1;
+            }
+            if engine.next_frame(Duration::ZERO).unwrap().is_some() {
+                jpegs += 1;
+            }
+        }
+        println!("{info:?} -> {expected:?}: {raws} raw, {jpegs} jpeg in 4 s");
+        assert!(raws >= 20, "only {raws} raw frames in 4 s");
+        assert!(jpegs >= 10, "only {jpegs} jpeg frames in 4 s");
+        engine.stop();
         engine.shutdown();
     }
 }
