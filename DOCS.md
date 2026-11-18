@@ -125,7 +125,7 @@ No WSL, use `npm run dev:web` para visualizar a interface no navegador. No Linux
 
 ### Executar no Linux
 
-O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. A webcam também é capturada pelo motor nativo, pelo portal de câmera (`xdg-desktop-portal`) e PipeWire via GStreamer: a captura do próprio WebKitGTK corrompe os quadros do PipeWire. Instale as bibliotecas de desenvolvimento do Tauri, do PulseAudio e do GStreamer:
+O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. A webcam também é capturada pelo motor nativo, pelo portal de câmera (`xdg-desktop-portal`) e PipeWire via GStreamer: a captura do próprio WebKitGTK corrompe os quadros do PipeWire. O teste de compartilhamento de tela segue o mesmo caminho, pelo portal ScreenCast, que abre o seletor de telas e janelas do próprio desktop (GNOME, KDE, wlroots). Instale as bibliotecas de desenvolvimento do Tauri, do PulseAudio e do GStreamer:
 
 ```bash
 # Fedora (em sistemas imutáveis, como Silverblue/Kinoite, dentro de um toolbox/distrobox)
@@ -150,8 +150,18 @@ pactl unload-module module-null-sink
 O teste da webcam usa a câmera real pelo portal e descarta os quadros (nada é gravado nem exibido):
 
 ```bash
-cargo test -p disc-video -- --ignored
+cargo test -p disc-video -- --ignored pipewire::
 ```
+
+A captura de tela pode ser validada sem o app. O teste abaixo lê um nó de vídeo PipeWire local pelo mesmo pipeline do app (redimensionamento, limite de quadros e JPEG). Crie o nó em um terminal e passe o ID dele (veja com `pw-dump`) em outro:
+
+```bash
+gst-launch-1.0 videotestsrc is-live=true ! video/x-raw,format=BGRx,width=2560,height=1440,framerate=60/1 \
+  ! pipewiresink mode=provide stream-properties="props,node.name=discvoice-test,media.class=Video/Source"
+DISCVOICE_TEST_NODE=<id> DISCVOICE_TEST_FPS=30 cargo test -p disc-video -- --ignored scales_and_throttles
+```
+
+Para passar pelo portal de verdade, `cargo run -p disc-video --example screen_probe 20` abre o seletor do sistema, informa o que foi compartilhado e quantos quadros chegaram, e encerra depois de 20 s (fechando o seletor se ele ainda estiver aberto).
 
 ### Se a API não conectar ao PostgreSQL
 
@@ -210,8 +220,9 @@ O `.exe` fica em `target/release/bundle/nsis/`. O instalador baixa o WebView2 ca
 1. **Microfone:** selecione uma entrada e clique em **Testar microfone**. O medidor exibe o pico capturado e seu nível em dBFS. Fale por até 10 segundos; também é possível finalizar antes.
 2. **Saída:** selecione a saída física, ajuste o volume do teste e clique em **Tocar som**. Um tom suave de 440 Hz toca por 3 segundos em todos os canais da saída. **Ouvir gravação** reproduz o último trecho capturado nesse mesmo dispositivo.
 3. **Webcam:** selecione uma câmera e clique em **Testar webcam**. Aceite a permissão do WebView2. A prévia mostra resolução e taxa de quadros reportadas pela câmera, com opção de espelhamento.
-4. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
-5. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
+4. **Tela (Linux):** escolha a resolução máxima, a taxa de quadros e se o cursor aparece, clique em **Compartilhar tela** e selecione uma tela ou janela no seletor do sistema. A prévia mostra a fonte, o tamanho real dos quadros e os fps recebidos. Uma tela parada envia menos quadros. **Cancelar** fecha o seletor, e encerrar o compartilhamento pelo indicador do desktop também encerra o teste.
+5. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
+6. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
 
 A webcam não captura áudio. Antes da primeira permissão, o WebView2 pode ocultar nomes e câmeras; use a câmera padrão para autorizar e atualizar a lista. Se o acesso falhar, habilite câmera/microfone para **aplicativos da área de trabalho** em Configurações do Windows → Privacidade e segurança.
 

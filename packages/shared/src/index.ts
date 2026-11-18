@@ -56,6 +56,29 @@ export interface CameraInfo {
   passthrough: boolean;
 }
 
+/** Native screen capture (Linux). Keep in sync with packages/video-engine/src/screen.rs. */
+export type ScreenSourceKind = "monitor" | "window" | "virtual" | "unknown";
+
+export interface ScreenRequest {
+  /** Larger sources are scaled down to fit, keeping their aspect ratio. */
+  maxWidth: number;
+  maxHeight: number;
+  /** Upper bound; an unchanged screen sends fewer frames. */
+  frameRate: number;
+  cursor: boolean;
+}
+
+export interface ScreenInfo {
+  source: ScreenSourceKind;
+  /** Native size of the shared source; 0 when the system does not report it. */
+  width: number;
+  height: number;
+  maxWidth: number;
+  maxHeight: number;
+  frameRate: number;
+  cursor: boolean;
+}
+
 export interface User {
   id: string;
   email: string;

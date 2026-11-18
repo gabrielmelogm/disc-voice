@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Activity, Camera, Check, CircleHelp, Headphones, Mic, Monitor,
+  Activity, Camera, Check, CircleHelp, Headphones, Mic, Monitor, MonitorUp,
   Play, RefreshCw, ShieldCheck, Square, Volume2, X,
 } from "lucide-react";
 import { MAX_RECORDING_SECONDS, type AudioDevice } from "@disc-voice/shared";
 import { useAudio } from "./hooks/useAudio";
 import { useCamera } from "./hooks/useCamera";
+import { useScreenShare } from "./hooks/useScreenShare";
 import { NativeCameraPreview } from "./components/NativeCameraPreview";
+import { ScreenShareTest } from "./components/ScreenShareTest";
 
 function DeviceSelect({ id, label, devices, value, onChange, disabled }: {
   id: string;
@@ -55,18 +57,21 @@ function CameraPreview({ stream, onError, mirrored }: {
 export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boolean; callDevices?: ReactNode } = {}) {
   const audio = useAudio();
   const camera = useCamera();
+  const screen = useScreenShare();
   const [volume, setVolume] = useState(35);
   const [mirrored, setMirrored] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
   const inputActive = audio.status.inputActive;
   const outputActive = audio.status.outputActive;
-  const active = inputActive || outputActive || camera.live || camera.busy;
+  const screenActive = screen.status === "live" || screen.status === "picking";
+  const active = inputActive || outputActive || camera.live || camera.busy || screenActive;
   const audioLocked = audio.busy || audio.refreshing || inCall;
   const level = Math.min(100, Math.max(0, Math.round(audio.status.peak * 100)));
   const db = audio.status.peak > 0 ? Math.max(-60, Math.round(20 * Math.log10(audio.status.peak))) : -60;
 
   const stopAll = () => {
     camera.stop();
+    if (screenActive) screen.stop();
     void audio.act({ type: "stopAll" });
   };
 
@@ -138,6 +143,8 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
             </section>
           </div>
 
+          <ScreenShareTest screen={screen} />
+
           <div className="page-actions">
             <button className="button secondary" disabled={audio.refreshing || audio.busy} onClick={() => { void audio.refresh(); void camera.refresh(); }}>
               <RefreshCw size={15} className={audio.refreshing ? "spin" : ""} />{audio.refreshing ? "Buscando…" : "Atualizar dispositivos"}
@@ -150,7 +157,7 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
 
       {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Escape") setHelpOpen(false); }}>
         <div className="card-heading"><div className="device-icon purple"><CircleHelp size={22} /></div><h2 id="help-title">Um check rápido no seu setup</h2><button autoFocus className="icon-button" aria-label="Fechar guia" onClick={() => setHelpOpen(false)}><X size={20} /></button></div>
-        <ol className="guide-list"><li><Mic size={20} /><div><strong>Teste sua voz</strong><p>Selecione o microfone, inicie o teste e fale por até 10 segundos. A barra mostra o nível capturado.</p></div></li><li><Headphones size={20} /><div><strong>Confira o que você ouve</strong><p>Escolha a saída, ajuste o volume e toque o som. Depois, ouça a gravação do microfone.</p></div></li><li><Camera size={20} /><div><strong>Veja seu enquadramento</strong><p>Inicie a webcam e permita o acesso quando solicitado. Após a permissão, os nomes das câmeras ficam disponíveis.</p></div></li></ol>
+        <ol className="guide-list"><li><Mic size={20} /><div><strong>Teste sua voz</strong><p>Selecione o microfone, inicie o teste e fale por até 10 segundos. A barra mostra o nível capturado.</p></div></li><li><Headphones size={20} /><div><strong>Confira o que você ouve</strong><p>Escolha a saída, ajuste o volume e toque o som. Depois, ouça a gravação do microfone.</p></div></li><li><Camera size={20} /><div><strong>Veja seu enquadramento</strong><p>Inicie a webcam e permita o acesso quando solicitado. Após a permissão, os nomes das câmeras ficam disponíveis.</p></div></li><li><MonitorUp size={20} /><div><strong>Confira o que você compartilha</strong><p>Escolha a resolução e a taxa de quadros, clique em Compartilhar tela e selecione uma tela ou janela na janela do sistema.</p></div></li></ol>
         <div className="notice"><ShieldCheck size={20} /><p>Se o acesso estiver bloqueado, confira Câmera e Microfone em Configurações do Windows → Privacidade e segurança. Ative o acesso para aplicativos da área de trabalho.</p></div>
         <button className="button primary full" onClick={() => setHelpOpen(false)}><Check size={17} />Vamos testar</button>
       </section></div>}

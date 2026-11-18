@@ -8,24 +8,18 @@
 
 use crate::backend::{Backend, BackendDevice, FrameSink};
 use crate::format::{Encoding, Mode};
-use gio::{glib, prelude::*};
+use crate::portal::{self, Outcome};
+use gio::glib;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::{
-    cell::Cell,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    rc::Rc,
+    os::fd::{AsRawFd, OwnedFd},
     sync::OnceLock,
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
-const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const CAMERA_INTERFACE: &str = "org.freedesktop.portal.Camera";
-const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
-const PORTAL_CALL_TIMEOUT_MS: i32 = 5_000;
 /// The portal may show a permission dialog; give the user time to answer.
 const ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
 const JPEG_QUALITY: i32 = 85;
@@ -59,13 +53,13 @@ impl PipeWireBackend {
 
     fn open_remote(&mut self) -> Result<OwnedFd, String> {
         init()?;
-        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-            .map_err(|error| format!("{NO_PORTAL} ({error})"))?;
+        let connection = portal::session_bus().map_err(|error| format!("{NO_PORTAL} ({error})"))?;
         if !self.access_granted {
             access_camera(&connection)?;
             self.access_granted = true;
         }
-        open_pipewire_remote(&connection)
+        portal::open_pipewire_remote(&connection, CAMERA_INTERFACE, &[])
+            .map_err(|error| format!("{DENIED} ({error})"))
     }
 }
 
@@ -126,101 +120,32 @@ impl Drop for PipeWireStream {
     }
 }
 
-fn init() -> Result<(), String> {
+pub(crate) fn init() -> Result<(), String> {
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| gst::init().map_err(|error| format!("GStreamer indisponível: {error}")))
         .clone()
 }
 
-fn options(entries: &[(&str, glib::Variant)]) -> glib::Variant {
-    let dict = glib::VariantDict::new(None);
-    for (key, value) in entries {
-        dict.insert_value(key, value);
-    }
-    // A `(a{sv})` tuple; `(variant,).to_variant()` would box it as `(v)`.
-    glib::Variant::tuple_from_iter([dict.end()])
-}
-
-/// Asks the portal for camera access, waiting for its `Response` signal.
-/// Outside a sandbox this answers immediately; inside one the desktop may
-/// show a permission dialog first.
+/// Asks the portal for camera access. Outside a sandbox this answers
+/// immediately; inside one the desktop may show a permission dialog first.
 fn access_camera(connection: &gio::DBusConnection) -> Result<(), String> {
-    let token = format!("discvoice{}", std::process::id());
-    let sender = connection
-        .unique_name()
-        .ok_or(NO_PORTAL)?
-        .trim_start_matches(':')
-        .replace('.', "_");
-    let request_path = format!("{PORTAL_PATH}/request/{sender}/{token}");
-
-    let context = glib::MainContext::new();
-    context
-        .with_thread_default(|| {
-            let response: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
-            let slot = response.clone();
-            // Subscribed before the call so a fast answer is not missed.
-            let subscription = connection.signal_subscribe(
-                Some(PORTAL_BUS_NAME),
-                Some(REQUEST_INTERFACE),
-                Some("Response"),
-                Some(&request_path),
-                None,
-                gio::DBusSignalFlags::NONE,
-                move |_, _, _, _, _, parameters| {
-                    let code = parameters.child_value(0).get::<u32>().unwrap_or(2);
-                    slot.set(Some(code));
-                },
-            );
-            let call = connection.call_sync(
-                Some(PORTAL_BUS_NAME),
-                PORTAL_PATH,
-                CAMERA_INTERFACE,
-                "AccessCamera",
-                Some(&options(&[("handle_token", token.to_variant())])),
-                None,
-                gio::DBusCallFlags::NONE,
-                PORTAL_CALL_TIMEOUT_MS,
-                gio::Cancellable::NONE,
-            );
-            let deadline = Instant::now() + ACCESS_TIMEOUT;
-            while call.is_ok() && response.get().is_none() && Instant::now() < deadline {
-                if !context.iteration(false) {
-                    thread::sleep(Duration::from_millis(5));
-                }
-            }
-            connection.signal_unsubscribe(subscription);
-            call.map_err(|error| format!("{NO_PORTAL} ({error})"))?;
-            match response.get() {
-                // 0 means the user (or the policy) allowed the camera.
-                Some(0) => Ok(()),
-                Some(_) => Err(DENIED.to_string()),
-                None => Err("O sistema não respondeu ao pedido de acesso à câmera.".to_string()),
-            }
-        })
-        .map_err(|error| format!("{NO_PORTAL} ({error})"))?
-}
-
-fn open_pipewire_remote(connection: &gio::DBusConnection) -> Result<OwnedFd, String> {
-    let (reply, fds) = connection
-        .call_with_unix_fd_list_sync(
-            Some(PORTAL_BUS_NAME),
-            PORTAL_PATH,
-            CAMERA_INTERFACE,
-            "OpenPipeWireRemote",
-            Some(&options(&[])),
-            Some(glib::VariantTy::new("(h)").expect("valid type")),
-            gio::DBusCallFlags::NONE,
-            PORTAL_CALL_TIMEOUT_MS,
-            gio::UnixFDList::NONE,
-            gio::Cancellable::NONE,
-        )
-        .map_err(|error| format!("{DENIED} ({error})"))?;
-    let (glib::variant::Handle(index),) = reply.get().ok_or(NO_PORTAL)?;
-    // g_unix_fd_list_get returns a duplicate owned by the caller.
-    let fd = fds
-        .get(index)
-        .map_err(|error| format!("{NO_PORTAL} ({error})"))?;
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    let outcome = portal::request(
+        connection,
+        CAMERA_INTERFACE,
+        "AccessCamera",
+        &[],
+        &[],
+        ACCESS_TIMEOUT,
+        &|| false,
+    )
+    .map_err(|error| format!("{NO_PORTAL} ({error})"))?;
+    match outcome {
+        Outcome::Granted(_) => Ok(()),
+        Outcome::Cancelled | Outcome::Denied => Err(DENIED.to_string()),
+        Outcome::TimedOut => {
+            Err("O sistema não respondeu ao pedido de acesso à câmera.".to_string())
+        }
+    }
 }
 
 /// Lists PipeWire video sources visible through `remote`.
@@ -296,7 +221,7 @@ fn max_frame_rate(value: &glib::SendValue) -> Option<gst::Fraction> {
     None
 }
 
-fn element(name: &str) -> Result<gst::Element, String> {
+pub(crate) fn element(name: &str) -> Result<gst::Element, String> {
     gst::ElementFactory::make(name)
         .build()
         .map_err(|_| format!("O elemento GStreamer \"{name}\" não está instalado."))
