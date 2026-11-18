@@ -40,9 +40,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("PUBLIC_WEB_URL deve ser uma origem HTTP(S), sem caminho ou query.".into());
     }
-    let origins = env::var("CORS_ORIGINS")
-        .unwrap_or_else(|_| format!("{web_url},http://localhost:1420,http://127.0.0.1:1420,https://tauri.localhost,http://tauri.localhost,tauri://localhost"))
-        .split(',').map(|s| s.trim().parse()).collect::<Result<Vec<_>, _>>()?;
+    let web_url = web_url.trim_end_matches('/').to_owned();
+    let configured = env::var("CORS_ORIGINS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "http://localhost:1420,http://127.0.0.1:1420,https://tauri.localhost,http://tauri.localhost,tauri://localhost".into());
+    // The public web origin always serves the bundled client, so it must be
+    // accepted by CORS and by the realtime WebSocket origin check.
+    let origins: Vec<axum::http::HeaderValue> = std::iter::once(web_url.as_str())
+        .chain(configured.split(','))
+        .map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()?;
     let dist = PathBuf::from(env::var("WEB_DIST").unwrap_or_else(|_| "apps/desktop/dist".into()));
     let app = router(AppState::new(db, web_url), origins).fallback_service(
         ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html"))),

@@ -1,4 +1,4 @@
-import type { AuthSession, Channel, Invite, Server, User } from "@disc-voice/shared";
+import type { AuthSession, Channel, ChatMessage, Invite, MessagePage, Server, User } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
@@ -7,6 +7,12 @@ const INVITE_KEY = "discvoice.invite";
 const env = (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env;
 const native = "__TAURI_INTERNALS__" in window;
 const baseUrl = (env.VITE_API_URL || (native ? "http://127.0.0.1:3001/api" : "/api")).replace(/\/$/, "");
+
+export function realtimeUrl() {
+  const url = new URL(`${baseUrl}/realtime`, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -85,7 +91,12 @@ export const api = {
   previewInvite: (code: string) => request<Invite>(`/invites/${encodeURIComponent(code)}`),
   join: (code: string) => request<Server>(`/invites/${encodeURIComponent(code)}/join`, { method: "POST" }),
   channels: (serverId: string, signal?: AbortSignal) => request<Channel[]>(`/servers/${serverId}/channels`, { signal }),
-  createChannel: (serverId: string, name: string) => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name } }),
+  createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
+  messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>
+    request<MessagePage>(`/channels/${channelId}/messages?${new URLSearchParams(cursor)}`, { signal }),
+  sendMessage: (channelId: string, clientId: string, content: string) =>
+    request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: { clientId, content } }),
+  voiceConfig: () => request<{ iceServers: RTCIceServer[] }>("/voice/config"),
 };
 
 export function message(error: unknown) {

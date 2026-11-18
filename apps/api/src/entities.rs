@@ -91,7 +91,28 @@ pub mod channel {
         pub id: Uuid,
         pub server_id: Uuid,
         pub name: String,
+        #[sea_orm(column_name = "type")]
+        pub kind: String,
         pub created_by: Uuid,
+        pub created_at: DateTimeUtc,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod message {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "messages")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i64,
+        pub channel_id: Uuid,
+        pub author_id: Uuid,
+        pub client_id: Uuid,
+        pub content: String,
         pub created_at: DateTimeUtc,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -2,7 +2,7 @@
 
 > 🎧 **Apresentação, download e instalação:** volte ao [README](README.md).
 
-Aplicativo **Windows 10/11** com Tauri 2, React, TypeScript e Rust. Contas, servidores com convites, canais de texto e configurações de microfone, saída de áudio e webcam. Interface em português.
+Aplicativo com Tauri 2, React, TypeScript e Rust. Contas, servidores com convites, mensagens persistidas, canais de voz WebRTC e configurações de microfone, saída de áudio e webcam. Interface em português.
 
 ## Contas, servidores e banco de dados
 
@@ -22,10 +22,59 @@ No Linux, use `cp .env.example .env`. O comando `services:up` compila a API e a 
 2. Clique em **Criar meu servidor** ou no **+** da lateral e informe um nome.
 3. Copie o convite exibido. Ele também está disponível em **Convidar amigos**.
 4. Outra pessoa pode abrir o link no navegador, entrar/cadastrar-se e **Aceitar convite**, ou colá-lo em **Entrar em servidor** no app.
-5. Dentro do servidor, clique em **Criar canal** e informe o nome. Qualquer membro pode criar canais; nomes são únicos dentro de cada servidor.
+5. Dentro do servidor, clique em **Criar canal**, escolha **Texto** ou **Voz** e informe o nome. Qualquer membro pode criar canais; nomes são únicos dentro de cada servidor.
 6. O botão de fones na lateral abre **Voz e vídeo**.
 
-Os canais são criados, persistidos, listados e selecionáveis. O envio de mensagens e histórico será uma próxima etapa. Use **Atualizar canais** para buscar canais criados por outros membros.
+Os canais criados por outros membros aparecem em tempo real. Canais de texto têm envio de mensagens e histórico persistido, com carregamento das mensagens anteriores. Enter envia; Shift+Enter insere uma quebra de linha. Mensagens com falha podem ser reenviadas sem duplicação.
+
+## Canais de voz e tempo real
+
+Selecione um canal de voz e clique em **Entrar no canal de voz**. Autorize o microfone. Os participantes aparecem na lateral; durante a chamada, a interface indica quem está falando. Os controles permitem silenciar o microfone, desativar o áudio recebido (também silencia a transmissão) e sair.
+
+A chamada continua enquanto você navega nos canais de texto, servidores e configurações. Cada conta participa de uma chamada por vez: entrar por outra aba/dispositivo substitui a participação anterior. Logout, fechamento e expiração de sessão encerram a participação. Ao perder a sinalização, o cliente libera os dispositivos e tenta entrar novamente após reconectar. O botão de sair cancela essa tentativa.
+
+Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saída WebRTC. Essas preferências são salvas localmente. A saída usa `setSinkId` quando suportado; nos demais ambientes, usa a saída padrão do sistema. Os IDs do navegador são diferentes dos IDs CPAL/PulseAudio dos testes locais, por isso as seleções são explícitas. Os testes locais de áudio ficam desabilitados durante chamadas.
+
+### Arquitetura
+
+- A API Axum fornece `/api/realtime` via WebSocket autenticado no primeiro frame, sem token na URL. Ela distribui mensagens, presença e sinalização SDP/ICE.
+- Mensagens são gravadas no PostgreSQL antes da publicação. O cliente usa `clientId` para reenvio idempotente e cursores para recuperar lacunas após quedas.
+- O áudio trafega por **WebRTC em malha ponto a ponto**, com uma conexão por par de participantes. A API não transporta áudio. O padrão é **8 participantes por canal**, configurável em `VOICE_CHANNEL_CAPACITY` (2–32); consumo de upload e CPU cresce com o tamanho do grupo.
+- A presença é efêmera e mantida na memória de **uma instância da API**. Ao reiniciar, clientes reconectam e sincronizam os canais. Executar múltiplas réplicas exige uma camada compartilhada de presença/sinalização.
+- O cliente utiliza microfone WebRTC no navegador e no WebView do Tauri. No Linux, o WebKitGTK precisa de suporte WebRTC/GStreamer instalado; o aplicativo habilita captura para sua interface local.
+
+### STUN e TURN
+
+No mesmo computador, use `localhost`. Entre computadores, publique a interface/API por **HTTPS** e permita o upgrade de **WebSocket/WSS** no proxy reverso. `VITE_API_URL` define também o endereço da sinalização.
+
+STUN ajuda a descobrir endereços acessíveis. Algumas redes exigem **TURN**, que retransmite o áudio quando a conexão direta falha. O Compose inclui Coturn no perfil `voice`. Configure na raiz:
+
+```dotenv
+VOICE_CHANNEL_CAPACITY=8
+STUN_URL=stun:stun.l.google.com:19302
+TURN_URLS=turn:voz.exemplo.com:3478?transport=udp,turn:voz.exemplo.com:3478?transport=tcp
+TURN_SECRET=<segredo-aleatorio-longo>
+TURN_EXTERNAL_IP=<ip-publico-do-host-coturn>
+```
+
+Use o mesmo segredo na API e no Coturn. A API gera credenciais TURN temporárias por usuário (24 horas); o segredo não é enviado ao cliente. Gere um segredo, por exemplo, com `openssl rand -hex 32`.
+
+```sh
+docker compose --profile voice up --build -d
+```
+
+Publique **3478/TCP**, **3478/UDP** e **49160–49200/UDP** no host/firewall/NAT, preservando os números das portas. O DNS `voz.exemplo.com` deve apontar ao host Coturn; não passa pelo proxy HTTP da API. O perfil fornecido oferece TURN UDP/TCP; para redes que exigem TURN sobre TLS/443, configure um serviço TURN TLS e forneça a URL `turns:` em `TURN_URLS`.
+
+Sem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localhost` não comprova conectividade entre redes diferentes.
+
+### Contratos HTTP de chat
+
+- `POST /api/servers/:id/channels`: `{ "name": "geral", "type": "text" | "voice" }`. A omissão de `type` assume `text` por compatibilidade.
+- `GET /api/channels/:id/messages?before=<id>&limit=50`: histórico anterior. Para recuperar mensagens novas, use `after=<id>`, sem `before`. Limite máximo: 100.
+- `POST /api/channels/:id/messages`: `{ "clientId": "<uuid>", "content": "Olá!" }`. De 1 a 4000 caracteres; repetir o mesmo envio retorna a mesma mensagem.
+- `GET /api/voice/config`: configuração ICE autorizada para a sessão.
+
+Todos exigem sessão; operações nos canais exigem associação ao servidor e o tipo correto de canal.
 
 As senhas usam Argon2id. A sessão é revogável, dura no máximo sete dias e seu token fica no `sessionStorage` do cliente (ao fechar o app/aba, faça login novamente). O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
 
@@ -126,7 +175,7 @@ CORS_ORIGINS=https://comunidade.exemplo.com,https://tauri.localhost,http://tauri
 VITE_API_URL=https://comunidade.exemplo.com/api
 ```
 
-`PUBLIC_WEB_URL` define os links de convite; `CORS_ORIGINS` permite o cliente web e o Tauri. `VITE_API_URL` é incorporada ao **compilar o desktop**, portanto configure-a antes de gerar o instalador. O frontend web do Docker usa `/api` na própria origem. Termine HTTPS no proxy reverso que encaminha para a porta 3001. Configure também uma senha própria para o banco em `POSTGRES_PASSWORD`.
+`PUBLIC_WEB_URL` define os links de convite; `PUBLIC_WEB_URL` é sempre aceita como origem (HTTP e WebSocket `/api/realtime`); `CORS_ORIGINS` acrescenta as demais, como o Tauri. `VITE_API_URL` é incorporada ao **compilar o desktop**, portanto configure-a antes de gerar o instalador. O frontend web do Docker usa `/api` na própria origem. Termine HTTPS no proxy reverso que encaminha para a porta 3001. Configure também uma senha própria para o banco em `POSTGRES_PASSWORD`.
 
 Os links são convites web; no desktop, use **Entrar em servidor** para colar o link. Links `localhost` servem somente para uso no mesmo computador.
 
@@ -203,7 +252,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Os testes cobrem seleção e troca de dispositivos, comandos IPC, erros, liberação da webcam, cancelamento de permissões pendentes, estados de captura, limite da gravação, reamostragem e geração do tom. Hardware real não é necessário para esses testes.
+Os testes cobrem seleção e troca de dispositivos, comandos IPC, erros, liberação da webcam, cancelamento de permissões pendentes, estados de captura, limite da gravação, reamostragem e geração do tom. Também verificam reenvio idempotente de mensagens, recuperação de lacunas e liberação do microfone durante cancelamento/reconexão. Hardware real não é necessário para esses testes.
 
 Também há testes da interface para cadastro, criação de servidor/canal, cópia de convite, entrada após login, sessão expirada e logout.
 
@@ -235,5 +284,15 @@ Abra `http://127.0.0.1:1420`. Essa prévia também funciona no Linux, mas o **á
 - Negar a permissão da webcam, tentar novamente, cancelar enquanto a permissão está pendente e trocar de câmera.
 - Confirmar que o indicador da webcam apaga ao parar ou fechar o app.
 - Instalar o `.exe` e repetir os testes na versão empacotada, além de `npm run dev`.
+
+### Validação manual do chat
+
+- Com três contas no mesmo servidor, enviar mensagens, carregar histórico, reconectar e confirmar ausência de duplicações.
+- Entrar no mesmo canal de voz e confirmar áudio bidirecional entre todos, indicadores de fala, mute e áudio recebido desativado.
+- Navegar para texto/configurações mantendo a chamada; trocar microfone/saída e trocar de canal.
+- Negar acesso ao microfone, desconectá-lo, fechar uma aba, fazer logout e abrir a mesma conta em outra aba.
+- Interromper a rede e confirmar reconexão, remoção de participantes inativos e liberação dos dispositivos.
+- Repetir em duas redes distintas; verificar uso do candidato `relay` nas estatísticas WebRTC quando TURN for necessário.
+- Repetir no Tauri empacotado para Windows e Linux, usando dispositivos reais.
 
 Os testes automatizados não substituem essa verificação com drivers e hardware reais.

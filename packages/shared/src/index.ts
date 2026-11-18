@@ -82,4 +82,47 @@ export interface Channel {
   id: string;
   serverId: string;
   name: string;
+  type: "text" | "voice";
 }
+
+export interface ChatMessage {
+  id: string;
+  channelId: string;
+  clientId: string;
+  author: User;
+  content: string;
+  createdAt: string;
+}
+
+export interface MessagePage {
+  messages: ChatMessage[];
+  hasMore: boolean;
+}
+
+export interface VoiceParticipant {
+  peerId: string;
+  user: User;
+  muted: boolean;
+  deafened: boolean;
+}
+
+export type RealtimeEvent =
+  | { type: "ready"; peerId: string }
+  | { type: "pong" }
+  | { type: "session.expired" }
+  | { type: "error"; operation: string; message: string }
+  | { type: "channel.created"; channel: Channel }
+  | { type: "message.created"; message: ChatMessage }
+  | { type: "server.snapshot"; serverId: string | null; channels: Record<string, VoiceParticipant[]> }
+  | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }
+  | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }
+  | { type: "voice.left"; channelId: string; reason: "left" | "replaced" }
+  | { type: "voice.signal"; channelId: string; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };
+
+export type RealtimeCommand =
+  | { type: "ping" }
+  | { type: "server.watch"; serverId: string | null }
+  | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
+  | { type: "voice.leave" }
+  | { type: "voice.state"; muted: boolean; deafened: boolean }
+  | { type: "voice.signal"; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };

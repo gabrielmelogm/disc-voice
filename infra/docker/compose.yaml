@@ -24,12 +24,36 @@ services:
       API_BIND: 0.0.0.0:3001
       PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:3001}
       WEB_DIST: /app/web
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001,http://localhost:1420,http://127.0.0.1:1420,https://tauri.localhost,http://tauri.localhost,tauri://localhost}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      VOICE_CHANNEL_CAPACITY: ${VOICE_CHANNEL_CAPACITY:-8}
+      STUN_URL: ${STUN_URL:-stun:stun.l.google.com:19302}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
     ports:
       - "3001:3001"
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+  turn:
+    image: coturn/coturn:4.6.3
+    profiles: ["voice"]
+    environment:
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-127.0.0.1}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        test -n "$$TURN_SECRET" || { echo "Defina TURN_SECRET no .env"; exit 1; }
+        exec turnserver --no-cli --no-tls --no-dtls --fingerprint \
+          --use-auth-secret --static-auth-secret="$$TURN_SECRET" \
+          --realm=discvoice --external-ip="$$TURN_EXTERNAL_IP" \
+          --listening-port=3478 --min-port=49160 --max-port=49200 \
+          --no-multicast-peers --log-file=stdout
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
     restart: unless-stopped
 volumes:
   postgres-data:

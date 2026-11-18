@@ -1,5 +1,7 @@
 mod entities;
+mod messages;
 pub mod migration;
+mod realtime;
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -31,6 +33,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub web_url: String,
     password_jobs: Arc<Semaphore>,
+    realtime: Arc<realtime::Hub>,
 }
 
 impl AppState {
@@ -39,11 +42,13 @@ impl AppState {
             db,
             web_url,
             password_jobs: Arc::new(Semaphore::new(8)),
+            realtime: Arc::new(realtime::Hub::new()),
         }
     }
 }
 
 pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
+    let ws_origins = Arc::new(origins.clone());
     let protected = Router::new()
         .route("/me", get(me))
         .route("/auth/logout", post(logout))
@@ -55,6 +60,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/invites/{code}", get(preview_invite))
         .route("/invites/{code}/join", post(join_invite))
+        .route(
+            "/channels/{id}/messages",
+            get(messages::list).post(messages::send),
+        )
+        .route("/voice/config", get(realtime::ice_config))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
 
     Router::new()
@@ -67,6 +77,12 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 )
                 .route("/auth/register", post(register))
                 .route("/auth/login", post(login))
+                .route(
+                    "/realtime",
+                    get(move |state, headers, ws| {
+                        realtime::upgrade(state, headers, ws, ws_origins.clone())
+                    }),
+                )
                 .merge(protected)
                 .fallback(|| async {
                     ApiError(StatusCode::NOT_FOUND, "Rota não encontrada.".into())
@@ -314,9 +330,10 @@ async fn logout(
     State(state): State<AppState>,
     Extension(hash): Extension<SessionHash>,
 ) -> ApiResult<StatusCode> {
-    session::Entity::delete_by_id(hash.0)
+    session::Entity::delete_by_id(hash.0.clone())
         .exec(&state.db)
         .await?;
+    state.realtime.revoke(&hash.0);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -518,6 +535,8 @@ struct ChannelView {
     id: Uuid,
     server_id: Uuid,
     name: String,
+    #[serde(rename = "type")]
+    kind: String,
 }
 impl From<channel::Model> for ChannelView {
     fn from(c: channel::Model) -> Self {
@@ -525,6 +544,7 @@ impl From<channel::Model> for ChannelView {
             id: c.id,
             server_id: c.server_id,
             name: c.name,
+            kind: c.kind,
         }
     }
 }
@@ -548,7 +568,7 @@ async fn create_channel(
     State(state): State<AppState>,
     Extension(user): Extension<UserView>,
     Path(id): Path<Uuid>,
-    Json(input): Json<NameInput>,
+    Json(input): Json<ChannelInput>,
 ) -> ApiResult<(StatusCode, Json<ChannelView>)> {
     require_member(&state.db, id, user.id).await?;
     let name = channel_name(&input.name)?;
@@ -556,10 +576,59 @@ async fn create_channel(
         id: Set(Uuid::new_v4()),
         server_id: Set(id),
         name: Set(name),
+        kind: Set(input.kind.as_str().into()),
         created_by: Set(user.id),
         created_at: Set(Utc::now()),
     }
     .insert(&state.db)
     .await?;
-    Ok((StatusCode::CREATED, Json(channel.into())))
+    let view = ChannelView::from(channel);
+    state.realtime.publish_server(
+        id,
+        serde_json::json!({ "type": "channel.created", "channel": view }),
+    );
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ChannelKind {
+    #[default]
+    Text,
+    Voice,
+}
+
+impl ChannelKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Voice => "voice",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ChannelInput {
+    name: String,
+    #[serde(default, rename = "type")]
+    kind: ChannelKind,
+}
+
+async fn require_channel(
+    db: &DatabaseConnection,
+    id: Uuid,
+    user: Uuid,
+    kind: &str,
+) -> ApiResult<channel::Model> {
+    let channel = channel::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Canal não encontrado.".into()))?;
+    require_member(db, channel.server_id, user).await?;
+    if channel.kind != kind {
+        return Err(ApiError::bad(
+            "Este tipo de canal não suporta esta operação.",
+        ));
+    }
+    Ok(channel)
 }

@@ -8,7 +8,7 @@ export type DialogMode =
   | { kind: "create" }
   | { kind: "join"; code?: string }
   | { kind: "invite"; server: Server }
-  | { kind: "channel"; server: Server };
+  | { kind: "channel"; server: Server; channelType?: Channel["type"] };
 
 export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   mode: DialogMode;
@@ -22,6 +22,7 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [channelType, setChannelType] = useState<Channel["type"]>(mode.kind === "channel" ? mode.channelType || "text" : "text");
 
   useEffect(() => {
     const dialog = ref.current;
@@ -55,7 +56,7 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
         setInvite(result);
         onServer(result.server);
       } else if (mode.kind === "channel") {
-        onChannel(await api.createChannel(mode.server.id, value.trim()));
+        onChannel(await api.createChannel(mode.server.id, value.trim(), channelType));
         onClose();
       } else if (mode.kind === "join") {
         const code = parseInvite(value);
@@ -88,7 +89,7 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
     create: "Crie seu servidor",
     join: "Entre em um servidor",
     invite: "Convide seus amigos",
-    channel: "Criar canal de texto",
+    channel: "Criar canal",
   }[mode.kind];
 
   return <dialog ref={ref} className="action-dialog" aria-labelledby="dialog-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
@@ -101,6 +102,10 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
       <button className="button secondary full" onClick={onClose}>Concluir</button>
     </div> : mode.kind === "invite" ? <p role="status">{busy ? "Buscando convite…" : "Não foi possível carregar o convite. Feche e tente novamente."}</p> : <form onSubmit={submit} className="stack-form">
       <p>{mode.kind === "create" ? "Um lugar para sua comunidade. Você só precisa de um nome." : mode.kind === "channel" ? `Um novo assunto para ${mode.server.name}.` : "Cole o link que você recebeu de um amigo."}</p>
+      {mode.kind === "channel" && <fieldset className="channel-type"><legend>Tipo de canal</legend>
+        <label><input type="radio" name="channel-type" value="text" checked={channelType === "text"} disabled={busy} onChange={() => setChannelType("text")} /> Texto</label>
+        <label><input type="radio" name="channel-type" value="voice" checked={channelType === "voice"} disabled={busy} onChange={() => setChannelType("voice")} /> Voz</label>
+      </fieldset>}
       <div className="field">
         <label htmlFor="dialog-value">{mode.kind === "join" ? "Link ou código do convite" : mode.kind === "channel" ? "Nome do canal" : "Nome do servidor"}</label>
         <input autoFocus id="dialog-value" required disabled={busy} maxLength={mode.kind === "join" ? 2048 : mode.kind === "channel" ? 64 : 100}

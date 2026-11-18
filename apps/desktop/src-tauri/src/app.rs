@@ -35,6 +35,8 @@ pub fn run() {
             let engine = AudioEngine::new().map_err(std::io::Error::other)?;
             app.manage(engine);
             camera::manage(app).map_err(std::io::Error::other)?;
+            #[cfg(target_os = "linux")]
+            crate::linux::enable_media(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {
