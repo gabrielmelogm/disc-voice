@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Runtime};
 
 #[derive(Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct Avatar {
     /// File name stem: the page derives it from what the image shows.
     key: String,

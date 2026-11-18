@@ -1,0 +1,60 @@
+name: Linux
+
+# Every pull request compiles the Linux app (clippy builds the Linux-only code,
+# which the Windows job never sees) and runs the tests. The release build with
+# its .deb/.rpm packages only runs on pushes to main or when triggered manually.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev \
+            libpulse-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache; PRs reuse it without writing their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Install + checks (every PR and push to main)
+      - run: npm ci
+      - run: npm run build
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+      # Build (push to main / manual only)
+      - if: github.event_name != 'pull_request'
+        run: npm run build:linux
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: disc-voice-linux
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
