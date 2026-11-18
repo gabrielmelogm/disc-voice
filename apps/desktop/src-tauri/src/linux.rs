@@ -8,6 +8,19 @@ use webkit2gtk::{
     UserMediaPermissionRequestExt, WebViewExt,
 };
 
+/// Must run at the very start of `main`, before any thread exists and before
+/// WebKit spawns its processes, which inherit this environment.
+pub fn prepare_environment() {
+    // WebKit's GL video sink crashes the web process (SIGSEGV in GStreamer's
+    // glupload DMA-BUF path) on PipeWire camera frames, so the preview froze
+    // and flickered while the page process kept restarting. The non-GL sink
+    // copies frames through system memory, which is cheap for a webcam.
+    // An explicit value set by the user still wins.
+    if std::env::var_os("WEBKIT_GST_DISABLE_GL_SINK").is_none() {
+        std::env::set_var("WEBKIT_GST_DISABLE_GL_SINK", "1");
+    }
+}
+
 pub fn enable_camera<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     for window in app.webview_windows().values() {
         window.with_webview(|webview| {

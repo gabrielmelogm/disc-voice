@@ -7,6 +7,8 @@ mod linux;
 
 #[cfg(any(windows, target_os = "linux"))]
 fn main() {
+    #[cfg(target_os = "linux")]
+    linux::prepare_environment();
     app::run();
 }
 
