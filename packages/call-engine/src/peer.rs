@@ -21,7 +21,7 @@ use crate::{
     engine::{CallEvent, Shared, VideoSource},
     frames,
     hub::{PeerSinks, Sink},
-    keyframes::{asks_keyframe, KeyframeRequests},
+    keyframes::{asks_keyframe, KeyframeRequests, UNKNOWN_RTT},
     video,
 };
 use rtc::{
@@ -38,11 +38,14 @@ use std::{
     collections::{hash_map::RandomState, HashMap},
     hash::BuildHasher,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
+
+/// How often the round trip to a peer is reported (when it changed).
+const LATENCY_EVERY: Duration = Duration::from_secs(2);
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -221,6 +224,8 @@ struct Connection {
     audio: LocalTrack,
     screen: LocalTrack,
     camera: LocalTrack,
+    /// Round trip in ms, from the peer's RTCP reports.
+    rtt: Arc<AtomicU32>,
 }
 
 async fn connect(
@@ -242,10 +247,11 @@ async fn connect(
         },
         RtpCodecKind::Video,
     )?;
-    // Closest to the application: it only marks PLI/FIR so they reach our
-    // track's events (see `keyframes`).
+    // Closest to the application: it marks PLI/FIR so they reach our
+    // track's events, and measures the round trip (see `keyframes`).
+    let rtt = Arc::new(AtomicU32::new(UNKNOWN_RTT));
     let registry = register_default_interceptors(Registry::new(), &mut media)?
-        .with(Slot::from(14_000), KeyframeRequests::default());
+        .with(Slot::from(14_000), KeyframeRequests::new(rtt.clone()));
     let configuration = RTCConfigurationBuilder::new()
         .with_ice_servers(ice_servers)
         .build();
@@ -275,6 +281,7 @@ async fn connect(
         audio,
         screen,
         camera,
+        rtt,
     })
 }
 
@@ -611,6 +618,25 @@ async fn run(
             }
         }));
     }
+    // The UI shows the round trip on the peer's tile.
+    {
+        let (rtt, shared, id) = (peer.conn.rtt.clone(), peer.shared.clone(), peer.id.clone());
+        peer.receivers.push(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(LATENCY_EVERY);
+            let mut previous = UNKNOWN_RTT;
+            loop {
+                interval.tick().await;
+                let now = rtt.load(Ordering::Relaxed);
+                if now != previous {
+                    previous = now;
+                    shared.emit(CallEvent::Latency {
+                        peer_id: id.clone(),
+                        ms: (now != UNKNOWN_RTT).then_some(now),
+                    });
+                }
+            }
+        }));
+    }
     drop(commands);
     while let Some(command) = receiver.recv().await {
         match command {
@@ -828,6 +854,31 @@ mod tests {
                     .next(&frames::slot("a", source), Duration::from_secs(1))
                     .expect("a decoded picture");
                 assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+            }
+
+            // b's reports on a's audio echo a's sender reports: a learns
+            // the round trip, which is tiny on loopback.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            let mut ticker = tokio::time::interval(Duration::from_millis(20));
+            loop {
+                tokio::select! {
+                    Some((from, event)) = events.recv() => {
+                        if let ("a", CallEvent::Latency { peer_id, ms: Some(ms) }) = (from, event) {
+                            assert_eq!(peer_id, "b");
+                            assert!(ms < 200, "{ms} ms on loopback");
+                            break;
+                        }
+                    },
+                    _ = ticker.tick() => {
+                        let size = encoder.encode_float(&tone, &mut packet).unwrap();
+                        let _ = frames_a.send(EncodedFrame {
+                            kind: Kind::Audio,
+                            data: Bytes::copy_from_slice(&packet[..size]),
+                            duration: Duration::from_millis(20),
+                        });
+                    }
+                    _ = tokio::time::sleep_until(deadline) => panic!("a never measured the round trip to b"),
+                }
             }
 
             peer_a.send(PeerCommand::Close);

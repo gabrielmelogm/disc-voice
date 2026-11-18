@@ -17,6 +17,7 @@ export interface SignalData {
 export type CallEvent =
   | { type: "signal"; peerId: string; data: SignalData }
   | { type: "peerState"; peerId: string; state: RTCPeerConnectionState }
+  | { type: "latency"; peerId: string; ms: number | null }
   | { type: "speaking"; peerIds: string[] }
   | { type: "video"; peerId: string; source: VideoSource; active: boolean }
   | { type: "videoEnded"; source: VideoSource; message: string }

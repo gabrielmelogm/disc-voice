@@ -108,6 +108,9 @@ pub enum CallEvent {
     },
     /// `RTCPeerConnectionState` of one peer, as the browser names it.
     PeerState { peer_id: String, state: String },
+    /// Round trip to a peer in milliseconds, when it changes; `None` until
+    /// measured.
+    Latency { peer_id: String, ms: Option<u32> },
     /// Who is speaking now; includes our own peer ID while unmuted.
     Speaking { peer_ids: Vec<String> },
     /// A peer's screen or camera started (first picture decoded) or ended.

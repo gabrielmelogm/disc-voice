@@ -425,8 +425,14 @@ mod tests {
         let (mut jpegs, mut raws) = (0, 0);
         while started.elapsed() < Duration::from_secs(4) {
             if let Some(frame) = engine.next_raw_frame(Duration::from_millis(100)).unwrap() {
-                assert_eq!((frame.width, frame.height), (expected.width, expected.height));
-                assert_eq!(frame.i420.len(), (frame.width * frame.height * 3 / 2) as usize);
+                assert_eq!(
+                    (frame.width, frame.height),
+                    (expected.width, expected.height)
+                );
+                assert_eq!(
+                    frame.i420.len(),
+                    (frame.width * frame.height * 3 / 2) as usize
+                );
                 raws += 1;
             }
             if engine.next_frame(Duration::ZERO).unwrap().is_some() {

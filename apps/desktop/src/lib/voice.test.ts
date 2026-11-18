@@ -4,7 +4,7 @@ import { api } from "./api";
 import { nativeCall, type CallEvent } from "./nativeCall";
 import { nativeCamera } from "./nativeCamera";
 import { nativeScreen } from "./nativeScreen";
-import { CAMERA_QUALITIES, Voice, videoSource } from "./voice";
+import { CAMERA_QUALITIES, Voice, roundTripMs, videoSource } from "./voice";
 import type { Realtime } from "./realtime";
 
 const share = vi.hoisted(() => ({
@@ -27,16 +27,22 @@ function setup() {
   let listener: (event: RealtimeEvent) => void = () => {};
   let notify = () => {};
   let status = "connected";
+  let latency: (ms: number | null) => void = () => {};
   const send = vi.fn<(command: RealtimeCommand) => void>();
   const realtime = {
     getSnapshot: () => ({ status }),
+    latency: 30,
+    onLatency: (fn: typeof latency) => { latency = fn; return () => { latency = () => {}; }; },
     send,
     onEvent: (fn: typeof listener) => { listener = fn; return () => { listener = () => {}; }; },
     subscribe: (fn: () => void) => { notify = fn; return () => {}; },
   } as unknown as Realtime;
   const voice = new Voice(realtime);
   voice.start();
-  return { voice, send, event: (event: RealtimeEvent) => listener(event), status: (next: string) => { status = next; notify(); } };
+  return {
+    voice, send, event: (event: RealtimeEvent) => listener(event), status: (next: string) => { status = next; notify(); },
+    serverLatency: (ms: number | null) => latency(ms),
+  };
 }
 
 function stream() {
@@ -304,6 +310,8 @@ describe("webcam in a call (webview)", () => {
     close = vi.fn();
     setLocalDescription = vi.fn().mockResolvedValue(undefined);
     setRemoteDescription = vi.fn().mockResolvedValue(undefined);
+    stats = new Map<string, unknown>();
+    getStats = vi.fn(async () => this.stats);
     constructor() { CameraPeer.all.push(this); }
   }
 
@@ -388,6 +396,23 @@ describe("webcam in a call (webview)", () => {
     expect(voice.getSnapshot().remoteScreens).toEqual({});
     CameraPeer.all[0].ontrack!({ track: { kind: "video" }, streams: [{ id: "{other}" }] });
     expect(Object.keys(voice.getSnapshot().remoteScreens)).toEqual(["remote"]);
+    voice.dispose();
+  });
+
+  it("reads each peer's round trip every few seconds and forgets it when they leave", async () => {
+    const { voice, event, serverLatency } = await inCall();
+    expect(voice.getSnapshot().serverLatency).toBe(30);
+    serverLatency(55);
+    expect(voice.getSnapshot().serverLatency).toBe(55);
+    CameraPeer.all[0].stats = new Map([
+      ["T1", { id: "T1", type: "transport", selectedCandidatePairId: "P2" }],
+      ["P1", { id: "P1", type: "candidate-pair", currentRoundTripTime: 0.3 }],
+      ["P2", { id: "P2", type: "candidate-pair", currentRoundTripTime: 0.0424 }],
+    ]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(voice.getSnapshot().latency).toEqual({ remote: 42 });
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [{ ...participant, peerId: "a-self" }] });
+    expect(voice.getSnapshot().latency).toEqual({});
     voice.dispose();
   });
 
@@ -555,6 +580,20 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     voice.dispose();
   });
 
+  it("shows the round trip the engine measures to each peer", async () => {
+    const { voice, event, engine } = await inNativeCall();
+    engine.emit({ type: "latency", peerId: "remote", ms: 87 });
+    expect(voice.getSnapshot().latency).toEqual({ remote: 87 });
+    engine.emit({ type: "latency", peerId: "stranger", ms: 5 });
+    expect(voice.getSnapshot().latency).toEqual({ remote: 87 });
+    engine.emit({ type: "latency", peerId: "remote", ms: null });
+    expect(voice.getSnapshot().latency).toEqual({});
+    engine.emit({ type: "latency", peerId: "remote", ms: 90 });
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant] });
+    expect(voice.getSnapshot().latency).toEqual({});
+    voice.dispose();
+  });
+
   it("the settings test taking the camera turns the call's camera off without stopping the test", async () => {
     vi.spyOn(nativeCamera, "startForCall").mockResolvedValue({ deviceId: "camera-1", width: 640, height: 360, frameRate: 30, passthrough: true });
     const stopCamera = vi.spyOn(nativeCamera, "stop").mockResolvedValue(undefined);
@@ -567,5 +606,26 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "voice.state", camera: false }));
     test.release();
     voice.dispose();
+  });
+});
+
+describe("round trip from WebRTC stats", () => {
+  const report = (...entries: Record<string, unknown>[]) => new Map(entries.map(entry => [String(entry.id), entry])) as unknown as RTCStatsReport;
+
+  it("prefers the selected ICE pair, then a nominated one, then RTCP", () => {
+    expect(roundTripMs(report(
+      { id: "T", type: "transport", selectedCandidatePairId: "B" },
+      { id: "A", type: "candidate-pair", currentRoundTripTime: 0.5, nominated: true, state: "succeeded" },
+      { id: "B", type: "candidate-pair", currentRoundTripTime: 0.012 },
+    ))).toBe(12);
+    expect(roundTripMs(report(
+      { id: "A", type: "candidate-pair", currentRoundTripTime: 0.5, nominated: false, state: "succeeded" },
+      { id: "B", type: "candidate-pair", currentRoundTripTime: 0.08, nominated: true, state: "succeeded" },
+    ))).toBe(80);
+    expect(roundTripMs(report(
+      { id: "R1", type: "remote-inbound-rtp", roundTripTime: 0.2 },
+      { id: "R2", type: "remote-inbound-rtp", roundTripTime: 0.15 },
+    ))).toBe(150);
+    expect(roundTripMs(report({ id: "A", type: "candidate-pair", nominated: true, state: "succeeded" }))).toBeNull();
   });
 });

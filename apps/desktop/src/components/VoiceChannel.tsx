@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Video, Volume2, VolumeX, X } from "lucide-react";
+import {
+  Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Signal, SignalHigh, SignalLow, SignalMedium,
+  SignalZero, Video, Volume2, VolumeX, X, type LucideIcon,
+} from "lucide-react";
 import type { Channel, VoiceParticipant } from "@disc-voice/shared";
 import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
@@ -86,19 +89,89 @@ function CallScreens({ state, participants }: { state: VoiceState; participants:
   </div>;
 }
 
-function Tile({ participant, speaking, self, camera, feed }: {
+/** Bars and color for a round trip, like a phone's signal indicator. */
+export function signalLevel(ms: number | null | undefined): { Icon: LucideIcon; tone: string } {
+  if (ms === null || ms === undefined) return { Icon: SignalZero, tone: "unknown" };
+  if (ms < 80) return { Icon: Signal, tone: "good" };
+  if (ms < 150) return { Icon: SignalHigh, tone: "good" };
+  if (ms < 300) return { Icon: SignalMedium, tone: "fair" };
+  return { Icon: SignalLow, tone: "poor" };
+}
+
+/** Connection quality to a participant (to the server, for us); hover for the ping. */
+function SignalBadge({ ms, self }: { ms: number | null | undefined; self: boolean }) {
+  const { Icon, tone } = signalLevel(ms);
+  const value = typeof ms === "number" ? `${ms} ms` : "medindo…";
+  const text = self ? `Ping com o servidor: ${value}` : `Ping: ${value}`;
+  return <span className={`tile-signal ${tone}`} tabIndex={0} aria-label={text}>
+    <Icon size={14} aria-hidden />
+    <span className="tile-tooltip" role="tooltip">{text}</span>
+  </span>;
+}
+
+/** Tile orders chosen by dragging, per channel; in memory only, by user ID. */
+const tileOrders = new Map<string, string[]>();
+
+/** Participants in the chosen order; anyone not ordered yet goes last. */
+export function arrangeTiles<T extends { user: { id: string } }>(participants: T[], order: string[]): T[] {
+  const rank = new Map(order.map((id, index) => [id, index]));
+  return participants
+    .map((participant, index) => ({ participant, key: rank.get(participant.user.id) ?? order.length + index }))
+    .sort((a, b) => a.key - b.key)
+    .map(entry => entry.participant);
+}
+
+/** `ids` with the item at `from` moved to `to`. */
+export function moveTile(ids: string[], from: number, to: number): string[] {
+  if (from < 0 || to < 0 || from === to) return ids;
+  const next = [...ids];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+interface Reorder {
+  dragging: boolean;
+  target: boolean;
+  onDragStart: () => void;
+  onDragEnter: () => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
+  /** Moves the tile by `step` places (keyboard). */
+  onMove: (step: number) => void;
+}
+
+function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
   participant: VoiceParticipant; speaking: boolean; self: boolean;
   /** The camera is on (for us: sending). */
   camera: boolean;
   feed: VideoFeed | null | undefined;
+  /** Shown while in the call: round trip in ms, `null` until measured. */
+  ping?: number | null;
+  reorder: Reorder;
 }) {
   const name = participant.user.name;
   const video = camera && feed;
-  return <li className={`call-tile ${speaking ? "is-speaking" : ""} ${video ? "has-video" : ""}`}>
+  const classes = ["call-tile", speaking && "is-speaking", video && "has-video", reorder.dragging && "is-dragging", reorder.target && "drop-target"];
+  return <li className={classes.filter(Boolean).join(" ")} draggable tabIndex={0}
+    aria-label={`${name}${self ? " (você)" : ""}. Arraste ou use Alt e as setas para mudar a posição.`}
+    onDragStart={event => { event.dataTransfer?.setData("text/plain", participant.user.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = "move"; reorder.onDragStart(); }}
+    onDragEnter={reorder.onDragEnter}
+    onDragOver={event => event.preventDefault()}
+    onDrop={event => { event.preventDefault(); reorder.onDrop(); }}
+    onDragEnd={reorder.onDragEnd}
+    onKeyDown={event => {
+      if (!event.altKey || event.target !== event.currentTarget) return;
+      const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0;
+      if (!step) return;
+      event.preventDefault();
+      reorder.onMove(step);
+    }}>
     {video
       // Our own camera is mirrored, as in any video call; others see it as is.
       ? <CameraVideo feed={feed} label={self ? "Sua câmera" : `Câmera de ${name}`} mirrored={self} />
       : <Avatar name={name} size="xl" />}
+    {ping !== undefined && <SignalBadge ms={ping} self={self} />}
     {camera && !feed && <span className="tile-loading" role="status"><Video size={14} />Carregando câmera…</span>}
     {participant.screen && <span className="tile-badge"><MonitorUp size={14} aria-label="Compartilhando a tela" /></span>}
     <span className="tile-name">
@@ -117,6 +190,18 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
   const [chatOpen, setChatOpen] = useState(true);
   const [since, setSince] = useState<Date | null>(null);
   useEffect(() => { setSince(active ? new Date() : null); }, [active]);
+  const [order, setOrder] = useState(() => tileOrders.get(channel.id) ?? []);
+  useEffect(() => { setOrder(tileOrders.get(channel.id) ?? []); }, [channel.id]);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
+  const tiles = arrangeTiles(participants, order);
+  const ids = tiles.map(p => p.user.id);
+  const reorderTo = (id: string, to: number) => {
+    const next = moveTile(ids, ids.indexOf(id), Math.max(0, Math.min(ids.length - 1, to)));
+    tileOrders.set(channel.id, next);
+    setOrder(next);
+  };
+  const endDrag = () => { setDragging(null); setTarget(null); };
   const sharing = active && (!!state.localScreen || state.screen === "picking" || participants.some(p => p.screen && p.peerId !== state.peerId));
 
   return <div className="call-layout">
@@ -133,11 +218,22 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
 
       {active && <CallScreens state={state} participants={participants} />}
       {participants.length > 0 && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
-        {participants.map(p => {
+        {tiles.map((p, index) => {
           const self = !!state.peerId && p.peerId === state.peerId;
           const camera = active && (self ? state.camera === "live" : !!p.camera);
           const feed = self ? state.localCamera : state.remoteCameras[p.peerId];
-          return <Tile key={p.peerId} participant={p} speaking={state.speaking.includes(p.peerId)} self={self} camera={camera} feed={feed} />;
+          const ping = !active ? undefined : self ? state.serverLatency : state.latency[p.peerId] ?? null;
+          const id = p.user.id;
+          return <Tile key={p.peerId} participant={p} speaking={state.speaking.includes(p.peerId)} self={self} camera={camera} feed={feed} ping={ping}
+            reorder={{
+              dragging: dragging === id,
+              target: !!dragging && dragging !== id && target === id,
+              onDragStart: () => setDragging(id),
+              onDragEnter: () => setTarget(id),
+              onDrop: () => { if (dragging && dragging !== id) reorderTo(dragging, index); endDrag(); },
+              onDragEnd: endDrag,
+              onMove: step => reorderTo(id, index + step),
+            }} />;
         })}
       </ul>}
 

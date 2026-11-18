@@ -16,6 +16,8 @@ const SCREEN_TAKEN = "O teste de compartilhamento de tela assumiu a captura.";
 const CAMERA_TAKEN = "O teste de câmera nas configurações assumiu a webcam.";
 const CAMERA_LOST = "A webcam foi desconectada ou o acesso à câmera foi interrompido.";
 const CAMERA_FRAME_RATE = 30;
+/** How often the webview reads each peer connection's round trip. */
+const LATENCY_EVERY_MS = 2_000;
 
 export type CameraQuality = "360p" | "720p";
 
@@ -78,6 +80,10 @@ export interface VoiceState {
   localCamera: VideoFeed | null;
   /** Webcams received, by peer ID. */
   remoteCameras: Record<string, VideoFeed>;
+  /** Round trip to each peer in ms, once measured. */
+  latency: Record<string, number>;
+  /** Round trip to the server in ms; shown on our own tile. */
+  serverLatency: number | null;
 }
 
 interface Peer {
@@ -112,6 +118,22 @@ function savedQuality(): CameraQuality {
  * What a peer's video stream is. Webview peers name theirs in signaling;
  * native peers use fixed IDs; older clients only sent screens.
  */
+/**
+ * Round trip of a peer connection in milliseconds: the selected ICE pair's
+ * (STUN consent checks), else the RTCP-based one; `null` before either.
+ */
+export function roundTripMs(report: RTCStatsReport): number | null {
+  const all: Record<string, unknown>[] = [];
+  report.forEach(stats => all.push(stats as Record<string, unknown>));
+  const selected = all.find(stats => stats.type === "transport" && stats.selectedCandidatePairId)?.selectedCandidatePairId;
+  const pair = all.find(stats => stats.type === "candidate-pair" && typeof stats.currentRoundTripTime === "number"
+    && (selected ? stats.id === selected : stats.nominated && stats.state === "succeeded"));
+  if (pair) return Math.round((pair.currentRoundTripTime as number) * 1000);
+  const rtcp = all.filter(stats => stats.type === "remote-inbound-rtp" && typeof stats.roundTripTime === "number")
+    .map(stats => stats.roundTripTime as number);
+  return rtcp.length ? Math.round(Math.min(...rtcp) * 1000) : null;
+}
+
 export function videoSource(streamId: string, named: Record<string, VideoSource>): VideoSource {
   return named[streamId] ?? (streamId.includes("camera") ? "camera" : "screen");
 }
@@ -159,6 +181,7 @@ export class Voice {
     peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
     cameraSupported: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
     camera: "idle", cameraId: preference("camera"), cameraQuality: savedQuality(), cameras: [], localCamera: null, remoteCameras: {},
+    latency: {}, serverLatency: null,
   };
   private changes = new Set<() => void>();
   private stream?: MediaStream;
@@ -193,6 +216,8 @@ export class Voice {
   private cameraAttempt = 0;
   /** The native engine is sending our webcam. */
   private nativeCamera = false;
+  private latencyTimer?: ReturnType<typeof setInterval>;
+  private offLatency?: () => void;
 
   constructor(private realtime: Realtime) {}
 
@@ -227,6 +252,8 @@ export class Voice {
       this.wasConnected = connected;
     });
     this.wasConnected = this.realtime.getSnapshot().status === "connected";
+    this.update({ serverLatency: this.realtime.latency });
+    this.offLatency = this.realtime.onLatency(serverLatency => this.update({ serverLatency }));
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshDevices);
     window.addEventListener("pagehide", this.leave);
     void this.refreshDevices();
@@ -243,6 +270,7 @@ export class Voice {
   dispose() {
     this.offEvent?.();
     this.offStatus?.();
+    this.offLatency?.();
     navigator.mediaDevices?.removeEventListener("devicechange", this.refreshDevices);
     window.removeEventListener("pagehide", this.leave);
     this.leave();
@@ -602,6 +630,23 @@ export class Voice {
     if (this.state.camera !== "idle" || this.state.localCamera) this.update({ camera: "idle", localCamera: null });
   }
 
+  /** Sets (or, without a value, removes) the round trip to a peer. */
+  private peerLatency(id: string, ms?: number | null) {
+    const { [id]: previous, ...rest } = this.state.latency;
+    if (typeof ms === "number") { if (ms !== previous) this.update({ latency: { ...rest, [id]: ms } }); }
+    else if (previous !== undefined) this.update({ latency: rest });
+  }
+
+  /** Reads every webview peer connection's round trip. */
+  private async measureLatency() {
+    await Promise.all([...this.peers].map(async ([id, peer]) => {
+      try {
+        const ms = roundTripMs(await peer.pc.getStats());
+        if (this.peers.get(id) === peer && ms !== null) this.peerLatency(id, ms);
+      } catch { /* The connection is closing. */ }
+    }));
+  }
+
   /** Sets (or, without a feed, removes) a peer's received video. */
   private remoteVideo(source: VideoSource, id: string, feed?: VideoFeed) {
     const key = source === "camera" ? "remoteCameras" : "remoteScreens";
@@ -635,6 +680,9 @@ export class Voice {
         this.connectionState();
         return;
       }
+      case "latency":
+        if (this.nativeStates.has(event.peerId)) this.peerLatency(event.peerId, event.ms);
+        return;
       case "speaking":
         if (event.peerIds.join() !== this.state.speaking.join()) this.update({ speaking: event.peerIds });
         return;
@@ -665,6 +713,7 @@ export class Voice {
       this.nativeStates.delete(id);
       clearTimeout(this.nativeTimers.get(id));
       this.nativeTimers.delete(id);
+      this.peerLatency(id);
       this.remoteVideo("screen", id);
       this.remoteVideo("camera", id);
     }
@@ -749,6 +798,9 @@ export class Voice {
       this.update({ peerId: event.peerId });
       if (this.stream) this.analyse(this.peerId, this.stream);
       this.participants(event.participants);
+      if (this.nativeId === undefined && !this.latencyTimer) {
+        this.latencyTimer = setInterval(() => void this.measureLatency(), LATENCY_EVERY_MS);
+      }
     }
     if (event.type === "voice.participants" && event.channelId === channel.id && this.joined) this.participants(event.participants);
     if (event.type === "voice.signal" && event.channelId === channel.id && this.joined && this.nativeId !== undefined) {
@@ -928,6 +980,7 @@ export class Voice {
     peer.audio.pause();
     peer.audio.srcObject = null;
     this.removeAnalyser(id);
+    this.peerLatency(id);
     this.remoteVideo("screen", id);
     this.remoteVideo("camera", id);
   }
@@ -945,6 +998,8 @@ export class Voice {
     this.deadline = undefined;
     clearInterval(this.meter);
     this.meter = undefined;
+    clearInterval(this.latencyTimer);
+    this.latencyTimer = undefined;
     for (const id of this.peers.keys()) this.removePeer(id);
     for (const id of this.analysers.keys()) this.removeAnalyser(id);
     if (this.nativeId !== undefined) void nativeCall.leave(this.nativeId).catch(() => {});
@@ -954,6 +1009,7 @@ export class Voice {
     this.nativeStates.clear();
     if (Object.keys(this.state.remoteScreens).length) this.update({ remoteScreens: {} });
     if (Object.keys(this.state.remoteCameras).length) this.update({ remoteCameras: {} });
+    if (Object.keys(this.state.latency).length) this.update({ latency: {} });
     this.stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
     this.stream = undefined;
     void this.context?.close().catch(() => {});
