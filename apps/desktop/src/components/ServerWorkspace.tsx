@@ -190,7 +190,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout }: {
       <div className="bar-dock">
         <CallStatus voice={voice} state={voiceState} serverName={servers.find(s => s.id === voiceState.channel?.serverId)?.name} onOpen={goToVoice} />
         <AppBar user={user} servers={servers} server={server} view={view === "dms" ? "dms" : "server"} voice={voice} voiceState={voiceState}
-          canJoinVoice={voiceChannels.length > 0} onSelectServer={selectServer} onHome={() => show("server")}
+          canJoinVoice={voiceChannels.length > 0} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
           onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} />
