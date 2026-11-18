@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Check, ChevronUp, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
-  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX, Volume2,
+  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX,
 } from "lucide-react";
 import type { Server, User } from "@disc-voice/shared";
 import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
@@ -59,7 +59,7 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, servers, server, view, voice, voiceState, canJoinVoice, onSelectServer, onHome, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings }: {
+export function AppBar({ user, servers, server, view, voice, voiceState, canJoinVoice, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings }: {
   user: User;
   servers: Server[];
   server: Server | undefined;
@@ -68,7 +68,6 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
   voiceState: VoiceState;
   canJoinVoice: boolean;
   onSelectServer: (server: Server) => void;
-  onHome: () => void;
   onCreateServer: () => void;
   onJoinServer: () => void;
   onDms: () => void;
@@ -93,9 +92,6 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
   const pick = (action: () => void) => () => { setMenu(null); action(); };
 
   return <nav ref={ref} className="app-bar" aria-label="Barra do app">
-    <button className={`bar-brand ${inCall ? "in-call" : ""}`} aria-label={inCall ? `Voltar para a chamada em ${voiceState.channel!.name}` : "Disc Voice"} title={inCall ? "Voltar para a chamada" : "Disc Voice"} onClick={inCall ? onVoice : onHome}>
-      <Volume2 size={20} />
-    </button>
     <div className="menu-anchor">
       <button className="server-switch" aria-haspopup="menu" aria-expanded={menu === "servers"} aria-label={`Trocar de servidor. Atual: ${server?.name || "nenhum"}`} title="Trocar de servidor" onClick={() => setMenu(menu === "servers" ? null : "servers")}>
         {server ? <Avatar name={server.name} size="sm" /> : <span className="avatar avatar-sm"><Home size={15} /></span>}
