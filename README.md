@@ -38,14 +38,13 @@ verdade com seus dispositivos.
 |:--|:--|
 | 👤 **Contas e sessões** | Cadastro com e-mail e senha protegida por **Argon2id**. Sessão revogável de até sete dias. |
 | 🏠 **Servidores e convites** | Crie seu servidor, compartilhe um convite e entre em comunidades pelo link ou pelo app. |
-| 💬 **Canais de texto** | Crie, liste e selecione canais. Os nomes são únicos dentro de cada servidor e ficam salvos no PostgreSQL. |
+| 💬 **Canais de texto** | Mensagens em tempo real, histórico no PostgreSQL e reenvio sem duplicação. |
+| 🎧 **Canais de voz** | Chamadas WebRTC ponto a ponto, participantes ao vivo, mute, controle de áudio recebido e reconexão. |
 | 🎙️ **Microfone** | Teste a entrada, veja o pico capturado e o nível em **dBFS** antes de entrar em uma conversa. |
 | 🔊 **Saída de áudio** | Toque um tom de 440 Hz na saída escolhida e ouça a última gravação no mesmo dispositivo. |
 | 📷 **Webcam** | Prévia com resolução, taxa de quadros e opção de espelhamento, com permissões tratadas no WebView2. |
 
-> [!NOTE]
-> 🚧 **Em desenvolvimento:** o envio e o histórico de mensagens nos canais são a próxima etapa.
-> Hoje já é possível criar, persistir, listar e selecionar canais normalmente.
+Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto você navega pela comunidade. Para conectar participantes em redes diferentes, consulte a [configuração de STUN/TURN](DOCS.md#stun-e-turn).
 
 ---
 

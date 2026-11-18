@@ -14,4 +14,4 @@ disc-audio = { path = "../../../packages/audio-engine" }
 
 # Same major as Tauri's WebKitGTK binding, so its WebView types match.
 [target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = "2.0"
+webkit2gtk = { version = "2.0", features = ["v2_38"] }

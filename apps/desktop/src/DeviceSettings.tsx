@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Activity, Camera, Check, CircleHelp, Headphones, Mic, Monitor,
   Play, RefreshCw, ShieldCheck, Square, Volume2, X,
@@ -51,7 +51,7 @@ function CameraPreview({ stream, onError, mirrored }: {
   return <video ref={ref} className={mirrored ? "mirrored" : ""} muted autoPlay playsInline aria-label="Prévia ao vivo da webcam" />;
 }
 
-export function DeviceSettings() {
+export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boolean; callDevices?: ReactNode } = {}) {
   const audio = useAudio();
   const camera = useCamera();
   const [volume, setVolume] = useState(35);
@@ -60,7 +60,7 @@ export function DeviceSettings() {
   const inputActive = audio.status.inputActive;
   const outputActive = audio.status.outputActive;
   const active = inputActive || outputActive || !!camera.stream || camera.busy;
-  const audioLocked = audio.busy || audio.refreshing;
+  const audioLocked = audio.busy || audio.refreshing || inCall;
   const level = Math.min(100, Math.max(0, Math.round(audio.status.peak * 100)));
   const db = audio.status.peak > 0 ? Math.max(-60, Math.round(20 * Math.log10(audio.status.peak))) : -60;
 
@@ -77,6 +77,8 @@ export function DeviceSettings() {
             <button className="text-button" onClick={() => setHelpOpen(true)}><CircleHelp size={16} />Guia de testes</button>
           </div>
 
+          {callDevices}
+          {inCall && <div className="notice"><Headphones size={19} /><p>Chamada em andamento. Os testes locais de áudio ficam disponíveis ao sair do canal de voz.</p></div>}
           {!audio.available && <div className="notice"><Monitor size={19} /><div><strong>Abra o app no Windows para testar o áudio.</strong><p>Esta prévia mostra a interface. A seleção de entradas e saídas usa o motor nativo do aplicativo.</p></div></div>}
           {audio.error && <div className="error-banner" role="alert"><Activity size={18} /><div><strong>Não foi possível concluir o teste de áudio</strong><p>{audio.error}</p><small>Verifique a conexão e o acesso ao microfone para aplicativos da área de trabalho nas configurações de privacidade do Windows.</small></div></div>}
 

@@ -5,7 +5,49 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Initial)]
+        vec![Box::new(Initial), Box::new(Chat)]
+    }
+}
+
+struct Chat;
+
+impl MigrationName for Chat {
+    fn name(&self) -> &str {
+        "m20261117_000002_chat"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Chat {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE channels ADD COLUMN type varchar(8) NOT NULL DEFAULT 'text'
+                CHECK (type IN ('text', 'voice'));
+            CREATE TABLE messages (
+                id bigserial PRIMARY KEY,
+                channel_id uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                author_id uuid NOT NULL REFERENCES users(id),
+                client_id uuid NOT NULL,
+                content text NOT NULL CHECK (length(trim(content)) BETWEEN 1 AND 4000),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                UNIQUE (author_id, client_id)
+            );
+            CREATE INDEX messages_channel_history ON messages(channel_id, id);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("DROP TABLE messages; ALTER TABLE channels DROP COLUMN type;")
+            .await?;
+        Ok(())
     }
 }
 

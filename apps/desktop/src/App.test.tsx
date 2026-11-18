@@ -8,7 +8,7 @@ const account = { id: "user-1", email: "amigo@example.com" };
 const server = { id: "server-1", name: "Amigos", ownerId: account.id };
 const code = "6c247e76-7b39-4b12-a278-49838c3fa6d6";
 const invite = { code, url: `http://localhost:3001/?invite=${code}`, server };
-const channel = { id: "channel-1", serverId: server.id, name: "geral" };
+const channel = { id: "channel-1", serverId: server.id, name: "geral", type: "text" };
 type Handler = (path: string, init?: RequestInit) => { status?: number; body?: unknown } | Promise<{ status?: number; body?: unknown }>;
 
 function mockApi(handler: Handler) {
@@ -21,6 +21,12 @@ function mockApi(handler: Handler) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("WebSocket", class {
+    static OPEN = 1;
+    readyState = 0;
+    close() {}
+    send() {}
+  });
   sessionStorage.clear();
   window.history.replaceState(null, "", "/");
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -32,6 +38,28 @@ beforeEach(() => {
 });
 
 describe("accounts and communities", () => {
+  it("creates a voice channel using the channel type selector", async () => {
+    const user = userEvent.setup();
+    sessionToken.set("session-token");
+    const fetch = mockApi((path, init) => {
+      if (path.endsWith("/me")) return { body: account };
+      if (path.endsWith("/servers")) return { body: [server] };
+      if (path.endsWith("/channels") && init?.method === "POST") return { status: 201, body: { ...channel, name: "conversa", type: "voice" } };
+      if (path.endsWith("/channels")) return { body: [] };
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Criar primeiro canal" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: "Voz" }));
+    await user.type(within(dialog).getByLabelText("Nome do canal"), "conversa");
+    await user.click(within(dialog).getByRole("button", { name: "Criar canal" }));
+    expect(await screen.findByRole("button", { name: "Entrar no canal de voz" })).toBeVisible();
+    expect(fetch).toHaveBeenCalledWith("/api/servers/server-1/channels", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ name: "conversa", type: "voice" }),
+    }));
+  });
+
   it("registers, creates a server, copies its invite and creates a text channel", async () => {
     const user = userEvent.setup();
     const fetch = mockApi((path, init) => {
@@ -40,6 +68,7 @@ describe("accounts and communities", () => {
       if (path.endsWith("/servers") && init?.method === "POST") return { status: 201, body: invite };
       if (path.endsWith("/channels") && init?.method === "POST") return { status: 201, body: channel };
       if (path.endsWith("/channels") || path.endsWith("/servers")) return { body: [] };
+      if (path.includes("/messages?")) return { body: { messages: [], hasMore: false } };
       throw new Error(`Unexpected request: ${path}`);
     });
     render(<App />);
@@ -61,7 +90,7 @@ describe("accounts and communities", () => {
     await user.click(within(dialog).getByRole("button", { name: "Criar canal" }));
     expect(await screen.findByRole("heading", { name: "Bem-vindo a #geral" })).toBeVisible();
     expect(fetch).toHaveBeenCalledWith("/api/servers/server-1/channels", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ name: "geral" }),
+      method: "POST", body: JSON.stringify({ name: "geral", type: "text" }),
     }));
   });
 
