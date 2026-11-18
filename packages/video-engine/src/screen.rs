@@ -7,7 +7,7 @@
 //! backend only opens captures. Frames reach the UI as JPEG images through
 //! the same [`FrameSink`] the camera uses, so both previews share one path.
 
-use crate::backend::{FrameSink, Frames};
+use crate::backend::{FrameSink, Frames, RawFrame};
 use crate::worker::{self, Reply};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -264,6 +264,13 @@ impl ScreenEngine {
     /// sharing); an error means the sharing ended and should be shown.
     pub fn next_frame(&self, timeout: Duration) -> Result<Option<Arc<Vec<u8>>>, String> {
         self.frames.next(timeout)
+    }
+
+    /// Like [`Self::next_frame`], uncompressed (I420), for re-encoding.
+    /// Read independently of the JPEG frames. Only the Linux backend makes
+    /// them; elsewhere this never returns a frame.
+    pub fn next_raw_frame(&self, timeout: Duration) -> Result<Option<Arc<RawFrame>>, String> {
+        self.frames.next_raw(timeout)
     }
 }
 

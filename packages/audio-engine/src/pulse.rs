@@ -43,6 +43,14 @@ pub struct PulseDevice {
     channels: u8,
 }
 
+impl PulseDevice {
+    /// The server-side name: stable across restarts, so it can be saved and
+    /// passed back to the server to open the device.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// The server-side name is the stable identity; the format is only a hint
 /// that may change while the device keeps its identity.
 impl PartialEq for PulseDevice {

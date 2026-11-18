@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Headphones, Maximize2, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Volume2, VolumeX } from "lucide-react";
 import type { Channel, VoiceParticipant } from "@disc-voice/shared";
-import type { Voice, VoiceState } from "../lib/voice";
+import type { ScreenFeed, Voice, VoiceState } from "../lib/voice";
+import { NativeFramePreview } from "./NativeFramePreview";
 
 const labels: Record<VoiceState["status"], string> = {
   idle: "Desconectado", connecting: "Conectando áudio…", connected: "Voz conectada",
@@ -39,9 +40,10 @@ export function VoicePanel({ voice, state }: { voice: Voice; state: VoiceState }
   </section>;
 }
 
-function ScreenVideo({ stream, label, expanded, onToggle }: {
-  stream: MediaStream; label: string; expanded: boolean; onToggle: () => void;
-}) {
+/** A screen ends with its sharing; draw errors only mean a frame was skipped. */
+const ignoreFrameError = () => {};
+
+function StreamVideo({ stream, label }: { stream: MediaStream; label: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = ref.current;
@@ -50,8 +52,18 @@ function ScreenVideo({ stream, label, expanded, onToggle }: {
     void video.play?.()?.catch(() => {});
     return () => { video.srcObject = null; };
   }, [stream]);
+  return <video ref={ref} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />;
+}
+
+function ScreenVideo({ feed, label, expanded, onToggle }: {
+  feed: ScreenFeed; label: string; expanded: boolean; onToggle: () => void;
+}) {
   return <figure className={`voice-screen ${expanded ? "expanded" : ""}`}>
-    <video ref={ref} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />
+    {"pull" in feed
+      ? <div className="voice-screen-frames" onDoubleClick={event => void event.currentTarget.requestFullscreen?.().catch(() => {})}>
+        <NativeFramePreview active pull={feed.pull} label={label} onError={ignoreFrameError} />
+      </div>
+      : <StreamVideo stream={feed} label={label} />}
     <figcaption><span>{label}</span>
       <button className="icon-button" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir" : "Ampliar"} onClick={onToggle}><Maximize2 size={15} /></button>
     </figcaption>
@@ -67,11 +79,11 @@ function VoiceScreens({ state, participants }: { state: VoiceState; participants
   const toggle = (id: string) => setExpanded(current => (current === id ? "" : id));
   return <div className="voice-screens" aria-label="Telas compartilhadas">
     {state.screen === "picking" && <div className="voice-screen pending" role="status">Escolha uma tela ou janela na janela do sistema.</div>}
-    {local && <ScreenVideo stream={local} label="Sua tela" expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
+    {local && <ScreenVideo feed={local} label="Sua tela" expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
     {remote.map(p => {
-      const stream = state.remoteScreens[p.peerId];
-      return stream
-        ? <ScreenVideo key={p.peerId} stream={stream} label={`Tela de ${p.user.name}`} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
+      const feed = state.remoteScreens[p.peerId];
+      return feed
+        ? <ScreenVideo key={p.peerId} feed={feed} label={`Tela de ${p.user.name}`} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
         : <div key={p.peerId} className="voice-screen pending" role="status">Recebendo a tela de {p.user.name}…</div>;
     })}
   </div>;
@@ -102,10 +114,11 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
 }
 
 export function VoiceDevices({ voice, state }: { voice: Voice; state: VoiceState }) {
-  const sinkSupported = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+  // The native engine opens any output itself.
+  const sinkSupported = state.native || (typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype);
   return <section className="card call-devices" aria-label="Dispositivos das chamadas">
     <h2>Dispositivos das chamadas</h2>
-    <p>Seleções usadas no chat de voz via WebRTC. Autorize o microfone ao entrar em um canal para ver os nomes dos dispositivos.</p>
+    <p>{state.native ? "Seleções usadas no chat de voz." : "Seleções usadas no chat de voz via WebRTC. Autorize o microfone ao entrar em um canal para ver os nomes dos dispositivos."}</p>
     <div className="device-fields">
       <div className="field"><label htmlFor="call-input">Microfone da chamada</label>
         <select id="call-input" value={state.inputId} disabled={state.deviceBusy || state.status === "connecting"} onChange={event => void voice.setInput(event.target.value)}>

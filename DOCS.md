@@ -33,7 +33,7 @@ Selecione um canal de voz e clique em **Entrar no canal de voz**. Autorize o mic
 
 A chamada continua enquanto você navega nos canais de texto, servidores e configurações. Cada conta participa de uma chamada por vez: entrar por outra aba/dispositivo substitui a participação anterior. Logout, fechamento e expiração de sessão encerram a participação. Ao perder a sinalização, o cliente libera os dispositivos e tenta entrar novamente após reconectar. O botão de sair cancela essa tentativa.
 
-Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saída WebRTC. Essas preferências são salvas localmente. A saída usa `setSinkId` quando suportado; nos demais ambientes, usa a saída padrão do sistema. Os IDs do navegador são diferentes dos IDs CPAL/PulseAudio dos testes locais, por isso as seleções são explícitas. Os testes locais de áudio ficam desabilitados durante chamadas.
+Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saída WebRTC. Essas preferências são salvas localmente. A saída usa `setSinkId` quando suportado; nos demais ambientes, usa a saída padrão do sistema. Os IDs do navegador são diferentes dos IDs CPAL/PulseAudio dos testes locais, por isso as seleções são explícitas. No aplicativo Linux, as listas vêm do motor de chamadas e usam os nomes do PulseAudio; um dispositivo salvo que sumiu cai no padrão do sistema. Os testes locais de áudio ficam desabilitados durante chamadas.
 
 ### Arquitetura
 
@@ -41,7 +41,9 @@ Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saíd
 - Mensagens são gravadas no PostgreSQL antes da publicação. O cliente usa `clientId` para reenvio idempotente e cursores para recuperar lacunas após quedas.
 - O áudio trafega por **WebRTC em malha ponto a ponto**, com uma conexão por par de participantes. A API não transporta áudio. O padrão é **8 participantes por canal**, configurável em `VOICE_CHANNEL_CAPACITY` (2–32); consumo de upload e CPU cresce com o tamanho do grupo.
 - A presença é efêmera e mantida na memória de **uma instância da API**. Ao reiniciar, clientes reconectam e sincronizam os canais. Executar múltiplas réplicas exige uma camada compartilhada de presença/sinalização.
-- O cliente utiliza microfone WebRTC no navegador e no WebView do Tauri. No Linux, o WebKitGTK precisa de suporte WebRTC/GStreamer instalado; o aplicativo habilita captura para sua interface local.
+- No navegador e no Windows (WebView2), a chamada usa o WebRTC da própria página.
+- No Linux, o WebKitGTK das distribuições vem compilado **sem WebRTC** (há `getUserMedia`, mas não `RTCPeerConnection`), então a chamada roda no motor nativo `packages/call-engine` (`disc-call`): webrtc-rs com uma conexão por participante, microfone e saída pelo PulseAudio/PipeWire, voz em Opus e telas em H.264 (OpenH264, compilado junto). A interface só repassa a sinalização (as mesmas mensagens `voice.signal`) e desenha as telas recebidas como quadros JPEG. Por isso, clientes Linux, Windows e navegador conversam entre si.
+- O motor nativo ainda não tem cancelamento de eco nem supressão de ruído (o navegador tem): no Linux, prefira fones de ouvido. Para receber a tela de um cliente Linux, o navegador precisa decodificar H.264 (Chrome, Edge e o WebView2 decodificam; Chromium de algumas distribuições e Firefox sem o OpenH264 não).
 
 ### STUN e TURN
 
@@ -130,14 +132,14 @@ O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse
 ```bash
 # Fedora (em sistemas imutáveis, como Silverblue/Kinoite, dentro de um toolbox/distrobox)
 sudo dnf install -y pulseaudio-libs-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel librsvg2-devel \
-  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good pipewire-gstreamer
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good pipewire-gstreamer cmake gcc-c++
 
 # Debian/Ubuntu
 sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev build-essential pkg-config \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire cmake
 ```
 
-Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
+O `cmake` e o compilador C++ compilam o Opus e o OpenH264 usados pelo motor de chamadas. Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
 
 Os testes do backend PulseAudio usam um *null sink*, sem tocar alto-falantes nem microfone:
 

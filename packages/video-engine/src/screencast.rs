@@ -349,13 +349,39 @@ fn build_pipeline(
             threaded.set_property("n-threads", CONVERT_THREADS);
         }
     }
+    // I420 is what both outputs want: JPEG's 4:2:0 and the call's H.264.
+    let i420 = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "I420")
+                .build(),
+        )
+        .build()
+        .map_err(|_| BUILD_FAILED)?;
+    let tee = element("tee")?;
+    // Each branch drops frames on its own, so a slow preview never slows
+    // the call down (or the reverse).
+    let branch_queue = || {
+        gst::ElementFactory::make("queue")
+            .property("max-size-buffers", 1u32)
+            .property("max-size-bytes", 0u32)
+            .property("max-size-time", 0u64)
+            .property_from_str("leaky", "downstream")
+            .build()
+            .map_err(|_| BUILD_FAILED)
+    };
+    let (jpeg_queue, raw_queue) = (branch_queue()?, branch_queue()?);
     let encoder = element("jpegenc")?;
     encoder.set_property("quality", JPEG_QUALITY);
-    let appsink = gst_app::AppSink::builder()
-        .max_buffers(1)
-        .drop(true)
-        .sync(false)
-        .build();
+    let sink_element = || {
+        gst_app::AppSink::builder()
+            .max_buffers(1)
+            .drop(true)
+            .sync(false)
+            .build()
+    };
+    let (appsink, raw_sink) = (sink_element(), sink_element());
 
     let chain = [
         source,
@@ -364,11 +390,19 @@ fn build_pipeline(
         scale,
         size.clone(),
         convert,
-        encoder,
-        appsink.clone().upcast(),
+        i420,
+        tee.clone(),
     ];
+    let jpeg_branch = [jpeg_queue, encoder, appsink.clone().upcast()];
+    let raw_branch = [raw_queue, raw_sink.clone().upcast()];
     pipeline.add_many(&chain).map_err(|_| BUILD_FAILED)?;
+    pipeline.add_many(&jpeg_branch).map_err(|_| BUILD_FAILED)?;
+    pipeline.add_many(&raw_branch).map_err(|_| BUILD_FAILED)?;
     gst::Element::link_many(&chain).map_err(|_| BUILD_FAILED)?;
+    for branch in [&jpeg_branch[..], &raw_branch[..]] {
+        tee.link(&branch[0]).map_err(|_| BUILD_FAILED)?;
+        gst::Element::link_many(branch).map_err(|_| BUILD_FAILED)?;
+    }
 
     // Every time the source announces its size (at start, and again when a
     // shared window is resized), the output size is recomputed from it,
@@ -418,6 +452,19 @@ fn build_pipeline(
         })
         .ok_or(BUILD_FAILED)?;
 
+    let raw_frames = sink.clone();
+    raw_sink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |appsink| {
+                let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                if let Some(frame) = packed_i420(&sample) {
+                    raw_frames.publish_raw(frame.0, frame.1, frame.2);
+                }
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+
     let frames = sink.clone();
     appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
@@ -453,6 +500,31 @@ fn build_pipeline(
             gst::BusSyncReply::Drop
         });
     Ok(pipeline)
+}
+
+/// An I420 sample's planes without the row padding GStreamer may add.
+fn packed_i420(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
+    let info = gstreamer_video::VideoInfo::from_caps(sample.caps()?).ok()?;
+    if info.format() != gstreamer_video::VideoFormat::I420 {
+        return None;
+    }
+    let frame =
+        gstreamer_video::VideoFrameRef::from_buffer_ref_readable(sample.buffer()?, &info).ok()?;
+    let (width, height) = (info.width() as usize, info.height() as usize);
+    let mut packed = Vec::with_capacity(width * height * 3 / 2);
+    for plane in 0..3 {
+        let (plane_width, rows) = if plane == 0 {
+            (width, height)
+        } else {
+            (width.div_ceil(2), height.div_ceil(2))
+        };
+        let stride = usize::try_from(*frame.plane_stride().get(plane as usize)?).ok()?;
+        let data = frame.plane_data(plane).ok()?;
+        for row in 0..rows {
+            packed.extend_from_slice(data.get(row * stride..row * stride + plane_width)?);
+        }
+    }
+    Some((info.width(), info.height(), packed))
 }
 
 #[cfg(test)]
@@ -539,11 +611,16 @@ mod tests {
         let mut last = frames.next(Duration::from_secs(5)).unwrap();
         assert!(last.is_some(), "no frame in 5 s");
         let started = Instant::now();
-        let mut count = 0;
+        let (mut count, mut raw_count, mut raw) = (0, 0, None);
         while started.elapsed() < Duration::from_secs(4) {
             if let Some(frame) = frames.next(Duration::from_millis(500)).unwrap() {
                 count += 1;
                 last = Some(frame);
+            }
+            // The call's uncompressed branch flows alongside the previews.
+            if let Some(frame) = frames.next_raw(Duration::ZERO).unwrap() {
+                raw_count += 1;
+                raw = Some(frame);
             }
         }
         pipeline.set_state(gst::State::Null).unwrap();
@@ -551,7 +628,16 @@ mod tests {
         let frame = last.unwrap();
         assert!(format::is_complete_jpeg(&frame));
         let size = jpeg_size(&frame).expect("no SOF marker");
-        println!("{frame_rate} fps requested: {count} frames, {fps:.1} fps, {size:?}");
+        println!(
+            "{frame_rate} fps requested: {count} frames, {fps:.1} fps, {size:?}; {raw_count} raw"
+        );
+        let raw = raw.expect("no raw frame");
+        assert_eq!((raw.width, raw.height), size);
+        assert_eq!(raw.i420.len(), (size.0 * size.1 * 3 / 2) as usize);
+        assert!(
+            raw_count >= count * 8 / 10,
+            "raw {raw_count} vs jpeg {count}"
+        );
         assert!(size.0 <= 1280 && size.1 <= 720, "{size:?}");
         assert!(size.0 > 1 && size.1 > 1, "{size:?}");
         let expected = f64::from(frame_rate);

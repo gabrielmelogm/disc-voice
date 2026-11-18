@@ -61,6 +61,26 @@ impl FrameSink {
         }
     }
 
+    /// Publishes one uncompressed frame as tightly packed I420 planes (Y,
+    /// then U, then V) of even dimensions, for consumers that encode it
+    /// again (the native call engine), alongside the JPEG for previews.
+    pub fn publish_raw(&self, width: u32, height: u32, i420: Vec<u8>) {
+        let (w, h) = (width as usize, height as usize);
+        if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 || i420.len() != w * h * 3 / 2 {
+            return;
+        }
+        if let Some(frames) = self.frames.upgrade() {
+            frames.publish_raw(
+                self.generation,
+                RawFrame {
+                    width,
+                    height,
+                    i420,
+                },
+            );
+        }
+    }
+
     /// Reports that the capture stopped working; the worker releases it and
     /// the UI shows `error`.
     pub fn fail(&self, error: impl Into<String>) {
@@ -70,6 +90,14 @@ impl FrameSink {
     }
 }
 
+/// An uncompressed frame: tightly packed I420 planes, even dimensions.
+#[derive(Debug)]
+pub struct RawFrame {
+    pub width: u32,
+    pub height: u32,
+    pub i420: Vec<u8>,
+}
+
 #[derive(Default)]
 struct State {
     /// Increments on every start, so frames of an old capture are ignored.
@@ -77,6 +105,10 @@ struct State {
     sequence: u64,
     delivered: u64,
     latest: Option<Arc<Vec<u8>>>,
+    /// The raw frames have their own reader, so their own counters.
+    raw_sequence: u64,
+    raw_delivered: u64,
+    raw: Option<Arc<RawFrame>>,
     error: Option<String>,
     running: bool,
 }
@@ -101,6 +133,9 @@ impl Frames {
         state.sequence = 0;
         state.delivered = 0;
         state.latest = None;
+        state.raw_sequence = 0;
+        state.raw_delivered = 0;
+        state.raw = None;
         state.error = None;
         state.running = true;
         FrameSink {
@@ -113,6 +148,7 @@ impl Frames {
         let mut state = self.lock();
         state.running = false;
         state.latest = None;
+        state.raw = None;
         self.changed.notify_all();
     }
 
@@ -137,11 +173,22 @@ impl Frames {
         self.changed.notify_all();
     }
 
+    fn publish_raw(&self, generation: u64, frame: RawFrame) {
+        let mut state = self.lock();
+        if state.generation != generation || !state.running || state.error.is_some() {
+            return;
+        }
+        state.raw_sequence += 1;
+        state.raw = Some(Arc::new(frame));
+        self.changed.notify_all();
+    }
+
     fn fail(&self, generation: u64, error: String) {
         let mut state = self.lock();
         if state.generation == generation && state.running && state.error.is_none() {
             state.error = Some(error);
             state.latest = None;
+            state.raw = None;
             self.changed.notify_all();
         }
     }
@@ -163,5 +210,24 @@ impl Frames {
         }
         state.delivered = state.sequence;
         Ok(state.latest.clone())
+    }
+
+    /// Like [`Self::next`], for the raw frames (when the backend makes them).
+    pub(crate) fn next_raw(&self, timeout: Duration) -> Result<Option<Arc<RawFrame>>, String> {
+        let state = self.lock();
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |state| {
+                state.running && state.error.is_none() && state.raw_sequence == state.raw_delivered
+            })
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone().filter(|_| state.running) {
+            return Err(error);
+        }
+        if !state.running || state.raw_sequence == state.raw_delivered {
+            return Ok(None);
+        }
+        state.raw_delivered = state.raw_sequence;
+        Ok(state.raw.clone())
     }
 }

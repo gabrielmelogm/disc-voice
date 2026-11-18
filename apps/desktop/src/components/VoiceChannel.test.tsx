@@ -14,7 +14,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
   return {
     status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
-    screenSupported: true, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, ...overrides,
+    screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, ...overrides,
   };
 }
 
@@ -47,5 +47,11 @@ describe("VoiceChannel screen sharing", () => {
     const stream = {} as MediaStream;
     view.rerender(<VoiceChannel channel={channel} voice={controls} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText<HTMLVideoElement>("Tela de Bia").srcObject).toBe(stream);
+  });
+
+  it("draws screens from the native call engine on a canvas", () => {
+    const pull = vi.fn(() => new Promise<ArrayBuffer>(() => {}));
+    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state({ native: true, remoteScreens: { friend: { pull } } })} participants={[self, friend]} online />);
+    expect(screen.getByLabelText("Tela de Bia").tagName).toBe("CANVAS");
   });
 });

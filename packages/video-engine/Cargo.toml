@@ -11,6 +11,7 @@ serde = { version = "1", features = ["derive"] }
 gio = "0.18"
 gstreamer = "0.21"
 gstreamer-app = "0.21"
+gstreamer-video = "0.21"
 
 [target.'cfg(windows)'.dependencies]
 windows-future = "0.3"

@@ -1,4 +1,4 @@
-use crate::{camera, screen};
+use crate::{call, camera, screen};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
 
@@ -36,6 +36,7 @@ pub fn run() {
             app.manage(engine);
             camera::manage(app).map_err(std::io::Error::other)?;
             screen::manage(app).map_err(std::io::Error::other)?;
+            call::manage(app).map_err(std::io::Error::other)?;
             #[cfg(target_os = "linux")]
             crate::linux::enable_media(app)?;
             Ok(())
@@ -45,6 +46,7 @@ pub fn run() {
                 window.state::<AudioEngine>().shutdown();
                 camera::shutdown(window);
                 screen::shutdown(window);
+                call::shutdown(window);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +62,19 @@ pub fn run() {
             screen::native::screen_start,
             screen::native::screen_stop,
             screen::native::screen_frame,
+            call::call_native,
+            call::native::call_join,
+            call::native::call_leave,
+            call::native::call_peers,
+            call::native::call_signal,
+            call::native::call_mute,
+            call::native::call_deafen,
+            call::native::call_set_input,
+            call::native::call_set_output,
+            call::native::call_devices,
+            call::native::call_screen_start,
+            call::native::call_screen_stop,
+            call::native::call_screen_frame,
         ])
         .run(tauri::generate_context!())
         .expect("Não foi possível iniciar o Disc Voice");
