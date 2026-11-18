@@ -143,7 +143,8 @@ describe("accounts and communities", () => {
       throw new Error(`Unexpected request: ${path}`);
     });
     render(<App />);
-    await user.click(await screen.findByRole("button", { name: "Sair da conta" }));
+    await user.click(await screen.findByRole("button", { name: "Sua conta e configurações" }));
+    await user.click(screen.getByRole("button", { name: "Sair da conta" }));
     expect(await screen.findByRole("button", { name: "Entrar" })).toBeVisible();
     expect(sessionToken.get()).toBeNull();
     expect(fetch).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ method: "POST" }));

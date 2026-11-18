@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Copy, Hash, Plus, X } from "lucide-react";
+import { Check, Copy, LinkIcon, MessageSquareText, Plus, Search, Volume2, X } from "lucide-react";
 import type { Channel, Invite, Server } from "@disc-voice/shared";
 import { api, message, parseInvite } from "../lib/api";
-import { initials } from "../lib/display";
+import { Avatar, SoonTag, Switch } from "./ui";
 
 export type DialogMode =
   | { kind: "create" }
@@ -31,13 +31,10 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   }, []);
 
   useEffect(() => {
-    if (mode.kind !== "invite" && !(mode.kind === "join" && mode.code)) return;
+    if (!(mode.kind === "join" && mode.code)) return;
     let disposed = false;
     setBusy(true);
-    const load = mode.kind === "invite"
-      ? () => api.invite(mode.server.id)
-      : () => api.previewInvite(parseInvite(mode.code || ""));
-    void Promise.resolve().then(load).then(result => {
+    void Promise.resolve().then(() => api.previewInvite(parseInvite(mode.code || ""))).then(result => {
       if (!disposed) setInvite(result);
     }).catch(cause => {
       if (!disposed) setError(message(cause));
@@ -58,6 +55,8 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
       } else if (mode.kind === "channel") {
         onChannel(await api.createChannel(mode.server.id, value.trim(), channelType));
         onClose();
+      } else if (mode.kind === "invite") {
+        setInvite(await api.invite(mode.server.id));
       } else if (mode.kind === "join") {
         const code = parseInvite(value);
         if (!invite || invite.code.toLowerCase() !== code.toLowerCase()) {
@@ -85,26 +84,45 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   }
 
   const sharing = !!invite && (mode.kind === "create" || mode.kind === "invite");
-  const title = sharing ? "Convide seus amigos" : {
-    create: "Crie seu servidor",
-    join: "Entre em um servidor",
-    invite: "Convide seus amigos",
+  const title = {
+    create: sharing ? "Convide seus amigos" : "Crie seu servidor",
+    join: "Entrar em um servidor",
+    invite: `Convidar pessoas para ${mode.kind === "invite" ? mode.server.name : ""}`,
     channel: "Criar canal",
   }[mode.kind];
 
   return <dialog ref={ref} className="action-dialog" aria-labelledby="dialog-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
-    <div className="card-heading"><h2 id="dialog-title">{title}</h2><button type="button" className="icon-button" aria-label="Fechar" disabled={busy} onClick={onClose}><X size={20} /></button></div>
+    <div className="dialog-heading"><h2 id="dialog-title">{title}</h2><button type="button" className="icon-button" aria-label="Fechar" disabled={busy} onClick={onClose}><X size={20} /></button></div>
+
+    {mode.kind === "invite" && <>
+      {/* Inviting friends directly needs the friends feature; layout only for now. */}
+      <div className="search-field"><Search size={16} /><label className="sr-only" htmlFor="friend-search">Buscar amigos</label><input id="friend-search" className="search-input" disabled placeholder="Buscar amigos" /></div>
+      <p className="dialog-empty">Convidar amigos direto pelo nome chega em breve.</p>
+      <hr />
+      {!invite && <form onSubmit={submit} className="stack-form">
+        <h3 className="eyebrow">Ou crie um link de convite</h3>
+        <div className="field-grid">
+          <div className="field"><label htmlFor="invite-expiry">Expira em</label><select id="invite-expiry" disabled defaultValue="never"><option value="1h">1 hora</option><option value="1d">1 dia</option><option value="7d">7 dias</option><option value="never">Nunca</option></select></div>
+          <div className="field"><label htmlFor="invite-uses">Limite de usos</label><select id="invite-uses" disabled defaultValue="0"><option value="0">Sem limite</option><option value="1">1 uso</option><option value="10">10 usos</option><option value="50">50 usos</option></select></div>
+        </div>
+        <Switch id="invite-temporary" disabled checked={false} label="Membro temporário" description="Sai do servidor ao desconectar" />
+        <p className="field-help"><SoonTag /> Expiração, limite de usos e membro temporário ainda não estão disponíveis.</p>
+        <button className="button primary full large" disabled={busy}><LinkIcon size={16} />{busy ? "Criando…" : "Criar link de convite"}</button>
+      </form>}
+    </>}
+
     {sharing ? <div className="stack-form">
-      <p>Compartilhe este link para entrar em <strong>{invite.server.name}</strong>.</p>
-      <div className="field"><label htmlFor="invite-link">Link de convite</label><input id="invite-link" readOnly value={invite.url} onFocus={e => e.target.select()} /></div>
-      <button className="button primary full" onClick={() => void copy()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Link copiado!" : "Copiar link"}</button>
-      <p className="card-footnote">Quem receber pode abrir no navegador ou colar em “Entrar em servidor” no aplicativo.</p>
+      {mode.kind === "create" && <p>Compartilhe este link para entrar em <strong>{invite.server.name}</strong>.</p>}
+      <div className="field"><label htmlFor="invite-link">{mode.kind === "invite" ? "Seu link de convite" : "Link de convite"}</label>
+        <div className="inline-form"><input id="invite-link" readOnly value={invite.url} onFocus={e => e.target.select()} /><button className="button primary" onClick={() => void copy()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Link copiado!" : "Copiar link"}</button></div>
+        <small>O link não expira e não tem limite de usos. Quem receber pode abrir no navegador ou colar em “Entrar com convite”.</small>
+      </div>
       <button className="button secondary full" onClick={onClose}>Concluir</button>
-    </div> : mode.kind === "invite" ? <p role="status">{busy ? "Buscando convite…" : "Não foi possível carregar o convite. Feche e tente novamente."}</p> : <form onSubmit={submit} className="stack-form">
-      <p>{mode.kind === "create" ? "Um lugar para sua comunidade. Você só precisa de um nome." : mode.kind === "channel" ? `Um novo assunto para ${mode.server.name}.` : "Cole o link que você recebeu de um amigo."}</p>
-      {mode.kind === "channel" && <fieldset className="channel-type"><legend>Tipo de canal</legend>
-        <label><input type="radio" name="channel-type" value="text" checked={channelType === "text"} disabled={busy} onChange={() => setChannelType("text")} /> Texto</label>
-        <label><input type="radio" name="channel-type" value="voice" checked={channelType === "voice"} disabled={busy} onChange={() => setChannelType("voice")} /> Voz</label>
+    </div> : mode.kind === "invite" ? null : <form onSubmit={submit} className="stack-form">
+      <p className="lede">{mode.kind === "create" ? "Um lugar para sua comunidade. Você só precisa de um nome." : mode.kind === "channel" ? `Um novo assunto para ${mode.server.name}.` : "Cole o link que você recebeu de um amigo."}</p>
+      {mode.kind === "channel" && <fieldset className="channel-type"><legend className="field-label">Tipo de canal</legend>
+        <label className={channelType === "text" ? "checked" : ""}><input type="radio" name="channel-type" value="text" checked={channelType === "text"} disabled={busy} onChange={() => setChannelType("text")} /><MessageSquareText size={18} />Texto</label>
+        <label className={channelType === "voice" ? "checked" : ""}><input type="radio" name="channel-type" value="voice" checked={channelType === "voice"} disabled={busy} onChange={() => setChannelType("voice")} /><Volume2 size={18} />Voz</label>
       </fieldset>}
       <div className="field">
         <label htmlFor="dialog-value">{mode.kind === "join" ? "Link ou código do convite" : mode.kind === "channel" ? "Nome do canal" : "Nome do servidor"}</label>
@@ -113,8 +131,8 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
           value={value} onChange={e => { setValue(e.target.value); if (mode.kind === "join") setInvite(null); }} />
         {mode.kind === "channel" && <small>Letras, números, hífens e sublinhados. O nome será salvo em minúsculas.</small>}
       </div>
-      {mode.kind === "join" && invite && <div className="invite-preview"><span className="server-avatar">{initials(invite.server.name)}</span><div><small>Você foi convidado para</small><strong>{invite.server.name}</strong></div></div>}
-      <button className="button primary full" disabled={busy || !value.trim()}>{mode.kind === "channel" ? <Hash size={16} /> : <Plus size={16} />}{busy ? "Aguarde…" : mode.kind === "create" ? "Criar servidor" : mode.kind === "channel" ? "Criar canal" : invite ? "Aceitar convite" : "Ver convite"}</button>
+      {mode.kind === "join" && invite && <div className="invite-preview"><Avatar name={invite.server.name} size="lg" square /><div><small>Você foi convidado para</small><strong>{invite.server.name}</strong></div></div>}
+      <button className="button primary full large" disabled={busy || !value.trim()}>{mode.kind === "join" ? null : <Plus size={16} />}{busy ? "Aguarde…" : mode.kind === "create" ? "Criar servidor" : mode.kind === "channel" ? "Criar canal" : invite ? "Aceitar convite" : "Ver convite"}</button>
     </form>}
     {error && <p className="inline-error" role="alert">{error}</p>}
   </dialog>;

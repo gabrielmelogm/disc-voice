@@ -62,6 +62,30 @@ function preference(key: string) {
   try { return localStorage.getItem(`discvoice.voice.${key}`) || ""; } catch { return ""; }
 }
 
+export interface AudioProcessing {
+  noiseSuppression: boolean;
+  echoCancellation: boolean;
+  autoGainControl: boolean;
+}
+
+const PROCESSING_DEFAULTS: AudioProcessing = { noiseSuppression: true, echoCancellation: true, autoGainControl: true };
+
+/** Capture processing switches from the settings screen; applied on the next call join. */
+export function audioProcessing(): AudioProcessing {
+  try {
+    const saved = JSON.parse(localStorage.getItem("discvoice.voice.processing") || "{}") as Partial<AudioProcessing>;
+    return {
+      noiseSuppression: saved.noiseSuppression ?? PROCESSING_DEFAULTS.noiseSuppression,
+      echoCancellation: saved.echoCancellation ?? PROCESSING_DEFAULTS.echoCancellation,
+      autoGainControl: saved.autoGainControl ?? PROCESSING_DEFAULTS.autoGainControl,
+    };
+  } catch { return { ...PROCESSING_DEFAULTS }; }
+}
+
+export function saveAudioProcessing(value: AudioProcessing) {
+  try { localStorage.setItem("discvoice.voice.processing", JSON.stringify(value)); } catch { /* Not persisted. */ }
+}
+
 export function voiceError(error: unknown): string {
   // Native commands reject with the engine's message.
   if (typeof error === "string") return error;
@@ -179,7 +203,7 @@ export class Voice {
       throw new Error("Áudio WebRTC indisponível. Use um navegador compatível em HTTPS ou localhost.");
     }
     return navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: inputId ? { exact: inputId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { deviceId: inputId ? { exact: inputId } : undefined, ...audioProcessing() },
       video: false,
     });
   }

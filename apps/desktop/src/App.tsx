@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
-import type { AuthSession, User } from "@disc-voice/shared";
+import type { AuthSession, Server, User } from "@disc-voice/shared";
 import { AuthScreen } from "./components/AuthScreen";
+import { InvitePage } from "./components/InvitePage";
 import { ServerWorkspace } from "./components/ServerWorkspace";
-import { api, ApiError, message, pendingInvite, sessionToken } from "./lib/api";
+import { api, ApiError, clearPendingInvite, message, pendingInvite, sessionToken } from "./lib/api";
+import { useAppearance } from "./lib/theme";
 
 export function App() {
+  useAppearance();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(!!sessionToken.get());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [inviteCode] = useState(pendingInvite);
+  const [inviteCode, setInviteCode] = useState(pendingInvite);
+  const [joined, setJoined] = useState<Server | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -42,12 +46,25 @@ export function App() {
     setError("");
   }
 
-  if (loading) return <main className="session-status" role="status">Conectando ao DiscVoice…</main>;
-  if (error && !user) return <main className="session-status"><p role="alert">{error}</p><button className="button primary" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button><button className="text-button" onClick={() => { sessionToken.clear(); setError(""); }}>Voltar ao login</button></main>;
-  if (!user) return <AuthScreen onAuthenticated={authenticated} hasInvite={!!pendingInvite()} notice={notice} />;
-  return <ServerWorkspace key={user.id} user={user} inviteCode={pendingInvite() ? inviteCode : ""} onLogout={async () => {
+  function closeInvite(server: Server | null) {
+    clearPendingInvite();
+    setInviteCode("");
+    setJoined(server);
+  }
+
+  async function logout() {
     await api.logout();
     sessionToken.clear();
     setUser(null);
+    setJoined(null);
+  }
+
+  if (loading) return <main className="session-status" role="status">Conectando ao Disc Voice…</main>;
+  if (error && !user) return <main className="session-status"><p role="alert">{error}</p><button className="button primary" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button><button className="link-button" onClick={() => { sessionToken.clear(); setError(""); }}>Voltar ao login</button></main>;
+  if (!user) return <AuthScreen onAuthenticated={authenticated} hasInvite={!!inviteCode} notice={notice} />;
+  if (inviteCode) return <InvitePage code={inviteCode} user={user} onJoined={closeInvite} onDismiss={() => closeInvite(null)} onSwitchAccount={() => {
+    // Keep the pending invite so it is offered again to the next account.
+    void logout().catch(() => { sessionToken.clear(); setUser(null); });
   }} />;
+  return <ServerWorkspace key={user.id} user={user} joinedServer={joined} onLogout={logout} />;
 }

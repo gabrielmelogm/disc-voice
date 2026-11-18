@@ -44,14 +44,17 @@ export function ScreenShareTest({ screen }: { screen: ScreenShareController }) {
   };
 
   return (
-    <section className={`card screen-card ${live ? "card-active" : ""}`} aria-labelledby="screen-title">
-      <div className="card-heading">
-        <div><h2 id="screen-title">Testar compartilhamento de tela</h2><p>Escolha uma tela ou janela e veja como ela seria transmitida.</p></div>
-        {live && <span className="badge live">Compartilhando</span>}
-      </div>
-      {status === "unavailable" && <p className="inline-error screen-unavailable">O compartilhamento de tela está disponível somente no aplicativo para Windows e Linux.</p>}
-      <div className="screen-test">
-        <div className="screen-options">
+    <section aria-labelledby="screen-title">
+      <h2 id="screen-title" className="settings-section-title">Compartilhamento de tela {live && <span className="status-chip">Compartilhando</span>}</h2>
+      <p className="field-help">Escolha uma tela ou janela e veja como ela seria transmitida. Nada sai do seu dispositivo neste teste.</p>
+      {status === "unavailable" && <p className="inline-error">O compartilhamento de tela está disponível somente no aplicativo para Windows e Linux.</p>}
+      <div className="video-settings">
+        <div className={`video-stage screen-stage ${live ? "is-live" : ""}`}>
+          <NativeFramePreview active={live} pull={nativeScreen.frame} label="Prévia do compartilhamento de tela" onError={screen.previewFailed} onStats={onStats} />
+          {!live && <div className="camera-placeholder"><MonitorUp size={36} aria-hidden="true" /><p>{picking ? "Escolha uma tela ou janela na janela do sistema." : "Sua tela aparece aqui"}</p>{picking && <span role="status">Aguardando a escolha…</span>}</div>}
+          {live && <span className="tile-name"><span className="live-dot" />AO VIVO</span>}
+        </div>
+        <div className="video-controls">
           <div className="field"><label htmlFor="screen-resolution">Resolução máxima</label>
             <select id="screen-resolution" value={resolution} disabled={locked} onChange={(e) => setResolution(e.target.value as typeof resolution)}>
               {RESOLUTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
@@ -63,7 +66,7 @@ export function ScreenShareTest({ screen }: { screen: ScreenShareController }) {
             </select>
           </div>
           <label className="checkbox-label"><input type="checkbox" checked={cursor} disabled={locked} onChange={(e) => setCursor(e.target.checked)} />Mostrar o cursor do mouse</label>
-          <button className={`button ${live || picking ? "stop-button" : "primary"}`} disabled={!available} onClick={() => (live || picking ? screen.stop() : start())}>
+          <button className={`button full ${live || picking ? "danger" : "secondary"}`} disabled={!available} onClick={() => (live || picking ? screen.stop() : start())}>
             {live || picking ? <Square size={15} /> : <MonitorUp size={16} />}{picking ? "Cancelar" : live ? "Parar compartilhamento" : "Compartilhar tela"}
           </button>
           {live && info && (
@@ -73,15 +76,10 @@ export function ScreenShareTest({ screen }: { screen: ScreenShareController }) {
               <div><dt>Quadros</dt><dd className="mono">{stats ? `${stats.fps} fps` : "—"} / até {info.frameRate}</dd></div>
             </dl>
           )}
-          <p className="card-footnote">O sistema pergunta o que compartilhar. Uma tela parada envia menos quadros. Nada sai do seu dispositivo neste teste.</p>
-        </div>
-        <div className={`video-stage wide ${live ? "is-live" : ""}`}>
-          <NativeFramePreview active={live} pull={nativeScreen.frame} label="Prévia do compartilhamento de tela" onError={screen.previewFailed} onStats={onStats} />
-          {!live && <div className="camera-placeholder"><MonitorUp size={40} aria-hidden="true" /><p>{picking ? "Escolha uma tela ou janela na janela do sistema." : "Sua tela aparece aqui"}</p>{picking && <span role="status">Aguardando a escolha…</span>}</div>}
-          {live && <span className="live-label"><span className="dot red" />AO VIVO</span>}
+          <p className="field-help">O sistema pergunta o que compartilhar. Uma tela parada envia menos quadros.</p>
+          {screen.error && <p className="inline-error" role="alert">{screen.error}</p>}
         </div>
       </div>
-      {screen.error && <p className="inline-error" role="alert">{screen.error}</p>}
     </section>
   );
 }

@@ -1,8 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import type { Channel, ChatMessage } from "@disc-voice/shared";
-import { Send } from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import type { Channel, ChatMessage, User } from "@disc-voice/shared";
+import { MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { api, message } from "../lib/api";
+import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
+import { Avatar } from "./ui";
+
+const GROUP_WINDOW = 7 * 60_000;
 
 export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
   const unique = new Map(current.map(item => [item.id, item]));
@@ -12,7 +16,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
 
 interface Pending { clientId: string; content: string; error: string; sending: boolean }
 
-export function TextChannel({ channel, realtime, revision }: { channel: Channel; realtime: Realtime; revision: number }) {
+export function TextChannel({ channel, realtime, revision, self }: { channel: Channel; realtime: Realtime; revision: number; self?: User }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
   const [content, setContent] = useState("");
@@ -115,35 +119,56 @@ export function TextChannel({ channel, realtime, revision }: { channel: Channel;
     void send(item);
   }
 
+  const welcome = !messages.length && !loading && !hasMore;
   return <section className="text-chat" aria-label={`Chat de texto ${channel.name}`}>
-    {error && <div className="chat-error" role="alert">{error} <button className="text-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
+    {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
       const element = list.current!;
       pinBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     }}>
       {hasMore && <button className="button secondary history-button" disabled={older} onClick={() => void loadOlder()}>{older ? "Carregando…" : "Carregar mensagens anteriores"}</button>}
-      {loading && <p role="status">Sincronizando mensagens…</p>}
-      {!messages.length && !loading && <div className="chat-welcome"><h2>Bem-vindo a #{channel.name}</h2><p>Comece a conversa com sua comunidade.</p></div>}
-      {messages.map(item => <article className="chat-message" key={item.id}>
-        <header><strong>{item.author.email}</strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{new Date(item.createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</time></header>
-        <p>{item.content}</p>
-      </article>)}
+      {loading && <p className="chat-status" role="status">Sincronizando mensagens…</p>}
+      {welcome && <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>}
+      {messages.map((item, index) => {
+        const previous = messages[index - 1];
+        const newDay = !previous || new Date(previous.createdAt).toDateString() !== new Date(item.createdAt).toDateString();
+        const grouped = !!previous && !newDay && previous.author.id === item.author.id
+          && new Date(item.createdAt).getTime() - new Date(previous.createdAt).getTime() < GROUP_WINDOW;
+        return <Fragment key={item.id}>
+          {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
+          <article className={`chat-message ${grouped ? "grouped" : ""}`}>
+            {grouped ? <span className="message-gutter" /> : <Avatar name={item.author.name} />}
+            <div className="message-body">
+              {!grouped && <div className="message-meta"><strong title={item.author.email}>{item.author.name}</strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
+              <p>{item.content}</p>
+            </div>
+          </article>
+        </Fragment>;
+      })}
       {pending.map(item => <article className="chat-message pending-message" key={item.clientId}>
-        <header><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></header><p>{item.content}</p>
-        {item.error && <div role="alert">{item.error} <button className="text-button" onClick={() => void send(item)}>Reenviar</button></div>}
+        <Avatar name={self?.name || "Você"} />
+        <div className="message-body">
+          <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div><p>{item.content}</p>
+          {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}
+        </div>
       </article>)}
     </div>
-    <form className="message-composer" onSubmit={submit}>
+    <form className="composer" onSubmit={submit}>
       <label className="sr-only" htmlFor="message-content">Mensagem em #{channel.name}</label>
-      <textarea id="message-content" placeholder={`Conversar em #${channel.name}`} maxLength={4000} value={content} rows={2}
+      <textarea id="message-content" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
         onChange={event => setContent(event.target.value)}
         onKeyDown={event => {
           if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault(); event.currentTarget.form?.requestSubmit();
           }
         }} />
-      <button className="button primary" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><Send size={18} /></button>
+      <div className="composer-actions">
+        {/* Attachments and emoji are designed but not implemented yet. */}
+        <button type="button" className="icon-button" disabled aria-label="Anexar arquivo (em breve)" title="Anexos em breve"><Plus size={18} /></button>
+        <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
+        <span className="composer-hint">Enter para enviar · Shift+Enter para nova linha</span>
+        <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
+      </div>
     </form>
-    <p className="composer-hint">Enter para enviar · Shift+Enter para nova linha</p>
   </section>;
 }

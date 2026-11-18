@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceParticipant } from "@disc-voice/shared";
 import type { Voice, VoiceState } from "../lib/voice";
+import { ScreenButton } from "./AppBar";
 import { VoiceChannel } from "./VoiceChannel";
 
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
@@ -23,20 +24,21 @@ function voice() {
 }
 
 describe("VoiceChannel screen sharing", () => {
-  it("starts and stops sharing from the call controls", async () => {
+  it("starts and stops sharing from the app bar call controls", async () => {
     const controls = voice();
-    const view = render(<VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online />);
+    const view = render(<><ScreenButton voice={controls as unknown as Voice} state={state()} /><VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online /></>);
     await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
     expect(controls.startScreen).toHaveBeenCalledOnce();
-    view.rerender(<VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online />);
+    view.rerender(<><ScreenButton voice={controls as unknown as Voice} state={state({ screen: "picking" })} /><VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online /></>);
     expect(screen.getByText(/Escolha uma tela ou janela/)).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Cancelar escolha da tela" }));
     expect(controls.stopScreen).toHaveBeenCalledOnce();
   });
 
-  it("hides the button where native capture is unavailable", () => {
-    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state({ screenSupported: false })} participants={[self]} online />);
+  it("disables sharing where native capture is unavailable", () => {
+    render(<ScreenButton voice={voice() as unknown as Voice} state={state({ screenSupported: false })} />);
     expect(screen.queryByRole("button", { name: "Compartilhar tela" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Compartilhar tela (indisponível)" })).toBeDisabled();
   });
 
   it("shows who is sharing and their screen once it arrives", () => {
