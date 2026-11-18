@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Activity, Camera, Check, CircleHelp, Headphones, Mic, Monitor, MonitorUp,
-  Play, RefreshCw, ShieldCheck, Square, Volume2, X,
+  Activity, Camera, Headphones, Mic, Monitor, Play, RefreshCw, ShieldCheck, Square, Volume2,
 } from "lucide-react";
 import { MAX_RECORDING_SECONDS, type AudioDevice } from "@disc-voice/shared";
 import { useAudio } from "./hooks/useAudio";
@@ -9,6 +8,10 @@ import { useCamera } from "./hooks/useCamera";
 import { useScreenShare } from "./hooks/useScreenShare";
 import { NativeCameraPreview } from "./components/NativeCameraPreview";
 import { ScreenShareTest } from "./components/ScreenShareTest";
+import { Avatar, RadioCards, SoonTag, Switch } from "./components/ui";
+import { audioProcessing, saveAudioProcessing, type AudioProcessing } from "./lib/voice";
+
+const SEGMENTS = 30;
 
 function DeviceSelect({ id, label, devices, value, onChange, disabled }: {
   id: string;
@@ -54,13 +57,13 @@ function CameraPreview({ stream, onError, mirrored }: {
   return <video ref={ref} className={mirrored ? "mirrored" : ""} muted autoPlay playsInline aria-label="Prévia ao vivo da webcam" />;
 }
 
-export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boolean; callDevices?: ReactNode } = {}) {
+export function DeviceSettings({ inCall = false, callDevices, userName = "Você" }: { inCall?: boolean; callDevices?: ReactNode; userName?: string } = {}) {
   const audio = useAudio();
   const camera = useCamera();
   const screen = useScreenShare();
   const [volume, setVolume] = useState(35);
   const [mirrored, setMirrored] = useState(true);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [processing, setProcessing] = useState(audioProcessing);
   const inputActive = audio.status.inputActive;
   const outputActive = audio.status.outputActive;
   const screenActive = screen.status === "live" || screen.status === "picking";
@@ -68,99 +71,111 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
   const audioLocked = audio.busy || audio.refreshing || inCall;
   const level = Math.min(100, Math.max(0, Math.round(audio.status.peak * 100)));
   const db = audio.status.peak > 0 ? Math.max(-60, Math.round(20 * Math.log10(audio.status.peak))) : -60;
+  const lit = inputActive ? Math.round(level / 100 * SEGMENTS) : 0;
 
   const stopAll = () => {
     camera.stop();
     if (screenActive) screen.stop();
     void audio.act({ type: "stopAll" });
   };
+  const toggle = (key: keyof AudioProcessing) => (checked: boolean) => {
+    const next = { ...processing, [key]: checked };
+    setProcessing(next);
+    saveAudioProcessing(next);
+  };
 
-  return (
-    <>
-        <main id="devices">
-          <div className="page-heading">
-            <div><h1>Voz e vídeo</h1><p>Escolha quais dispositivos o DiscVoice deve usar nos seus testes.</p></div>
-            <button className="text-button" onClick={() => setHelpOpen(true)}><CircleHelp size={16} />Guia de testes</button>
+  return <div className="device-settings">
+    {callDevices}
+    {inCall && <div className="notice"><Headphones size={19} /><p>Chamada em andamento. Os testes locais de áudio ficam disponíveis ao sair da sala de voz.</p></div>}
+
+    <section aria-labelledby="audio-test-title">
+      <h2 id="audio-test-title" className="settings-section-title">Teste de áudio</h2>
+      {!audio.available && <div className="notice"><Monitor size={19} /><div><strong>Abra o app no Windows para testar o áudio.</strong><p>Esta prévia mostra a interface. A seleção de entradas e saídas usa o motor nativo do aplicativo.</p></div></div>}
+      {audio.error && <div className="error-banner" role="alert"><Activity size={18} /><div><strong>Não foi possível concluir o teste de áudio</strong><p>{audio.error}</p><small>Verifique a conexão e o acesso ao microfone para aplicativos da área de trabalho nas configurações de privacidade do sistema.</small></div></div>}
+      <div className="field-grid">
+        <DeviceSelect id="microphone" label="Dispositivo de entrada" devices={audio.devices.inputs} value={audio.inputId} onChange={audio.setInputId} disabled={audioLocked || inputActive} />
+        <DeviceSelect id="output" label="Dispositivo de saída" devices={audio.devices.outputs} value={audio.outputId} onChange={audio.setOutputId} disabled={audioLocked || outputActive} />
+      </div>
+
+      <div className={`test-box ${inputActive ? "is-active" : ""}`}>
+        <div className="test-row">
+          <button className={`button ${inputActive ? "danger" : "secondary"}`} disabled={!audio.available || !audio.inputId || audioLocked || outputActive} onClick={() => void audio.act(inputActive ? { type: "stopMicrophone" } : { type: "startMicrophone", deviceId: audio.inputId })}>
+            {inputActive ? <Square size={15} /> : <Mic size={16} />}{inputActive ? "Finalizar gravação" : "Testar microfone"}
+          </button>
+          <div className="segment-meter" role="meter" aria-label="Nível do microfone" aria-valuemin={0} aria-valuemax={100} aria-valuenow={level}>
+            {Array.from({ length: SEGMENTS }, (_, index) => <span key={index} className={index < lit ? (index >= SEGMENTS * 0.85 ? "hot" : "on") : ""} />)}
           </div>
+        </div>
+        <p className="test-caption"><span>{inputActive ? "Fale normalmente. Estamos ouvindo." : audio.status.recordingReady ? "Gravação pronta para ouvir na saída selecionada." : "Grave até 10 segundos e depois ouça sua própria voz para conferir."}</span><span className="mono">{inputActive ? `${db} dBFS · ` : ""}{audio.status.recordedSeconds.toFixed(1)} / {MAX_RECORDING_SECONDS}s</span></p>
+      </div>
 
-          {callDevices}
-          {inCall && <div className="notice"><Headphones size={19} /><p>Chamada em andamento. Os testes locais de áudio ficam disponíveis ao sair do canal de voz.</p></div>}
-          {!audio.available && <div className="notice"><Monitor size={19} /><div><strong>Abra o app no Windows para testar o áudio.</strong><p>Esta prévia mostra a interface. A seleção de entradas e saídas usa o motor nativo do aplicativo.</p></div></div>}
-          {audio.error && <div className="error-banner" role="alert"><Activity size={18} /><div><strong>Não foi possível concluir o teste de áudio</strong><p>{audio.error}</p><small>Verifique a conexão e o acesso ao microfone para aplicativos da área de trabalho nas configurações de privacidade do Windows.</small></div></div>}
+      <div className={`test-box ${outputActive ? "is-active" : ""}`}>
+        <div className="test-row">
+          <button className={`button ${outputActive ? "danger" : "secondary"}`} disabled={!audio.available || !audio.outputId || audioLocked || inputActive} onClick={() => void audio.act(outputActive ? { type: "stopOutput" } : { type: "playTone", deviceId: audio.outputId, volume: volume / 100 })}>
+            {outputActive ? <Square size={15} /> : <Volume2 size={16} />}{outputActive ? "Parar áudio" : "Tocar som"}
+          </button>
+          <button className="button secondary" disabled={!audio.available || !audio.outputId || !audio.status.recordingReady || inputActive || outputActive || audioLocked} onClick={() => void audio.act({ type: "playRecording", deviceId: audio.outputId, volume: volume / 100 })}><Play size={15} />Ouvir gravação</button>
+          <label className="inline-range" htmlFor="volume"><span>Volume do teste</span><input id="volume" type="range" min="0" max="100" step="1" value={volume} disabled={outputActive} onChange={(e) => setVolume(Number(e.target.value))} /><span className="mono">{volume}%</span></label>
+        </div>
+        <p className="test-caption"><span>Tom de 440 Hz por 3 segundos na saída selecionada.</span></p>
+      </div>
+    </section>
 
-          <div className="device-grid">
-            <div className="audio-column">
-              <div className="device-fields">
-                <DeviceSelect id="microphone" label="Dispositivo de entrada" devices={audio.devices.inputs} value={audio.inputId} onChange={audio.setInputId} disabled={audioLocked || inputActive} />
-                <DeviceSelect id="output" label="Dispositivo de saída" devices={audio.devices.outputs} value={audio.outputId} onChange={audio.setOutputId} disabled={audioLocked || outputActive} />
-                <div className="field"><label htmlFor="camera">Câmera</label><select id="camera" value={camera.deviceId} disabled={camera.busy || camera.live} onChange={(e) => camera.setDeviceId(e.target.value)}>
-                  {(!camera.devices.length || !camera.devices.some((d) => d.deviceId === camera.deviceId)) && <option value="">Câmera padrão</option>}
-                  {camera.devices.map((device, index) => <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Webcam ${index + 1} · Permissão necessária`}</option>)}
-                </select></div>
-              </div>
-              <section className={`card ${inputActive ? "card-active" : ""}`} aria-labelledby="microphone-title">
-                <div className="card-heading"><div><h2 id="microphone-title">Testar microfone</h2><p>Fale para conferir o nível de entrada.</p></div>{inputActive && <span className="badge live">Gravando</span>}</div>
-                <div className="meter-caption"><span>Nível de entrada</span><span className="mono">{inputActive ? `${db} dBFS` : "— dBFS"}</span></div>
-                <div className="meter" role="meter" aria-label="Nível do microfone" aria-valuemin={0} aria-valuemax={100} aria-valuenow={level}>
-                  <span className={level > 85 ? "hot" : ""} style={{ width: `${inputActive ? level : 0}%` }} />
-                </div>
-                <div className="recording-info"><span className={`dot ${inputActive ? "red" : ""}`} /><span>{inputActive ? "Fale algo. Estamos ouvindo." : audio.status.recordingReady ? "Gravação pronta para ouvir na saída abaixo." : "Grave um trecho para testar sua voz."}</span><span className="mono">{audio.status.recordedSeconds.toFixed(1)} / {MAX_RECORDING_SECONDS}s</span></div>
-                <button className={`button ${inputActive ? "stop-button" : "primary"}`} disabled={!audio.available || !audio.inputId || audioLocked || outputActive} onClick={() => void audio.act(inputActive ? { type: "stopMicrophone" } : { type: "startMicrophone", deviceId: audio.inputId })}>
-                  {inputActive ? <Square size={15} /> : <Mic size={16} />}{inputActive ? "Finalizar gravação" : "Testar microfone"}
-                </button>
-                <p className="card-footnote">A gravação termina automaticamente após 10 segundos.</p>
-              </section>
+    {/* Push-to-talk, sensitivity and call volumes are designed but not implemented yet. */}
+    <section aria-labelledby="input-mode-title">
+      <h2 id="input-mode-title" className="settings-section-title">Modo de entrada <SoonTag /></h2>
+      <RadioCards name="input-mode" value="voice" disabled options={[{ value: "voice", label: "Detecção de voz" }, { value: "ptt", label: "Pressionar para falar" }]} />
+      <div className="field-grid">
+        <div className="field"><label htmlFor="sensitivity">Sensibilidade</label><input id="sensitivity" type="range" disabled defaultValue={40} /><small>Abaixo desse nível, o microfone fica em silêncio.</small></div>
+        <div className="field"><label htmlFor="call-volume">Volume de saída da chamada</label><input id="call-volume" type="range" disabled defaultValue={80} /></div>
+      </div>
+    </section>
 
-              <section className={`card ${outputActive ? "card-active" : ""}`} aria-labelledby="output-title">
-                <div className="card-heading"><div><h2 id="output-title">Testar saída de áudio</h2><p>Confira o som no dispositivo selecionado.</p></div>{outputActive && <span className="badge live">Reproduzindo</span>}</div>
-                <div className="volume-row"><Volume2 size={17} /><label htmlFor="volume">Volume do teste</label><span className="mono">{volume}%</span></div>
-                <input id="volume" type="range" min="0" max="100" step="1" value={volume} disabled={outputActive} onChange={(e) => setVolume(Number(e.target.value))} aria-label="Volume do teste" />
-                <div className="button-row">
-                  <button className={`button ${outputActive ? "stop-button" : "secondary"}`} disabled={!audio.available || !audio.outputId || audioLocked || inputActive} onClick={() => void audio.act(outputActive ? { type: "stopOutput" } : { type: "playTone", deviceId: audio.outputId, volume: volume / 100 })}>
-                    {outputActive ? <Square size={15} /> : <Volume2 size={16} />}{outputActive ? "Parar áudio" : "Tocar som"}
-                  </button>
-                  <button className="button secondary" disabled={!audio.available || !audio.outputId || !audio.status.recordingReady || inputActive || outputActive || audioLocked} onClick={() => void audio.act({ type: "playRecording", deviceId: audio.outputId, volume: volume / 100 })}><Play size={15} />Ouvir gravação</button>
-                </div>
-                <p className="card-footnote">Tom de 440 Hz por 3 segundos na saída selecionada.</p>
-              </section>
-            </div>
+    <section aria-labelledby="video-title">
+      <h2 id="video-title" className="settings-section-title">Vídeo</h2>
+      <div className="video-settings">
+        <div className={`video-stage ${camera.live ? "is-live" : ""}`}>
+          {camera.native
+            ? <NativeCameraPreview active={camera.live} onError={camera.previewFailed} mirrored={mirrored} />
+            : <CameraPreview stream={camera.stream} onError={camera.previewFailed} mirrored={mirrored} />}
+          {!camera.live && <div className="camera-placeholder"><Avatar name={userName} size="xl" /><p>{camera.busy ? "Aceite a solicitação de acesso à câmera." : "Sua câmera aparece aqui"}</p>{camera.busy && <span role="status">Aguardando a câmera…</span>}</div>}
+          <span className="tile-name">{userName}</span>
+          {camera.live && <span className="video-resolution">{camera.settings.width} × {camera.settings.height}{camera.settings.frameRate ? ` · ${Math.round(camera.settings.frameRate)} fps` : ""}</span>}
+        </div>
+        <div className="video-controls">
+          <div className="field"><label htmlFor="camera">Câmera</label><select id="camera" value={camera.deviceId} disabled={camera.busy || camera.live} onChange={(e) => camera.setDeviceId(e.target.value)}>
+            {(!camera.devices.length || !camera.devices.some((d) => d.deviceId === camera.deviceId)) && <option value="">Câmera padrão</option>}
+            {camera.devices.map((device, index) => <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Webcam ${index + 1} · Permissão necessária`}</option>)}
+          </select></div>
+          <button className={`button full ${camera.live || camera.busy ? "danger" : "secondary"}`} onClick={() => camera.live || camera.busy ? camera.stop() : void camera.start()}>
+            {camera.live || camera.busy ? <Square size={15} /> : <Camera size={17} />}{camera.busy ? "Cancelar teste" : camera.live ? "Desligar câmera" : "Testar câmera"}
+          </button>
+          <label className="checkbox-label"><input type="checkbox" checked={mirrored} onChange={(e) => setMirrored(e.target.checked)} />Espelhar prévia</label>
+          {camera.error && <p className="inline-error" role="alert">{camera.error}</p>}
+          <p className="field-help">A câmera só é ativada quando você inicia o teste.</p>
+        </div>
+      </div>
+    </section>
 
-            <section className={`card camera-card ${camera.live ? "card-active" : ""}`} aria-labelledby="camera-title">
-              <div className="card-heading"><h2 id="camera-title">Pré-visualização da câmera</h2>{camera.live && <span className="badge live">Ao vivo</span>}</div>
-              <div className={`video-stage ${camera.live ? "is-live" : ""}`}>
-                {camera.native
-                  ? <NativeCameraPreview active={camera.live} onError={camera.previewFailed} mirrored={mirrored} />
-                  : <CameraPreview stream={camera.stream} onError={camera.previewFailed} mirrored={mirrored} />}
-                {!camera.live && <div className="camera-placeholder"><div className="camera-avatar" aria-hidden="true">V</div><p>{camera.busy ? "Aceite a solicitação de acesso à webcam." : "Sua câmera aparece aqui"}</p>{camera.busy && <span role="status">Aguardando a câmera…</span>}</div>}
-                {camera.live && <><span className="live-label"><span className="dot red" />AO VIVO</span><span className="video-resolution">{camera.settings.width} × {camera.settings.height}</span></>}
-              </div>
-              {camera.error && <p className="inline-error" role="alert">{camera.error}</p>}
-              <div className="camera-options"><label className="checkbox-label"><input type="checkbox" checked={mirrored} onChange={(e) => setMirrored(e.target.checked)} />Espelhar prévia</label><span>{camera.live && camera.settings.frameRate ? `${Math.round(camera.settings.frameRate)} fps` : "HD preferencial"}</span></div>
-              <button className={`button ${camera.live || camera.busy ? "stop-button" : "primary"}`} onClick={() => camera.live || camera.busy ? camera.stop() : void camera.start()}>
-                {camera.live || camera.busy ? <Square size={15} /> : <Camera size={17} />}{camera.busy ? "Cancelar teste" : camera.live ? "Desligar webcam" : "Testar webcam"}
-              </button>
-              <p className="card-footnote">A câmera só é ativada quando você inicia o teste.</p>
-            </section>
-          </div>
+    <ScreenShareTest screen={screen} />
 
-          <ScreenShareTest screen={screen} />
+    <section aria-labelledby="processing-title">
+      <h2 id="processing-title" className="settings-section-title">Processamento de áudio</h2>
+      <div className="switch-list">
+        <Switch id="noise" label="Supressão de ruído" description="Tira teclado, ventilador e barulho de fundo" checked={processing.noiseSuppression} onChange={toggle("noiseSuppression")} />
+        <Switch id="echo" label="Cancelamento de eco" description="Evita que sua voz volte pelos alto-falantes" checked={processing.echoCancellation} onChange={toggle("echoCancellation")} />
+        <Switch id="gain" label="Ganho automático" description="Ajusta o volume do microfone sozinho" checked={processing.autoGainControl} onChange={toggle("autoGainControl")} />
+      </div>
+      <p className="field-help">{inCall ? "As mudanças valem a partir da próxima vez que você entrar em uma sala." : "Aplicado ao entrar em uma sala de voz."}</p>
+    </section>
 
-          <div className="page-actions">
-            <button className="button secondary" disabled={audio.refreshing || audio.busy} onClick={() => { void audio.refresh(); void camera.refresh(); }}>
-              <RefreshCw size={15} className={audio.refreshing ? "spin" : ""} />{audio.refreshing ? "Buscando…" : "Atualizar dispositivos"}
-            </button>
-            <span>As seleções são aplicadas ao iniciar cada teste.</span>
-          </div>
-          <div className="bottom-strip"><div role="status"><span className={`dot ${active ? "green" : ""}`} /><span>{active ? "Teste em andamento" : "Tudo pronto para testar"}</span></div><button className="text-button" disabled={!active || audio.busy} onClick={stopAll}><Square size={12} />Encerrar todos os testes</button></div>
-          <footer><ShieldCheck size={13} /><span>Áudio e vídeo locais, só no seu dispositivo.</span></footer>
-        </main>
-
-      {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Escape") setHelpOpen(false); }}>
-        <div className="card-heading"><div className="device-icon purple"><CircleHelp size={22} /></div><h2 id="help-title">Um check rápido no seu setup</h2><button autoFocus className="icon-button" aria-label="Fechar guia" onClick={() => setHelpOpen(false)}><X size={20} /></button></div>
-        <ol className="guide-list"><li><Mic size={20} /><div><strong>Teste sua voz</strong><p>Selecione o microfone, inicie o teste e fale por até 10 segundos. A barra mostra o nível capturado.</p></div></li><li><Headphones size={20} /><div><strong>Confira o que você ouve</strong><p>Escolha a saída, ajuste o volume e toque o som. Depois, ouça a gravação do microfone.</p></div></li><li><Camera size={20} /><div><strong>Veja seu enquadramento</strong><p>Inicie a webcam e permita o acesso quando solicitado. Após a permissão, os nomes das câmeras ficam disponíveis.</p></div></li><li><MonitorUp size={20} /><div><strong>Confira o que você compartilha</strong><p>Escolha a resolução e a taxa de quadros, clique em Compartilhar tela e selecione uma tela ou janela na janela do sistema.</p></div></li></ol>
-        <div className="notice"><ShieldCheck size={20} /><p>Se o acesso estiver bloqueado, confira Câmera e Microfone em Configurações do Windows → Privacidade e segurança. Ative o acesso para aplicativos da área de trabalho.</p></div>
-        <button className="button primary full" onClick={() => setHelpOpen(false)}><Check size={17} />Vamos testar</button>
-      </section></div>}
-    </>
-  );
+    <div className="settings-footer">
+      <button className="button secondary" disabled={audio.refreshing || audio.busy} onClick={() => { void audio.refresh(); void camera.refresh(); }}>
+        <RefreshCw size={15} className={audio.refreshing ? "spin" : ""} />{audio.refreshing ? "Buscando…" : "Atualizar dispositivos"}
+      </button>
+      <span role="status"><span className={`status-dot ${active ? "ok" : ""}`} />{active ? "Teste em andamento" : "Nenhum teste em andamento"}</span>
+      <button className="link-button" disabled={!active || audio.busy} onClick={stopAll}><Square size={12} />Encerrar todos os testes</button>
+    </div>
+    <p className="privacy-note"><ShieldCheck size={13} />Os testes de áudio e vídeo acontecem só no seu dispositivo.</p>
+  </div>;
 }
