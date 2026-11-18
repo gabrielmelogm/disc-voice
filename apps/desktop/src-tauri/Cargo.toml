@@ -12,6 +12,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 disc-audio = { path = "../../../packages/audio-engine" }
 
-# Same major as Tauri's WebKitGTK binding, so its WebView types match.
 [target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = "2.0"
+disc-video = { path = "../../../packages/video-engine" }

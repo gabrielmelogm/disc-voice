@@ -41,6 +41,21 @@ export const INITIAL_AUDIO_STATUS: AudioStatus = {
   sampleRate: null,
   error: null,
 };
+
+/** Native camera (Linux). Keep in sync with packages/video-engine/src/linux.rs. */
+export interface CameraDevice {
+  id: string;
+  name: string;
+}
+
+export interface CameraInfo {
+  deviceId: string;
+  width: number;
+  height: number;
+  frameRate: number;
+  passthrough: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
