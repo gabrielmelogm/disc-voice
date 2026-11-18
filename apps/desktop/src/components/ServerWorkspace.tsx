@@ -123,7 +123,7 @@ export function ServerWorkspace({ user, inviteCode, onLogout }: {
                 {type === "voice" ? <Volume2 size={17} /> : <Hash size={17} />}<span>{item.name}</span>
                 {type === "voice" && <small>{participants[item.id]?.length || 0}</small>}
               </button>
-              {type === "voice" && <ul className="sidebar-participants">{(participants[item.id] || []).map(p => <li key={p.peerId} className={voiceState.speaking.includes(p.peerId) ? "speaking" : ""}>{p.muted && <MicOff size={12} />}<span title={p.user.email}>{p.user.email}</span></li>)}</ul>}
+              {type === "voice" && <ul className="sidebar-participants">{(participants[item.id] || []).map(p => <li key={p.peerId} className={voiceState.speaking.includes(p.peerId) ? "speaking" : ""}>{p.muted && <MicOff size={12} />}<span title={p.user.email}>{p.user.name}</span></li>)}</ul>}
             </div>)}
           </nav>
         </div>)}

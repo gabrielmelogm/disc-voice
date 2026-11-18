@@ -118,7 +118,19 @@ async fn accounts_invites_channels_and_authorization() {
             "POST",
             "/auth/register",
             None,
-            Some(json!({"email": email, "password": "curta"}))
+            Some(json!({"email": email, "password": "curta", "name": "Dono"}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/auth/register",
+            None,
+            Some(json!({"email": email, "password": password, "name": "   "}))
         )
         .await
         .0,
@@ -130,11 +142,12 @@ async fn accounts_invites_channels_and_authorization() {
         "POST",
         "/auth/register",
         None,
-        Some(json!({"email": format!(" {} ", email.to_uppercase()), "password": password})),
+        Some(json!({"email": format!(" {} ", email.to_uppercase()), "password": password, "name": "  Dono   do Servidor "})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{owner}");
     assert_eq!(owner["user"]["email"], email);
+    assert_eq!(owner["user"]["name"], "Dono do Servidor");
     assert!(owner["user"].get("password_hash").is_none());
     let token = owner["token"].as_str().unwrap();
     let owner_id = Uuid::parse_str(owner["user"]["id"].as_str().unwrap()).unwrap();
@@ -167,7 +180,7 @@ async fn accounts_invites_channels_and_authorization() {
             "POST",
             "/auth/register",
             None,
-            Some(json!({"email": email.to_uppercase(), "password": password}))
+            Some(json!({"email": email.to_uppercase(), "password": password, "name": "Outro"}))
         )
         .await
         .0,
@@ -262,7 +275,7 @@ async fn accounts_invites_channels_and_authorization() {
         "POST",
         "/auth/register",
         None,
-        Some(json!({"email": format!("guest-{suffix}@example.com"), "password": password})),
+        Some(json!({"email": format!("guest-{suffix}@example.com"), "password": password, "name": "Convidado"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

@@ -7,7 +7,7 @@ import type { Realtime } from "../lib/realtime";
 import { api } from "../lib/api";
 
 const channel = { id: "channel-1", serverId: "server-1", name: "geral", type: "text" as const };
-const author = { id: "user-1", email: "amigo@example.com" };
+const author = { id: "user-1", email: "amigo@example.com", name: "Amigo" };
 const chat = (id: string, content: string): ChatMessage => ({
   id, channelId: channel.id, clientId: `client-${id}`, author, content, createdAt: "2026-11-17T10:00:00Z",
 });

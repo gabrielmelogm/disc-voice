@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { sessionToken } from "./lib/api";
 
-const account = { id: "user-1", email: "amigo@example.com" };
+const account = { id: "user-1", email: "amigo@example.com", name: "Amigo" };
 const server = { id: "server-1", name: "Amigos", ownerId: account.id };
 const code = "6c247e76-7b39-4b12-a278-49838c3fa6d6";
 const invite = { code, url: `http://localhost:3001/?invite=${code}`, server };
@@ -63,7 +63,10 @@ describe("accounts and communities", () => {
   it("registers, creates a server, copies its invite and creates a text channel", async () => {
     const user = userEvent.setup();
     const fetch = mockApi((path, init) => {
-      if (path.endsWith("/auth/register")) return { body: { user: account, token: "session-token" } };
+      if (path.endsWith("/auth/register")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ name: account.name, email: account.email, password: "senha-segura" });
+        return { body: { user: account, token: "session-token" } };
+      }
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
       if (path.endsWith("/servers") && init?.method === "POST") return { status: 201, body: invite };
       if (path.endsWith("/channels") && init?.method === "POST") return { status: 201, body: channel };
@@ -73,6 +76,7 @@ describe("accounts and communities", () => {
     });
     render(<App />);
     await user.click(screen.getByRole("button", { name: "Cadastre-se" }));
+    await user.type(screen.getByLabelText("Nome"), account.name);
     await user.type(screen.getByLabelText("E-mail"), account.email);
     await user.type(screen.getByLabelText("Senha"), "senha-segura");
     await user.click(screen.getByRole("button", { name: "Criar conta" }));

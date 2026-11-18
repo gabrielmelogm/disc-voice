@@ -9,6 +9,7 @@ export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
   notice: string;
 }) {
   const [register, setRegister] = useState(false);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -20,7 +21,7 @@ export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
     setBusy(true);
     setError("");
     try {
-      const session = await (register ? api.register : api.login)(email, password);
+      const session = await (register ? api.register(name, email, password) : api.login(email, password));
       onAuthenticated(session);
     } catch (cause) {
       setError(message(cause));
@@ -39,10 +40,11 @@ export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
     </section>
     <section className="auth-card">
       <h2>{register ? "Crie sua conta" : "Bom ter você de volta!"}</h2>
-      <p>{register ? "Comece com seu e-mail e uma senha." : "Entre para acessar seus servidores."}</p>
+      <p>{register ? "Comece com seu nome, e-mail e uma senha." : "Entre para acessar seus servidores."}</p>
       {hasInvite && <div className="notice">Você tem um convite. Entre ou cadastre-se para continuar.</div>}
       {notice && <p className="notice" role="status">{notice}</p>}
       <form onSubmit={submit} className="stack-form">
+        {register && <div className="field"><label htmlFor="name">Nome</label><input id="name" autoComplete="name" required maxLength={32} value={name} disabled={busy} onChange={e => setName(e.target.value)} /></div>}
         <div className="field"><label htmlFor="email">E-mail</label><input id="email" type="email" autoComplete="email" required maxLength={254} value={email} disabled={busy} onChange={e => setEmail(e.target.value)} /></div>
         <div className="field"><label htmlFor="password">Senha</label><input id="password" type="password" autoComplete={register ? "new-password" : "current-password"} required minLength={8} maxLength={128} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} aria-describedby={register ? "password-help" : undefined} />{register && <small id="password-help">Use pelo menos 8 caracteres.</small>}</div>
         {error && <p className="inline-error" role="alert">{error}</p>}

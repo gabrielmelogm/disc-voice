@@ -81,7 +81,7 @@ async function request<T>(path: string, options: {
 }
 
 export const api = {
-  register: (email: string, password: string) => request<AuthSession>("/auth/register", { method: "POST", body: { email, password }, public: true }),
+  register: (name: string, email: string, password: string) => request<AuthSession>("/auth/register", { method: "POST", body: { name, email, password }, public: true }),
   login: (email: string, password: string) => request<AuthSession>("/auth/login", { method: "POST", body: { email, password }, public: true }),
   me: (signal?: AbortSignal) => request<User>("/me", { signal }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),

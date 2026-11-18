@@ -5,7 +5,7 @@ import { Voice } from "./voice";
 import type { Realtime } from "./realtime";
 
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
-const participant = { peerId: "self", user: { id: "user-1", email: "amigo@example.com" }, muted: false, deafened: false };
+const participant = { peerId: "self", user: { id: "user-1", email: "amigo@example.com", name: "Amigo" }, muted: false, deafened: false };
 
 function setup() {
   let listener: (event: RealtimeEvent) => void = () => {};

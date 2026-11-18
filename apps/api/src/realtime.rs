@@ -446,6 +446,7 @@ mod tests {
                 user: UserView {
                     id: user,
                     email: "voice@example.com".into(),
+                    name: "Voz".into(),
                 },
                 session: id.to_string(),
                 watching: None,
