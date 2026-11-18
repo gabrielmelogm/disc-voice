@@ -1004,6 +1004,7 @@ dependencies = [
  "disc-audio",
  "tauri",
  "tauri-build",
+ "webkit2gtk",
 ]
 
 [[package]]

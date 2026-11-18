@@ -2,6 +2,8 @@
 
 #[cfg(any(windows, target_os = "linux"))]
 mod app;
+#[cfg(target_os = "linux")]
+mod linux;
 
 #[cfg(any(windows, target_os = "linux"))]
 fn main() {
