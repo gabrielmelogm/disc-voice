@@ -1,6 +1,10 @@
+pub mod backend;
+mod engine;
 pub mod format;
 
 #[cfg(target_os = "linux")]
-mod linux;
+mod pipewire;
+
+pub use engine::*;
 #[cfg(target_os = "linux")]
-pub use linux::{CameraDevice, CameraEngine, CameraInfo};
+pub use pipewire::PipeWireBackend;

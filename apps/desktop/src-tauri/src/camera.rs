@@ -90,23 +90,24 @@ pub mod native {
 }
 
 /// Registers the native engine (Linux only).
-pub fn manage(app: &tauri::App) {
+pub fn manage(app: &tauri::App) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use tauri::Manager;
-        app.manage(disc_video::CameraEngine::new());
+        app.manage(disc_video::CameraEngine::new()?);
     }
     #[cfg(not(target_os = "linux"))]
     let _ = app;
+    Ok(())
 }
 
-/// Releases the webcam when the window closes.
+/// Stops the camera worker, releasing the webcam, when the window closes.
 pub fn shutdown(window: &tauri::Window) {
     #[cfg(target_os = "linux")]
     {
         use tauri::Manager;
         if let Some(engine) = window.try_state::<disc_video::CameraEngine>() {
-            engine.stop();
+            engine.shutdown();
         }
     }
     #[cfg(not(target_os = "linux"))]

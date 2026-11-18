@@ -1,25 +1,22 @@
-//! Linux webcam capture through the camera portal and PipeWire.
+//! Linux backend: the camera portal plus PipeWire, through GStreamer.
 //!
 //! WebKitGTK's own capture runs `pipewiresrc` with `use-bufferpool=false`,
 //! which hands out frames whose memory becomes invalid (garbled preview and
-//! crashes in the web process). This engine owns its pipeline instead: it asks
-//! the portal for a PipeWire remote (the same path a Flatpak sandbox uses),
-//! keeps the buffer pool on, and hands JPEG frames to the UI.
+//! crashes in the web process). This backend owns its pipeline instead: it
+//! asks the portal for a PipeWire remote (the same path a Flatpak sandbox
+//! uses), keeps the buffer pool on and delivers JPEG frames.
 
-use crate::format::{self, Encoding, Mode};
+use crate::backend::{Backend, BackendDevice, FrameSink};
+use crate::format::{Encoding, Mode};
 use gio::{glib, prelude::*};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
-use serde::Serialize;
 use std::{
     cell::Cell,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     rc::Rc,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Condvar, Mutex, OnceLock,
-    },
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -39,233 +36,93 @@ const DENIED: &str = "Acesso à câmera negado. Permita a câmera para o DiscVoi
                       configurações de privacidade do sistema.";
 const NO_PROVIDER: &str = "O suporte do GStreamer ao PipeWire não está instalado \
                            (pacote pipewire-gstreamer).";
-const NOT_FOUND: &str = "A câmera selecionada não está disponível. Atualize os dispositivos.";
+const BUILD_FAILED: &str = "Não foi possível montar a captura da webcam.";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CameraDevice {
-    /// PipeWire node name: stable across sessions and reconnections.
-    pub id: String,
-    pub name: String,
+/// A PipeWire video source, identified by its node name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PipeWireDevice {
+    node: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CameraInfo {
-    pub device_id: String,
-    pub width: u32,
-    pub height: u32,
-    pub frame_rate: f64,
-    /// `true` when the camera's own MJPEG is forwarded without re-encoding.
-    pub passthrough: bool,
+pub struct PipeWireBackend {
+    access_granted: bool,
 }
 
-/// Latest frame, shared between the GStreamer streaming thread and readers.
-#[derive(Default)]
-struct Frames {
-    /// Increments on every start, so late frames of a stopped session are ignored.
-    generation: u64,
-    sequence: u64,
-    delivered: u64,
-    latest: Option<Arc<Vec<u8>>>,
-    error: Option<String>,
-    running: bool,
-}
+impl PipeWireBackend {
+    /// Does not touch the portal yet: a missing portal must not stop the app
+    /// from opening, it only makes listing cameras report an error.
+    pub fn new() -> Result<Self, String> {
+        Ok(Self {
+            access_granted: false,
+        })
+    }
 
-struct Shared {
-    frames: Mutex<Frames>,
-    changed: Condvar,
-}
-
-impl Shared {
-    fn publish(&self, generation: u64, frame: Vec<u8>) {
-        let Ok(mut frames) = self.frames.lock() else {
-            return;
-        };
-        if frames.generation != generation || !frames.running {
-            return;
+    fn open_remote(&mut self) -> Result<OwnedFd, String> {
+        init()?;
+        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+            .map_err(|error| format!("{NO_PORTAL} ({error})"))?;
+        if !self.access_granted {
+            access_camera(&connection)?;
+            self.access_granted = true;
         }
-        frames.sequence += 1;
-        frames.latest = Some(Arc::new(frame));
-        self.changed.notify_all();
-    }
-
-    fn fail(&self, generation: u64, error: String) {
-        let Ok(mut frames) = self.frames.lock() else {
-            return;
-        };
-        if frames.generation == generation && frames.running && frames.error.is_none() {
-            frames.error = Some(error);
-            self.changed.notify_all();
-        }
+        open_pipewire_remote(&connection)
     }
 }
 
-/// An open capture. Dropping it stops the pipeline before the PipeWire
-/// remote it uses is closed.
-struct Session {
-    pipeline: gst::Pipeline,
-    _remote: OwnedFd,
-}
+impl Backend for PipeWireBackend {
+    type Device = PipeWireDevice;
+    type Stream = PipeWireStream;
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
-}
-
-struct Inner {
-    shared: Arc<Shared>,
-    session: Mutex<Option<Session>>,
-    access_granted: AtomicBool,
-}
-
-/// Thread-safe handle; every method may block briefly and should run off
-/// the UI thread.
-#[derive(Clone)]
-pub struct CameraEngine {
-    inner: Arc<Inner>,
-}
-
-impl Default for CameraEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CameraEngine {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Inner {
-                shared: Arc::new(Shared {
-                    frames: Mutex::new(Frames::default()),
-                    changed: Condvar::new(),
-                }),
-                session: Mutex::new(None),
-                access_granted: AtomicBool::new(false),
-            }),
-        }
-    }
-
-    pub fn devices(&self) -> Result<Vec<CameraDevice>, String> {
+    fn devices(&mut self) -> Result<Vec<BackendDevice<PipeWireDevice>>, String> {
         let remote = self.open_remote()?;
-        let devices = video_sources(&remote)?;
-        Ok(devices
+        Ok(video_sources(&remote)?
             .iter()
             .filter_map(|device| {
-                Some(CameraDevice {
-                    id: node_name(device)?,
+                Some(BackendDevice {
+                    device: PipeWireDevice {
+                        node: node_name(device)?,
+                    },
                     name: device.display_name().to_string(),
+                    modes: device.caps().map(|caps| modes(&caps)).unwrap_or_default(),
                 })
             })
             .collect())
     }
 
-    /// Starts capture on `device_id` (or the first camera when empty),
-    /// replacing any running capture.
-    pub fn start(&self, device_id: &str) -> Result<CameraInfo, String> {
-        self.stop();
+    fn open(
+        &mut self,
+        device: &PipeWireDevice,
+        mode: &Mode,
+        sink: FrameSink,
+    ) -> Result<PipeWireStream, String> {
         let remote = self.open_remote()?;
-        let devices = video_sources(&remote)?;
-        let device = devices
-            .iter()
-            .find(|device| device_id.is_empty() || node_name(device).as_deref() == Some(device_id))
-            .ok_or(NOT_FOUND)?;
-        let node = node_name(device).ok_or(NOT_FOUND)?;
-        let mode = device
-            .caps()
-            .and_then(|caps| format::choose(&modes(&caps)))
-            .ok_or("A câmera não oferece um formato de vídeo compatível.")?;
-
-        let generation = {
-            let mut frames = self.lock_frames();
-            frames.generation += 1;
-            frames.sequence = 0;
-            frames.delivered = 0;
-            frames.latest = None;
-            frames.error = None;
-            frames.running = true;
-            frames.generation
-        };
-        let pipeline = build_pipeline(&remote, &node, &mode, &self.inner.shared, generation)
-            .inspect_err(|_| self.lock_frames().running = false)?;
-        let session = Session {
+        let pipeline = build_pipeline(&remote, &device.node, mode, sink)?;
+        let stream = PipeWireStream {
             pipeline,
             _remote: remote,
         };
-        if session.pipeline.set_state(gst::State::Playing).is_err() {
-            self.lock_frames().running = false;
-            return Err(
-                "Não foi possível iniciar a webcam. Verifique se outro aplicativo \
-                        está usando a câmera."
-                    .into(),
-            );
-        }
-        *self.inner.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
-        Ok(CameraInfo {
-            device_id: node,
-            width: mode.width,
-            height: mode.height,
-            frame_rate: mode.fps(),
-            passthrough: mode.encoding == Encoding::Jpeg,
-        })
+        stream
+            .pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|_| {
+                "Não foi possível iniciar a webcam. Verifique se outro aplicativo está \
+                 usando a câmera."
+                    .to_string()
+            })?;
+        Ok(stream)
     }
+}
 
-    pub fn stop(&self) {
-        {
-            let mut frames = self.lock_frames();
-            frames.running = false;
-            frames.latest = None;
-            self.inner.shared.changed.notify_all();
-        }
-        let session = self
-            .inner
-            .session
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        drop(session);
-    }
+/// A running capture. Dropping it stops the pipeline before the PipeWire
+/// remote it uses is closed.
+pub struct PipeWireStream {
+    pipeline: gst::Pipeline,
+    _remote: OwnedFd,
+}
 
-    /// Waits up to `timeout` for a frame newer than the last one returned.
-    /// `Ok(None)` means no new frame (timeout or not capturing); an error
-    /// means the capture stopped and should be shown to the user.
-    pub fn next_frame(&self, timeout: Duration) -> Result<Option<Arc<Vec<u8>>>, String> {
-        let shared = &self.inner.shared;
-        let frames = self.lock_frames();
-        let (mut frames, _) = shared
-            .changed
-            .wait_timeout_while(frames, timeout, |frames| {
-                frames.running && frames.error.is_none() && frames.sequence == frames.delivered
-            })
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(error) = frames.error.clone() {
-            return Err(error);
-        }
-        if !frames.running || frames.sequence == frames.delivered {
-            return Ok(None);
-        }
-        frames.delivered = frames.sequence;
-        Ok(frames.latest.clone())
-    }
-
-    fn lock_frames(&self) -> std::sync::MutexGuard<'_, Frames> {
-        self.inner
-            .shared
-            .frames
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn open_remote(&self) -> Result<OwnedFd, String> {
-        init()?;
-        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-            .map_err(|error| format!("{NO_PORTAL} ({error})"))?;
-        if !self.inner.access_granted.load(Ordering::Relaxed) {
-            access_camera(&connection)?;
-            self.inner.access_granted.store(true, Ordering::Relaxed);
-        }
-        open_pipewire_remote(&connection)
+impl Drop for PipeWireStream {
+    fn drop(&mut self) {
+        let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
 
@@ -390,7 +247,7 @@ fn node_name(device: &gst::Device) -> Option<String> {
     device.properties()?.get::<String>("node.name").ok()
 }
 
-/// Converts device caps into capture modes the engine can handle: MJPEG and
+/// Converts device caps into capture modes the backend can handle: MJPEG and
 /// raw formats in system memory (DMA-BUF and H.264 are skipped).
 fn modes(caps: &gst::CapsRef) -> Vec<Mode> {
     caps.iter()
@@ -449,8 +306,7 @@ fn build_pipeline(
     remote: &OwnedFd,
     node: &str,
     mode: &Mode,
-    shared: &Arc<Shared>,
-    generation: u64,
+    sink: FrameSink,
 ) -> Result<gst::Pipeline, String> {
     let pipeline = gst::Pipeline::new();
     let source = gst::ElementFactory::make("pipewiresrc")
@@ -476,7 +332,7 @@ fn build_pipeline(
         .property("caps", &caps)
         .build()
         .map_err(|_| NO_PROVIDER)?;
-    let sink = gst_app::AppSink::builder()
+    let appsink = gst_app::AppSink::builder()
         .max_buffers(1)
         .drop(true)
         .sync(false)
@@ -489,46 +345,34 @@ fn build_pipeline(
         encoder.set_property("quality", JPEG_QUALITY);
         chain.push(encoder);
     }
-    chain.push(sink.clone().upcast());
-    pipeline
-        .add_many(&chain)
-        .map_err(|_| "Não foi possível montar a captura da webcam.")?;
+    chain.push(appsink.clone().upcast());
+    pipeline.add_many(&chain).map_err(|_| BUILD_FAILED)?;
     gst::Element::link_many(&chain).map_err(|_| "A câmera recusou o formato escolhido.")?;
 
-    let frames = Arc::downgrade(shared);
-    sink.set_callbacks(
+    let frames = sink.clone();
+    appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
-            .new_sample(move |sink| {
-                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                let Some(shared) = frames.upgrade() else {
-                    return Err(gst::FlowError::Flushing);
-                };
-                if let Some(buffer) = sample.buffer() {
-                    if let Ok(map) = buffer.map_readable() {
-                        if format::is_complete_jpeg(map.as_slice()) {
-                            shared.publish(generation, map.as_slice().to_vec());
-                        }
-                    }
+            .new_sample(move |appsink| {
+                let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                if let Some(map) = sample
+                    .buffer()
+                    .and_then(|buffer| buffer.map_readable().ok())
+                {
+                    frames.publish(map.as_slice());
                 }
                 Ok(gst::FlowSuccess::Ok)
             })
             .build(),
     );
 
-    // Errors are recorded for the UI; every other message is dropped so the
-    // bus never fills up (nothing iterates a main loop for this pipeline).
-    let errors = Arc::downgrade(shared);
+    // Errors are reported to the worker; every other message is dropped so
+    // the bus never fills up (nothing iterates a main loop for this pipeline).
     pipeline
         .bus()
-        .ok_or("Não foi possível montar a captura da webcam.")?
+        .ok_or(BUILD_FAILED)?
         .set_sync_handler(move |_, message| {
             if let gst::MessageView::Error(error) = message.view() {
-                if let Some(shared) = errors.upgrade() {
-                    shared.fail(
-                        generation,
-                        format!("A webcam parou de enviar vídeo: {}", error.error()),
-                    );
-                }
+                sink.fail(format!("A webcam parou de enviar vídeo: {}", error.error()));
             }
             gst::BusSyncReply::Drop
         });
@@ -537,13 +381,14 @@ fn build_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{format, CameraEngine};
+    use std::time::{Duration, Instant};
 
     /// Needs a camera and the desktop camera portal; frames are discarded.
     #[test]
     #[ignore = "needs a webcam and xdg-desktop-portal with PipeWire"]
     fn captures_valid_jpeg_frames_from_the_portal() {
-        let engine = CameraEngine::new();
+        let engine = CameraEngine::new().unwrap();
         let devices = engine.devices().unwrap();
         assert!(!devices.is_empty(), "no camera found");
         let info = engine.start(&devices[0].id).unwrap();
@@ -563,5 +408,6 @@ mod tests {
 
         engine.stop();
         assert_eq!(engine.next_frame(Duration::from_millis(50)), Ok(None));
+        engine.shutdown();
     }
 }

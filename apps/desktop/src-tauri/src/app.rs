@@ -34,7 +34,7 @@ pub fn run() {
         .setup(|app| {
             let engine = AudioEngine::new().map_err(std::io::Error::other)?;
             app.manage(engine);
-            camera::manage(app);
+            camera::manage(app).map_err(std::io::Error::other)?;
             Ok(())
         })
         .on_window_event(|window, event| {
