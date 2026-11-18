@@ -771,3 +771,315 @@ async fn accounts_invites_channels_and_authorization() {
         .unwrap();
     }
 }
+
+async fn register(app: &Router, name: &str) -> (String, String) {
+    let email = format!(
+        "{}-{}@example.com",
+        name.to_lowercase(),
+        Uuid::new_v4().simple()
+    );
+    let (status, body) = call(
+        app,
+        "POST",
+        "/auth/register",
+        None,
+        Some(json!({ "email": email, "password": "uma-senha-de-teste", "name": name })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (
+        body["token"].as_str().unwrap().to_owned(),
+        body["user"]["id"].as_str().unwrap().to_owned(),
+    )
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn profile_editing_and_global_search() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(db.clone(), "https://discvoice.example".into()),
+        vec![],
+    );
+    let tag = Uuid::new_v4().simple().to_string()[..10].to_owned();
+    let (owner, owner_id) = register(&app, "Dona").await;
+    let (guest, guest_id) = register(&app, &format!("Convidada{tag}")).await;
+    let (outsider, outsider_id) = register(&app, &format!("Estranha{tag}")).await;
+
+    // New accounts start with an empty profile.
+    let me = call(&app, "GET", "/me", Some(&guest), None).await.1;
+    assert_eq!(
+        (&me["pronouns"], &me["bio"], &me["banner"]),
+        (&json!(""), &json!(""), &json!("brand"))
+    );
+    for invalid in [
+        json!({ "name": "   " }),
+        json!({ "name": "a".repeat(33) }),
+        json!({ "pronouns": "a".repeat(41) }),
+        json!({ "bio": "a".repeat(191) }),
+        json!({ "banner": "#ff0000" }),
+    ] {
+        assert_eq!(
+            call(&app, "PATCH", "/me", Some(&guest), Some(invalid))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    let created = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&owner),
+        Some(json!({ "name": format!("Busca {tag}") })),
+    )
+    .await
+    .1;
+    let server_id = created["server"]["id"].as_str().unwrap().to_owned();
+    let code = created["code"].as_str().unwrap();
+    call(
+        &app,
+        "POST",
+        &format!("/invites/{code}/join"),
+        Some(&guest),
+        None,
+    )
+    .await;
+    let channels = format!("/servers/{server_id}/channels");
+    let text = call(
+        &app,
+        "POST",
+        &channels,
+        Some(&owner),
+        Some(json!({ "name": format!("anuncios-{tag}") })),
+    )
+    .await
+    .1;
+    let voice = call(
+        &app,
+        "POST",
+        &channels,
+        Some(&owner),
+        Some(json!({ "name": format!("sala-{tag}"), "type": "voice" })),
+    )
+    .await
+    .1;
+    let messages = format!("/channels/{}/messages", text["id"].as_str().unwrap());
+    for content in [
+        format!("Reunião {tag} amanhã"),
+        "Sem relação".into(),
+        format!("Outra reunião {tag}"),
+    ] {
+        call(
+            &app,
+            "POST",
+            &messages,
+            Some(&guest),
+            Some(json!({ "clientId": Uuid::new_v4(), "content": content })),
+        )
+        .await;
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut owner_ws, _) = socket(&url, &owner).await;
+    let (mut guest_ws, _) = socket(&url, &guest).await;
+    let (mut outsider_ws, _) = socket(&url, &outsider).await;
+    emit(
+        &mut owner_ws,
+        json!({ "type": "server.watch", "serverId": server_id }),
+    )
+    .await;
+    event(&mut owner_ws, "server.snapshot").await;
+    emit(&mut guest_ws, json!({ "type": "voice.join", "channelId": voice["id"], "muted": false, "deafened": false })).await;
+    event(&mut guest_ws, "voice.joined").await;
+
+    let (status, updated) = call(
+        &app,
+        "PATCH",
+        "/me",
+        Some(&guest),
+        Some(json!({ "name": " Nova  Convidada ", "pronouns": "ela/dela", "bio": "Oi!\nTudo bem?", "banner": "green" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Nova Convidada");
+    assert_eq!(updated["bio"], "Oi!\nTudo bem?");
+    // Omitted fields stay as they are.
+    let partial = call(
+        &app,
+        "PATCH",
+        "/me",
+        Some(&guest),
+        Some(json!({ "pronouns": "" })),
+    )
+    .await
+    .1;
+    assert_eq!(
+        (&partial["name"], &partial["banner"]),
+        (&updated["name"], &json!("green"))
+    );
+
+    // Members of shared servers and the user's own devices hear about it.
+    assert_eq!(event(&mut owner_ws, "user.updated").await["user"], updated);
+    assert_eq!(event(&mut guest_ws, "user.updated").await["user"], updated);
+    loop {
+        let state = event(&mut owner_ws, "voice.participants").await;
+        if state["participants"][0]["user"]["name"] == "Nova Convidada" {
+            break;
+        }
+    }
+    // Messages carry the current name.
+    let page = call(&app, "GET", &messages, Some(&owner), None).await.1;
+    assert_eq!(page["messages"][0]["author"]["name"], "Nova Convidada");
+
+    // Search: channels, people and messages from the user's servers only.
+    let found = call(
+        &app,
+        "GET",
+        &format!("/search?q=reuni%C3%A3o%20{tag}"),
+        Some(&owner),
+        None,
+    )
+    .await;
+    assert_eq!(found.0, StatusCode::OK, "{}", found.1);
+    let hits = found.1["messages"].as_array().unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0]["content"], format!("Outra reunião {tag}"));
+    assert_eq!(hits[0]["channelId"], text["id"]);
+    assert_eq!(hits[0]["serverId"], server_id.as_str());
+    assert_eq!(hits[0]["author"]["name"], "Nova Convidada");
+    assert!(found.1["nextCursor"].is_null());
+    // Prefixes match while typing.
+    let prefix = call(
+        &app,
+        "GET",
+        &format!("/search?q=reun%20{}", &tag[..5]),
+        Some(&owner),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(prefix["messages"].as_array().unwrap().len(), 2);
+    let named = call(&app, "GET", &format!("/search?q={tag}"), Some(&owner), None)
+        .await
+        .1;
+    let names: Vec<_> = named["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].clone())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            // Earlier matches in the name rank first.
+            json!(format!("sala-{tag}")),
+            json!(format!("anuncios-{tag}"))
+        ]
+    );
+    assert_eq!(named["channels"][0]["serverName"], format!("Busca {tag}"));
+    let people = call(&app, "GET", "/search?q=nova%20conv", Some(&owner), None)
+        .await
+        .1;
+    assert!(people["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == guest_id.as_str()));
+    let strangers = call(
+        &app,
+        "GET",
+        &format!("/search?q=Estranha{tag}"),
+        Some(&owner),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(strangers["people"], json!([]));
+    let hidden = call(
+        &app,
+        "GET",
+        &format!("/search?q={tag}"),
+        Some(&outsider),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(
+        (&hidden["channels"], &hidden["messages"], &hidden["people"]),
+        (&json!([]), &json!([]), &json!([]))
+    );
+    // Paging returns only older messages, without channels or people.
+    let older = call(
+        &app,
+        "GET",
+        &format!("/search?q={tag}&before={}", hits[0]["id"].as_str().unwrap()),
+        Some(&owner),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(older["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(older["channels"], json!([]));
+    for query in ["", "%20%20", &"a".repeat(101)] {
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                &format!("/search?q={query}"),
+                Some(&owner),
+                None
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    // Wildcards are matched literally.
+    assert_eq!(
+        call(&app, "GET", "/search?q=%25", Some(&owner), None)
+            .await
+            .1["channels"],
+        json!([])
+    );
+
+    // Outsiders share no server: they get no profile update.
+    let nothing = tokio::time::timeout(std::time::Duration::from_millis(300), async {
+        loop {
+            if let Some(Ok(Message::Text(text))) = outsider_ws.next().await {
+                if text.contains("user.updated") {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(nothing.is_err());
+
+    live.abort();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM servers WHERE id = $1",
+        [Uuid::parse_str(&server_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    for id in [owner_id, guest_id, outsider_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM users WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+}

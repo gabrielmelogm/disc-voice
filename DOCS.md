@@ -75,6 +75,8 @@ Sem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localho
 - `GET /api/channels/:id/messages?before=<id>&limit=50`: histórico anterior. Para recuperar mensagens novas, use `after=<id>`, sem `before`. Limite máximo: 100.
 - `POST /api/channels/:id/messages`: `{ "clientId": "<uuid>", "content": "Olá!" }`. De 1 a 4000 caracteres; repetir o mesmo envio retorna a mesma mensagem.
 - `GET /api/voice/config`: configuração ICE autorizada para a sessão.
+- `PATCH /api/me`: `{ "name": "Ana", "pronouns": "ela/dela", "bio": "Sobre mim", "banner": "brand" }`. Todos os campos são opcionais; só os enviados mudam. Nome de 1 a 32 caracteres (mesma regra do cadastro), pronomes até 40, “Sobre mim” até 190 (aceita quebras de linha) e `banner` entre `brand`, `green`, `amber`, `red` e `graphite`. A mudança é enviada como `user.updated` pelo tempo real para os membros dos mesmos servidores e para os outros dispositivos da conta; as salas de voz recebem um novo `voice.participants` com o nome atualizado.
+- `GET /api/search?q=<texto>&before=<id>`: busca global (Ctrl+K). Retorna `channels` (canais e salas pelo nome), `people` (pessoas que compartilham algum servidor com você) e `messages` (conteúdo, com índice de texto completo `messages_search` e busca por prefixo), sempre restritos aos servidores de que você participa. As mensagens vêm da mais nova para a mais antiga, 20 por página; passe `nextCursor` como `before` para a próxima página (que traz só mensagens). `q` deve ter de 1 a 100 caracteres.
 
 Todos exigem sessão; operações nos canais exigem associação ao servidor e o tipo correto de canal.
 
@@ -85,6 +87,16 @@ Para parar os serviços mantendo os dados:
 ```powershell
 npm run services:down
 ```
+
+### Temas personalizados
+
+Em **Configurações → Temas** é possível importar um tema por arquivo `.json` (arrastando ou escolhendo o arquivo, até 200 KB) ou por um link público `https://` (o servidor precisa permitir CORS, como o GitHub raw ou um Gist). Formato:
+
+```json
+{ "name": "Aurora", "author": "Gabi Nunes", "base": "dark", "colors": { "brand": "#1fb5a3", "surface": "#0f1d24" } }
+```
+
+`base` é `light` ou `dark`; as cores usam os nomes dos tokens do design system (lista em `apps/desktop/src/lib/theme.ts`, que deve acompanhar `styles.css`) no formato `#rrggbb` ou `#rgb`. O que faltar vem da base. Campos, nomes de cor ou valores desconhecidos rejeitam o arquivo sem mudar o tema atual. Cores de texto abaixo de 4,5:1 de contraste com seus fundos são ajustadas na importação, e a tela informa quais foram. Os temas e a escolha ficam no `localStorage` e valem após reiniciar o app.
 
 ### Desenvolvimento da API
 

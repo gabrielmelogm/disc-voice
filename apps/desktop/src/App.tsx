@@ -66,5 +66,5 @@ export function App() {
     // Keep the pending invite so it is offered again to the next account.
     void logout().catch(() => { sessionToken.clear(); setUser(null); });
   }} />;
-  return <ServerWorkspace key={user.id} user={user} joinedServer={joined} onLogout={logout} />;
+  return <ServerWorkspace key={user.id} user={user} joinedServer={joined} onLogout={logout} onUserChange={setUser} />;
 }
