@@ -38,7 +38,7 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
     <ul className="voice-members" aria-label="Participantes do canal de voz">
       {participants.map(participant => <li key={participant.peerId} className={state.speaking.includes(participant.peerId) ? "speaking" : ""}>
         {participant.muted ? <MicOff size={18} /> : <Mic size={18} />}
-        <span>{participant.user.email}</span>
+        <span title={participant.user.email}>{participant.user.name}</span>
         {participant.deafened && <VolumeX size={16} aria-label="Áudio desativado" />}
         {state.speaking.includes(participant.peerId) && <small>Falando</small>}
       </li>)}

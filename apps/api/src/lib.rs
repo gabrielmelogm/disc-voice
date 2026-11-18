@@ -150,6 +150,7 @@ impl IntoResponse for ApiError {
 pub struct UserView {
     pub id: Uuid,
     pub email: String,
+    pub name: String,
 }
 
 impl From<user::Model> for UserView {
@@ -157,6 +158,7 @@ impl From<user::Model> for UserView {
         Self {
             id: user.id,
             email: user.email,
+            name: user.name,
         }
     }
 }
@@ -188,6 +190,22 @@ fn credentials(input: &Credentials) -> ApiResult<String> {
     Ok(email)
 }
 
+#[derive(Deserialize)]
+struct Registration {
+    #[serde(flatten)]
+    credentials: Credentials,
+    #[serde(default)]
+    name: String,
+}
+
+fn user_name(name: &str) -> ApiResult<String> {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() || name.chars().count() > 32 || name.chars().any(char::is_control) {
+        return Err(ApiError::bad("O nome deve ter entre 1 e 32 caracteres."));
+    }
+    Ok(name)
+}
+
 fn token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
@@ -212,9 +230,13 @@ async fn new_session(db: &DatabaseConnection, user: UserView) -> ApiResult<Json<
 
 async fn register(
     State(state): State<AppState>,
-    Json(input): Json<Credentials>,
+    Json(Registration {
+        credentials: input,
+        name,
+    }): Json<Registration>,
 ) -> ApiResult<Json<AuthView>> {
     let email = credentials(&input)?;
+    let name = user_name(&name)?;
     let permit = state
         .password_jobs
         .clone()
@@ -237,6 +259,7 @@ async fn register(
     let user = user::ActiveModel {
         id: Set(Uuid::new_v4()),
         email: Set(email),
+        name: Set(name),
         password_hash: Set(password_hash),
         created_at: Set(Utc::now()),
     }

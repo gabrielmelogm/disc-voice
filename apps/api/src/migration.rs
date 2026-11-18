@@ -5,7 +5,41 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Initial), Box::new(Chat)]
+        vec![Box::new(Initial), Box::new(Chat), Box::new(UserName)]
+    }
+}
+
+struct UserName;
+
+impl MigrationName for UserName {
+    fn name(&self) -> &str {
+        "m20261117_000003_user_name"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for UserName {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE users ADD COLUMN name varchar(32);
+            UPDATE users SET name = left(split_part(email, '@', 1), 32);
+            ALTER TABLE users ALTER COLUMN name SET NOT NULL,
+                ADD CONSTRAINT users_name_not_blank CHECK (length(trim(name)) > 0);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE users DROP COLUMN name;")
+            .await?;
+        Ok(())
     }
 }
 
