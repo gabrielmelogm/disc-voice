@@ -109,8 +109,8 @@ input[type="range"] { display: block; width: 100%; margin: 14px 0 20px; height: 
 .camera-card { min-width: 0; }
 .camera-card .card-heading { margin-bottom: 18px; }
 .video-stage { width: 100%; background: var(--background); border-radius: 9px; aspect-ratio: 4 / 3; min-height: 250px; position: relative; overflow: hidden; display: grid; place-items: center; }
-.video-stage video { display: none; width: 100%; height: 100%; position: absolute; object-fit: contain; }
-.video-stage.is-live video { display: block; }
+.video-stage video, .video-stage canvas { display: none; width: 100%; height: 100%; position: absolute; object-fit: contain; }
+.video-stage.is-live video, .video-stage.is-live canvas { display: block; }
 .mirrored { transform: scaleX(-1); }
 .camera-placeholder { display: flex; align-items: center; flex-direction: column; gap: 20px; padding: 24px; text-align: center; }
 .camera-avatar { width: 76px; height: 76px; display: grid; place-items: center; border-radius: 50%; background: var(--purple); color: var(--white); font-size: 32px; font-weight: 700; }

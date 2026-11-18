@@ -1,25 +1,14 @@
-//! WebKitGTK setup for webcam and voice calls. WebView2 enables media capture and shows
-//! its own permission prompt on Windows; WebKitGTK ships with capture off and
-//! silently denies any permission request no handler answers.
+//! WebKitGTK setup for voice calls. WebView2 enables media capture and shows
+//! its own permission prompt on Windows; WebKitGTK ships with capture and
+//! WebRTC off and silently denies any permission request no handler answers.
+//! The webcam is captured natively (disc-video), so only the microphone is
+//! granted to the page.
 
 use tauri::{Manager, Runtime};
 use webkit2gtk::{
     glib::object::Cast, PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
     UserMediaPermissionRequestExt, WebViewExt,
 };
-
-/// Must run at the very start of `main`, before any thread exists and before
-/// WebKit spawns its processes, which inherit this environment.
-pub fn prepare_environment() {
-    // WebKit's GL video sink crashes the web process (SIGSEGV in GStreamer's
-    // glupload DMA-BUF path) on PipeWire camera frames, so the preview froze
-    // and flickered while the page process kept restarting. The non-GL sink
-    // copies frames through system memory, which is cheap for a webcam.
-    // An explicit value set by the user still wins.
-    if std::env::var_os("WEBKIT_GST_DISABLE_GL_SINK").is_none() {
-        std::env::set_var("WEBKIT_GST_DISABLE_GL_SINK", "1");
-    }
-}
 
 pub fn enable_media<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     for window in app.webview_windows().values() {
@@ -44,7 +33,7 @@ pub fn enable_media<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
                             && url.host_str() == Some("127.0.0.1")
                             && url.port() == Some(1420))
                     });
-                if trusted && (media.is_for_video_device() || media.is_for_audio_device()) {
+                if trusted && media.is_for_audio_device() && !media.is_for_video_device() {
                     request.allow();
                 } else {
                     request.deny();

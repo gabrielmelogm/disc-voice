@@ -6,6 +6,7 @@ import {
 import { MAX_RECORDING_SECONDS, type AudioDevice } from "@disc-voice/shared";
 import { useAudio } from "./hooks/useAudio";
 import { useCamera } from "./hooks/useCamera";
+import { NativeCameraPreview } from "./components/NativeCameraPreview";
 
 function DeviceSelect({ id, label, devices, value, onChange, disabled }: {
   id: string;
@@ -32,7 +33,7 @@ function DeviceSelect({ id, label, devices, value, onChange, disabled }: {
 
 function CameraPreview({ stream, onError, mirrored }: {
   stream: MediaStream | null;
-  onError: () => void;
+  onError: (message?: string) => void;
   mirrored: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -59,7 +60,7 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
   const [helpOpen, setHelpOpen] = useState(false);
   const inputActive = audio.status.inputActive;
   const outputActive = audio.status.outputActive;
-  const active = inputActive || outputActive || !!camera.stream || camera.busy;
+  const active = inputActive || outputActive || camera.live || camera.busy;
   const audioLocked = audio.busy || audio.refreshing || inCall;
   const level = Math.min(100, Math.max(0, Math.round(audio.status.peak * 100)));
   const db = audio.status.peak > 0 ? Math.max(-60, Math.round(20 * Math.log10(audio.status.peak))) : -60;
@@ -87,7 +88,7 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
               <div className="device-fields">
                 <DeviceSelect id="microphone" label="Dispositivo de entrada" devices={audio.devices.inputs} value={audio.inputId} onChange={audio.setInputId} disabled={audioLocked || inputActive} />
                 <DeviceSelect id="output" label="Dispositivo de saída" devices={audio.devices.outputs} value={audio.outputId} onChange={audio.setOutputId} disabled={audioLocked || outputActive} />
-                <div className="field"><label htmlFor="camera">Câmera</label><select id="camera" value={camera.deviceId} disabled={camera.busy || !!camera.stream} onChange={(e) => camera.setDeviceId(e.target.value)}>
+                <div className="field"><label htmlFor="camera">Câmera</label><select id="camera" value={camera.deviceId} disabled={camera.busy || camera.live} onChange={(e) => camera.setDeviceId(e.target.value)}>
                   {(!camera.devices.length || !camera.devices.some((d) => d.deviceId === camera.deviceId)) && <option value="">Câmera padrão</option>}
                   {camera.devices.map((device, index) => <option key={device.deviceId || index} value={device.deviceId}>{device.label || `Webcam ${index + 1} · Permissão necessária`}</option>)}
                 </select></div>
@@ -119,17 +120,19 @@ export function DeviceSettings({ inCall = false, callDevices }: { inCall?: boole
               </section>
             </div>
 
-            <section className={`card camera-card ${camera.stream ? "card-active" : ""}`} aria-labelledby="camera-title">
-              <div className="card-heading"><h2 id="camera-title">Pré-visualização da câmera</h2>{camera.stream && <span className="badge live">Ao vivo</span>}</div>
-              <div className={`video-stage ${camera.stream ? "is-live" : ""}`}>
-                <CameraPreview stream={camera.stream} onError={camera.previewFailed} mirrored={mirrored} />
-                {!camera.stream && <div className="camera-placeholder"><div className="camera-avatar" aria-hidden="true">V</div><p>{camera.busy ? "Aceite a solicitação de acesso à webcam." : "Sua câmera aparece aqui"}</p>{camera.busy && <span role="status">Aguardando a câmera…</span>}</div>}
-                {camera.stream && <><span className="live-label"><span className="dot red" />AO VIVO</span><span className="video-resolution">{camera.settings.width} × {camera.settings.height}</span></>}
+            <section className={`card camera-card ${camera.live ? "card-active" : ""}`} aria-labelledby="camera-title">
+              <div className="card-heading"><h2 id="camera-title">Pré-visualização da câmera</h2>{camera.live && <span className="badge live">Ao vivo</span>}</div>
+              <div className={`video-stage ${camera.live ? "is-live" : ""}`}>
+                {camera.native
+                  ? <NativeCameraPreview active={camera.live} onError={camera.previewFailed} mirrored={mirrored} />
+                  : <CameraPreview stream={camera.stream} onError={camera.previewFailed} mirrored={mirrored} />}
+                {!camera.live && <div className="camera-placeholder"><div className="camera-avatar" aria-hidden="true">V</div><p>{camera.busy ? "Aceite a solicitação de acesso à webcam." : "Sua câmera aparece aqui"}</p>{camera.busy && <span role="status">Aguardando a câmera…</span>}</div>}
+                {camera.live && <><span className="live-label"><span className="dot red" />AO VIVO</span><span className="video-resolution">{camera.settings.width} × {camera.settings.height}</span></>}
               </div>
               {camera.error && <p className="inline-error" role="alert">{camera.error}</p>}
-              <div className="camera-options"><label className="checkbox-label"><input type="checkbox" checked={mirrored} onChange={(e) => setMirrored(e.target.checked)} />Espelhar prévia</label><span>{camera.stream && camera.settings.frameRate ? `${Math.round(camera.settings.frameRate)} fps` : "HD preferencial"}</span></div>
-              <button className={`button ${camera.stream || camera.busy ? "stop-button" : "primary"}`} onClick={() => camera.stream || camera.busy ? camera.stop() : void camera.start()}>
-                {camera.stream || camera.busy ? <Square size={15} /> : <Camera size={17} />}{camera.busy ? "Cancelar teste" : camera.stream ? "Desligar webcam" : "Testar webcam"}
+              <div className="camera-options"><label className="checkbox-label"><input type="checkbox" checked={mirrored} onChange={(e) => setMirrored(e.target.checked)} />Espelhar prévia</label><span>{camera.live && camera.settings.frameRate ? `${Math.round(camera.settings.frameRate)} fps` : "HD preferencial"}</span></div>
+              <button className={`button ${camera.live || camera.busy ? "stop-button" : "primary"}`} onClick={() => camera.live || camera.busy ? camera.stop() : void camera.start()}>
+                {camera.live || camera.busy ? <Square size={15} /> : <Camera size={17} />}{camera.busy ? "Cancelar teste" : camera.live ? "Desligar webcam" : "Testar webcam"}
               </button>
               <p className="card-footnote">A câmera só é ativada quando você inicia o teste.</p>
             </section>

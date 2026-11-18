@@ -125,14 +125,16 @@ No WSL, use `npm run dev:web` para visualizar a interface no navegador. No Linux
 
 ### Executar no Linux
 
-O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. Instale as bibliotecas de desenvolvimento do Tauri e do PulseAudio:
+O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. A webcam também é capturada pelo motor nativo, pelo portal de câmera (`xdg-desktop-portal`) e PipeWire via GStreamer: a captura do próprio WebKitGTK corrompe os quadros do PipeWire. Instale as bibliotecas de desenvolvimento do Tauri, do PulseAudio e do GStreamer:
 
 ```bash
 # Fedora (em sistemas imutáveis, como Silverblue/Kinoite, dentro de um toolbox/distrobox)
-sudo dnf install -y pulseaudio-libs-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel librsvg2-devel
+sudo dnf install -y pulseaudio-libs-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel librsvg2-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good pipewire-gstreamer
 
 # Debian/Ubuntu
-sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev build-essential pkg-config
+sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev build-essential pkg-config \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire
 ```
 
 Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
@@ -143,6 +145,12 @@ Os testes do backend PulseAudio usam um *null sink*, sem tocar alto-falantes nem
 pactl load-module module-null-sink sink_name=disc_voice_test
 cargo test -p disc-audio -- --ignored pulse
 pactl unload-module module-null-sink
+```
+
+O teste da webcam usa a câmera real pelo portal e descarta os quadros (nada é gravado nem exibido):
+
+```bash
+cargo test -p disc-video -- --ignored
 ```
 
 ### Se a API não conectar ao PostgreSQL

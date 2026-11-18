@@ -2,13 +2,13 @@
 
 #[cfg(any(windows, target_os = "linux"))]
 mod app;
+#[cfg(any(windows, target_os = "linux"))]
+mod camera;
 #[cfg(target_os = "linux")]
 mod linux;
 
 #[cfg(any(windows, target_os = "linux"))]
 fn main() {
-    #[cfg(target_os = "linux")]
-    linux::prepare_environment();
     app::run();
 }
 
