@@ -1,7 +1,9 @@
 mod entities;
 mod messages;
 pub mod migration;
+mod profile;
 mod realtime;
+mod search;
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -50,7 +52,8 @@ impl AppState {
 pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     let ws_origins = Arc::new(origins.clone());
     let protected = Router::new()
-        .route("/me", get(me))
+        .route("/me", get(me).patch(profile::update))
+        .route("/search", get(search::search))
         .route("/auth/logout", post(logout))
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}/invite", get(server_invite))
@@ -92,13 +95,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
-                .allow_methods([Method::GET, Method::POST])
+                .allow_methods([Method::GET, Method::POST, Method::PATCH])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
+#[derive(Debug)]
 struct ApiError(StatusCode, String);
 type ApiResult<T> = Result<T, ApiError>;
 
@@ -151,6 +155,9 @@ pub struct UserView {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub pronouns: String,
+    pub bio: String,
+    pub banner: String,
 }
 
 impl From<user::Model> for UserView {
@@ -159,6 +166,9 @@ impl From<user::Model> for UserView {
             id: user.id,
             email: user.email,
             name: user.name,
+            pronouns: user.pronouns,
+            bio: user.bio,
+            banner: user.banner,
         }
     }
 }
@@ -260,6 +270,9 @@ async fn register(
         id: Set(Uuid::new_v4()),
         email: Set(email),
         name: Set(name),
+        pronouns: Set(String::new()),
+        bio: Set(String::new()),
+        banner: Set(profile::DEFAULT_BANNER.into()),
         password_hash: Set(password_hash),
         created_at: Set(Utc::now()),
     }

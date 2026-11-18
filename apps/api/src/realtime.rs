@@ -105,6 +105,36 @@ impl Hub {
         self.emit(Self::audience(&clients, server), payload, false);
     }
 
+    /// Refreshes the profile kept by the user's live connections and tells
+    /// everyone who can see them (the same servers, or their own devices).
+    pub(crate) fn profile_updated(&self, user: &UserView, servers: &[Uuid]) {
+        let mut clients = self.clients.lock().unwrap();
+        let mut rooms = Vec::new();
+        for client in clients.values_mut().filter(|c| c.user.id == user.id) {
+            client.user = user.clone();
+            rooms.extend(client.voice.clone());
+        }
+        let recipients = clients
+            .iter()
+            .filter(|(_, c)| {
+                c.user.id == user.id
+                    || c.watching.is_some_and(|s| servers.contains(&s))
+                    || c.voice
+                        .as_ref()
+                        .is_some_and(|v| servers.contains(&v.server))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        self.emit(
+            recipients,
+            json!({ "type": "user.updated", "user": user }),
+            false,
+        );
+        for voice in rooms {
+            self.changed(&clients, &voice);
+        }
+    }
+
     pub(crate) fn revoke(&self, hash: &str) {
         let mut clients = self.clients.lock().unwrap();
         let ids: Vec<_> = clients
@@ -469,6 +499,9 @@ mod tests {
                     id: user,
                     email: "voice@example.com".into(),
                     name: "Voz".into(),
+                    pronouns: String::new(),
+                    bio: String::new(),
+                    banner: "brand".into(),
                 },
                 session: id.to_string(),
                 watching: None,

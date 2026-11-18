@@ -40,4 +40,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p disc-api --all-targets --locked -- -D warnings
-      - run: cargo test -p disc-api --locked --test api -- --ignored
+      - run: cargo test -p disc-api --locked --test api -- --ignored --test-threads=1

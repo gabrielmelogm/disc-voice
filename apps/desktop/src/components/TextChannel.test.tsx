@@ -52,4 +52,26 @@ describe("text chat", () => {
     expect(screen.getAllByText("Ao vivo")).toHaveLength(1);
     expect([...screen.getByRole("log").querySelectorAll("article p")].map(p => p.textContent)).toEqual(["Primeira", "Perdida", "Ao vivo"]);
   });
+
+  it("shows the current author name after a profile update", async () => {
+    vi.spyOn(api, "messages").mockResolvedValue({ messages: [chat("1", "Oi")], hasMore: false });
+    const live = realtime();
+    render(<TextChannel channel={channel} realtime={live.client} revision={1} />);
+    await screen.findByText("Oi");
+    live.emit({ type: "user.updated", user: { ...author, name: "Amiga Nova" } });
+    expect(screen.getByRole("button", { name: "Amiga Nova" })).toBeVisible();
+    expect(screen.queryByText("Amigo")).not.toBeInTheDocument();
+  });
+
+  it("opens at a focused message and catches up to the latest ones", async () => {
+    const history = vi.spyOn(api, "messages")
+      .mockResolvedValueOnce({ messages: [chat("4", "Antes"), chat("5", "Procurada")], hasMore: true })
+      .mockResolvedValueOnce({ messages: [chat("6", "Depois")], hasMore: false });
+    render(<TextChannel channel={channel} realtime={realtime().client} revision={1} focusId="5" />);
+    await screen.findByText("Depois");
+    expect(history.mock.calls[0][1]).toEqual({ before: "6" });
+    expect(history.mock.calls[1][1]).toEqual({ after: "5" });
+    expect(screen.getByText("Procurada").closest("article")).toHaveClass("is-focused");
+    expect(screen.getByRole("button", { name: "Carregar mensagens anteriores" })).toBeVisible();
+  });
 });

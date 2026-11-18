@@ -4,6 +4,7 @@ import { MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
+import { ProfileButton } from "./ProfileCard";
 import { Avatar } from "./ui";
 
 const GROUP_WINDOW = 7 * 60_000;
@@ -16,7 +17,8 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
 
 interface Pending { clientId: string; content: string; error: string; sending: boolean }
 
-export function TextChannel({ channel, realtime, revision, self }: { channel: Channel; realtime: Realtime; revision: number; self?: User }) {
+/** `focusId`: open the history at this message and highlight it. */
+export function TextChannel({ channel, realtime, revision, self, focusId }: { channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
   const [content, setContent] = useState("");
@@ -31,6 +33,8 @@ export function TextChannel({ channel, realtime, revision, self }: { channel: Ch
   const preserve = useRef<{ height: number; top: number } | null>(null);
   const olderRequest = useRef<AbortController | null>(null);
   const inFlight = useRef(new Set<string>());
+  // Scroll to the focused message once it is rendered.
+  const scrollToFocus = useRef(!!focusId);
 
   const accept = (incoming: ChatMessage[]) => {
     setMessages(current => mergeMessages(current, incoming));
@@ -40,6 +44,11 @@ export function TextChannel({ channel, realtime, revision, self }: { channel: Ch
 
   useEffect(() => realtime.onEvent(event => {
     if (event.type === "message.created" && event.message.channelId === channel.id) accept([event.message]);
+    // Existing messages show the author's current name.
+    if (event.type === "user.updated") {
+      setMessages(current => current.some(item => item.author.id === event.user.id)
+        ? current.map(item => item.author.id === event.user.id ? { ...item, author: event.user } : item) : current);
+    }
   }), [realtime, channel.id]);
 
   useEffect(() => {
@@ -49,16 +58,19 @@ export function TextChannel({ channel, realtime, revision, self }: { channel: Ch
     void (async () => {
       // The REST watermark is deliberately independent of live events. On
       // reconnect, replay from this point so a missed event cannot be skipped.
-      if (!cursor.current) {
-        const page = await api.messages(channel.id, {}, controller.signal);
+      const initial = !cursor.current;
+      if (initial) {
+        // A focused message opens the page that ends with it, then catches up below.
+        const page = await api.messages(channel.id, focusId ? { before: (BigInt(focusId) + 1n).toString() } : {}, controller.signal);
         if (controller.signal.aborted) return;
         accept(page.messages);
         setHasMore(page.hasMore);
         cursor.current = page.messages.at(-1)?.id || "0";
-      } else {
+      }
+      if (!initial || focusId) {
         let more = true;
         while (more && !controller.signal.aborted) {
-          const page = await api.messages(channel.id, { after: cursor.current }, controller.signal);
+          const page = await api.messages(channel.id, { after: cursor.current! }, controller.signal);
           if (controller.signal.aborted) return;
           accept(page.messages);
           cursor.current = page.messages.at(-1)?.id || cursor.current;
@@ -75,7 +87,12 @@ export function TextChannel({ channel, realtime, revision, self }: { channel: Ch
   useLayoutEffect(() => {
     const element = list.current;
     if (!element) return;
-    if (preserve.current) {
+    const focused = scrollToFocus.current ? element.querySelector<HTMLElement>(`[data-message-id="${focusId}"]`) : null;
+    if (focused) {
+      scrollToFocus.current = false;
+      pinBottom.current = false;
+      focused.scrollIntoView?.({ block: "center" });
+    } else if (preserve.current) {
       element.scrollTop = preserve.current.top + element.scrollHeight - preserve.current.height;
       preserve.current = null;
     } else if (pinBottom.current) {
@@ -136,10 +153,10 @@ export function TextChannel({ channel, realtime, revision, self }: { channel: Ch
           && new Date(item.createdAt).getTime() - new Date(previous.createdAt).getTime() < GROUP_WINDOW;
         return <Fragment key={item.id}>
           {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
-          <article className={`chat-message ${grouped ? "grouped" : ""}`}>
-            {grouped ? <span className="message-gutter" /> : <Avatar name={item.author.name} />}
+          <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
+            {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} /></ProfileButton>}
             <div className="message-body">
-              {!grouped && <div className="message-meta"><strong title={item.author.email}>{item.author.name}</strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
+              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
               <p>{item.content}</p>
             </div>
           </article>

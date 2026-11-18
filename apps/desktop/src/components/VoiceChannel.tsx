@@ -6,6 +6,7 @@ import {
 import type { Channel, VoiceParticipant } from "@disc-voice/shared";
 import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
+import { ProfileButton } from "./ProfileCard";
 import { Avatar, LiveTag, SoonTag } from "./ui";
 
 export const voiceLabels: Record<VoiceState["status"], string> = {
@@ -177,7 +178,7 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
     <span className="tile-name">
       {participant.muted && <MicOff size={14} aria-label="Microfone desligado" />}
       {participant.deafened && <VolumeX size={14} aria-label="Áudio desativado" />}
-      <span title={participant.user.email}>{participant.user.name}{self ? " (você)" : ""}</span>
+      <span><ProfileButton user={participant.user} />{self ? " (você)" : ""}</span>
     </span>
     {speaking && <span className="sr-only">Falando</span>}
   </li>;

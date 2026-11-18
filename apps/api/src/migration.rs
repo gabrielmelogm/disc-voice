@@ -5,7 +5,50 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Initial), Box::new(Chat), Box::new(UserName)]
+        vec![
+            Box::new(Initial),
+            Box::new(Chat),
+            Box::new(UserName),
+            Box::new(ProfileAndSearch),
+        ]
+    }
+}
+
+struct ProfileAndSearch;
+
+impl MigrationName for ProfileAndSearch {
+    fn name(&self) -> &str {
+        "m20261118_000004_profile_and_search"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for ProfileAndSearch {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE users
+                ADD COLUMN pronouns varchar(40) NOT NULL DEFAULT '',
+                ADD COLUMN bio varchar(190) NOT NULL DEFAULT '',
+                ADD COLUMN banner varchar(16) NOT NULL DEFAULT 'brand'
+                    CHECK (banner IN ('brand', 'green', 'amber', 'red', 'graphite'));
+            CREATE INDEX messages_search ON messages USING gin (to_tsvector('simple', content));
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "DROP INDEX messages_search; ALTER TABLE users DROP COLUMN pronouns, DROP COLUMN bio, DROP COLUMN banner;",
+            )
+            .await?;
+        Ok(())
     }
 }
 

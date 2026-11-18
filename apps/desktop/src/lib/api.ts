@@ -1,4 +1,4 @@
-import type { AuthSession, Channel, ChatMessage, Invite, MessagePage, Server, User } from "@disc-voice/shared";
+import type { AuthSession, Channel, ChatMessage, Invite, MessagePage, ProfileUpdate, SearchResults, Server, User } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
@@ -50,7 +50,7 @@ export function parseInvite(value: string): string {
 }
 
 async function request<T>(path: string, options: {
-  method?: "POST"; body?: unknown; signal?: AbortSignal; public?: boolean;
+  method?: "POST" | "PATCH"; body?: unknown; signal?: AbortSignal; public?: boolean;
 } = {}): Promise<T> {
   const token = options.public ? null : sessionToken.get();
   let response: Response;
@@ -84,6 +84,9 @@ export const api = {
   register: (name: string, email: string, password: string) => request<AuthSession>("/auth/register", { method: "POST", body: { name, email, password }, public: true }),
   login: (email: string, password: string) => request<AuthSession>("/auth/login", { method: "POST", body: { email, password }, public: true }),
   me: (signal?: AbortSignal) => request<User>("/me", { signal }),
+  updateProfile: (changes: ProfileUpdate) => request<User>("/me", { method: "PATCH", body: changes }),
+  search: (q: string, before?: string, signal?: AbortSignal) =>
+    request<SearchResults>(`/search?${new URLSearchParams(before ? { q, before } : { q })}`, { signal }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   servers: (signal?: AbortSignal) => request<Server[]>("/servers", { signal }),
   createServer: (name: string) => request<Invite>("/servers", { method: "POST", body: { name } }),
