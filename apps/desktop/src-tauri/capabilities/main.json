@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Permissões da janela principal do Disc Voice no Windows",
+  "description": "Permissões da janela principal do Disc Voice",
   "windows": ["main"],
-  "platforms": ["windows"],
-  "permissions": ["core:default"]
+  "platforms": ["windows", "linux"],
+  "permissions": ["core:default", "notification:default"]
 }

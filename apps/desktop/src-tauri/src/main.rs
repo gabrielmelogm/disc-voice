@@ -9,6 +9,8 @@ mod camera;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(any(windows, target_os = "linux"))]
+mod notify;
+#[cfg(any(windows, target_os = "linux"))]
 mod screen;
 
 #[cfg(any(windows, target_os = "linux"))]

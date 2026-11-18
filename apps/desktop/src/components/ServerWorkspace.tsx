@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react";
 import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
+import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
 import { useVoice } from "../hooks/useVoice";
 import { AppBar } from "./AppBar";
@@ -50,6 +51,13 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const channel = channels.find(c => c.id === channelId);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
   const voiceChannels = channels.filter(c => c.type === "voice");
+  useNotifications({
+    realtime: realtime.client,
+    user,
+    voiceState,
+    viewingChannelId: view === "server" && channel?.type === "text" ? channel.id : null,
+    channels,
+  });
 
   useEffect(() => realtime.client.onEvent(event => {
     if (event.type === "channel.created" && event.channel.serverId === selected) {

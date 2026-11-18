@@ -1,4 +1,4 @@
-use crate::{call, camera, screen};
+use crate::{call, camera, notify, screen};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
 
@@ -31,12 +31,14 @@ async fn audio_action(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let engine = AudioEngine::new().map_err(std::io::Error::other)?;
             app.manage(engine);
             camera::manage(app).map_err(std::io::Error::other)?;
             screen::manage(app).map_err(std::io::Error::other)?;
             call::manage(app).map_err(std::io::Error::other)?;
+            notify::manage(app);
             #[cfg(target_os = "linux")]
             crate::linux::enable_media(app)?;
             Ok(())
@@ -78,6 +80,7 @@ pub fn run() {
             call::native::call_camera_start,
             call::native::call_camera_stop,
             call::native::call_video_frame,
+            notify::show_notification,
         ])
         .run(tauri::generate_context!())
         .expect("Não foi possível iniciar o Disc Voice");
