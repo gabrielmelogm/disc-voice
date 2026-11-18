@@ -33,7 +33,7 @@ Selecione um canal de voz e clique em **Entrar no canal de voz**. Autorize o mic
 
 A chamada continua enquanto você navega nos canais de texto, servidores e configurações. Cada conta participa de uma chamada por vez: entrar por outra aba/dispositivo substitui a participação anterior. Logout, fechamento e expiração de sessão encerram a participação. Ao perder a sinalização, o cliente libera os dispositivos e tenta entrar novamente após reconectar. O botão de sair cancela essa tentativa.
 
-Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saída WebRTC. Essas preferências são salvas localmente. A saída usa `setSinkId` quando suportado; nos demais ambientes, usa a saída padrão do sistema. Os IDs do navegador são diferentes dos IDs CPAL/PulseAudio dos testes locais, por isso as seleções são explícitas. Os testes locais de áudio ficam desabilitados durante chamadas.
+Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saída WebRTC. Essas preferências são salvas localmente. A saída usa `setSinkId` quando suportado; nos demais ambientes, usa a saída padrão do sistema. Os IDs do navegador são diferentes dos IDs CPAL/PulseAudio dos testes locais, por isso as seleções são explícitas. No aplicativo Linux, as listas vêm do motor de chamadas e usam os nomes do PulseAudio; um dispositivo salvo que sumiu cai no padrão do sistema. Os testes locais de áudio ficam desabilitados durante chamadas.
 
 ### Arquitetura
 
@@ -41,7 +41,9 @@ Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saíd
 - Mensagens são gravadas no PostgreSQL antes da publicação. O cliente usa `clientId` para reenvio idempotente e cursores para recuperar lacunas após quedas.
 - O áudio trafega por **WebRTC em malha ponto a ponto**, com uma conexão por par de participantes. A API não transporta áudio. O padrão é **8 participantes por canal**, configurável em `VOICE_CHANNEL_CAPACITY` (2–32); consumo de upload e CPU cresce com o tamanho do grupo.
 - A presença é efêmera e mantida na memória de **uma instância da API**. Ao reiniciar, clientes reconectam e sincronizam os canais. Executar múltiplas réplicas exige uma camada compartilhada de presença/sinalização.
-- O cliente utiliza microfone WebRTC no navegador e no WebView do Tauri. No Linux, o WebKitGTK precisa de suporte WebRTC/GStreamer instalado; o aplicativo habilita captura para sua interface local.
+- No navegador e no Windows (WebView2), a chamada usa o WebRTC da própria página.
+- No Linux, o WebKitGTK das distribuições vem compilado **sem WebRTC** (há `getUserMedia`, mas não `RTCPeerConnection`), então a chamada roda no motor nativo `packages/call-engine` (`disc-call`): webrtc-rs com uma conexão por participante, microfone e saída pelo PulseAudio/PipeWire, voz em Opus e telas em H.264 (OpenH264, compilado junto). A interface só repassa a sinalização (as mesmas mensagens `voice.signal`) e desenha as telas recebidas como quadros JPEG. Por isso, clientes Linux, Windows e navegador conversam entre si.
+- O motor nativo ainda não tem cancelamento de eco nem supressão de ruído (o navegador tem): no Linux, prefira fones de ouvido. Para receber a tela de um cliente Linux, o navegador precisa decodificar H.264 (Chrome, Edge e o WebView2 decodificam; Chromium de algumas distribuições e Firefox sem o OpenH264 não).
 
 ### STUN e TURN
 
@@ -125,19 +127,19 @@ No WSL, use `npm run dev:web` para visualizar a interface no navegador. No Linux
 
 ### Executar no Linux
 
-O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. A webcam também é capturada pelo motor nativo, pelo portal de câmera (`xdg-desktop-portal`) e PipeWire via GStreamer: a captura do próprio WebKitGTK corrompe os quadros do PipeWire. Instale as bibliotecas de desenvolvimento do Tauri, do PulseAudio e do GStreamer:
+O áudio nativo usa a API do PulseAudio, atendida pelo PipeWire (`pipewire-pulse`) nas distribuições atuais. A webcam também é capturada pelo motor nativo, pelo portal de câmera (`xdg-desktop-portal`) e PipeWire via GStreamer: a captura do próprio WebKitGTK corrompe os quadros do PipeWire. O teste de compartilhamento de tela segue o mesmo caminho, pelo portal ScreenCast, que abre o seletor de telas e janelas do próprio desktop (GNOME, KDE, wlroots). Instale as bibliotecas de desenvolvimento do Tauri, do PulseAudio e do GStreamer:
 
 ```bash
 # Fedora (em sistemas imutáveis, como Silverblue/Kinoite, dentro de um toolbox/distrobox)
 sudo dnf install -y pulseaudio-libs-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel librsvg2-devel \
-  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good pipewire-gstreamer
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good pipewire-gstreamer cmake gcc-c++
 
 # Debian/Ubuntu
 sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev build-essential pkg-config \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire cmake
 ```
 
-Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
+O `cmake` e o compilador C++ compilam o Opus e o OpenH264 usados pelo motor de chamadas. Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
 
 Os testes do backend PulseAudio usam um *null sink*, sem tocar alto-falantes nem microfone:
 
@@ -150,8 +152,18 @@ pactl unload-module module-null-sink
 O teste da webcam usa a câmera real pelo portal e descarta os quadros (nada é gravado nem exibido):
 
 ```bash
-cargo test -p disc-video -- --ignored
+cargo test -p disc-video -- --ignored pipewire::
 ```
+
+A captura de tela pode ser validada sem o app. O teste abaixo lê um nó de vídeo PipeWire local pelo mesmo pipeline do app (redimensionamento, limite de quadros e JPEG). Crie o nó em um terminal e passe o ID dele (veja com `pw-dump`) em outro:
+
+```bash
+gst-launch-1.0 videotestsrc is-live=true ! video/x-raw,format=BGRx,width=2560,height=1440,framerate=60/1 \
+  ! pipewiresink mode=provide stream-properties="props,node.name=discvoice-test,media.class=Video/Source"
+DISCVOICE_TEST_NODE=<id> DISCVOICE_TEST_FPS=30 cargo test -p disc-video -- --ignored scales_and_throttles
+```
+
+Para passar pelo portal de verdade, `cargo run -p disc-video --example screen_probe 20` abre o seletor do sistema, informa o que foi compartilhado e quantos quadros chegaram, e encerra depois de 20 s (fechando o seletor se ele ainda estiver aberto).
 
 ### Se a API não conectar ao PostgreSQL
 
@@ -205,13 +217,20 @@ npm run build:windows
 
 O `.exe` fica em `target/release/bundle/nsis/`. O instalador baixa o WebView2 caso necessário, portanto essa etapa precisa de internet se o runtime estiver ausente.
 
+### Compartilhamento de tela no Windows
+
+A tela é capturada pelo motor nativo (`packages/video-engine/src/wgc.rs`) com **Windows.Graphics.Capture**: o seletor do próprio Windows escolhe a tela ou janela, os quadros chegam como texturas Direct3D 11, são reduzidos e codificados em JPEG pelo WIC em uma thread separada. Requer Windows 10 versão 1903 ou mais recente; esconder o cursor exige a versão 2004 e remover a borda amarela de captura exige o Windows 11 (nas versões anteriores a borda continua aparecendo). O seletor não informa se foi escolhida uma tela ou uma janela, então a fonte aparece como “Fonte do sistema”.
+
+Sem o app, `cargo run -p disc-video --example screen_probe 20` abre o seletor a partir do terminal e informa quantos quadros chegaram. `cargo test -p disc-video -- --ignored captures_valid_jpeg_frames_from_the_primary_monitor` captura o monitor principal por 3 s sem passar pelo seletor (os quadros são descartados).
+
 ## Testes de dispositivos
 
 1. **Microfone:** selecione uma entrada e clique em **Testar microfone**. O medidor exibe o pico capturado e seu nível em dBFS. Fale por até 10 segundos; também é possível finalizar antes.
 2. **Saída:** selecione a saída física, ajuste o volume do teste e clique em **Tocar som**. Um tom suave de 440 Hz toca por 3 segundos em todos os canais da saída. **Ouvir gravação** reproduz o último trecho capturado nesse mesmo dispositivo.
 3. **Webcam:** selecione uma câmera e clique em **Testar webcam**. Aceite a permissão do WebView2. A prévia mostra resolução e taxa de quadros reportadas pela câmera, com opção de espelhamento.
-4. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
-5. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
+4. **Tela (Windows e Linux):** escolha a resolução máxima, a taxa de quadros e se o cursor aparece, clique em **Compartilhar tela** e selecione uma tela ou janela no seletor do sistema. A prévia mostra a fonte, o tamanho real dos quadros e os fps recebidos. Uma tela parada envia menos quadros. **Cancelar** fecha o seletor, e encerrar o compartilhamento pelo indicador do desktop também encerra o teste.
+5. **Atualizar dispositivos** refaz a enumeração. Eventos `devicechange` também atualizam as listas quando disponibilizados pelo WebView2. Desconexões durante a captura são tratadas.
+6. **Encerrar todos os testes** libera os dispositivos. Fechar o app também encerra os streams.
 
 A webcam não captura áudio. Antes da primeira permissão, o WebView2 pode ocultar nomes e câmeras; use a câmera padrão para autorizar e atualizar a lista. Se o acesso falhar, habilite câmera/microfone para **aplicativos da área de trabalho** em Configurações do Windows → Privacidade e segurança.
 
@@ -294,5 +313,14 @@ Abra `http://127.0.0.1:1420`. Essa prévia também funciona no Linux, mas o **á
 - Interromper a rede e confirmar reconexão, remoção de participantes inativos e liberação dos dispositivos.
 - Repetir em duas redes distintas; verificar uso do candidato `relay` nas estatísticas WebRTC quando TURN for necessário.
 - Repetir no Tauri empacotado para Windows e Linux, usando dispositivos reais.
+
+### Validação manual do compartilhamento de tela na chamada
+
+Na chamada, o botão de tela (ao lado do microfone) abre o seletor do sistema e envia a tela a todos os participantes como vídeo WebRTC nas mesmas conexões do áudio (até 1920 × 1080, 30 fps, ~2,5 Mbps por participante). Quem compartilha aparece com o ícone de tela na lista; as telas recebidas ficam acima dos participantes (clique em ampliar, ou duplo clique para tela cheia). O motor tem uma captura só: iniciar o teste das configurações encerra o compartilhamento da chamada e vice-versa.
+
+- Com duas contas (Windows ↔ Windows e Windows ↔ Linux) no mesmo canal, compartilhar uma tela e uma janela; o outro lado deve ver o vídeo e o ícone.
+- Cancelar o seletor; parar o compartilhamento; fechar a janela compartilhada (deve aparecer “O compartilhamento de tela foi encerrado.”).
+- Entrar no canal com a tela já sendo compartilhada: o novo participante deve recebê-la.
+- Sair do canal compartilhando: o indicador/borda do sistema deve sumir.
 
 Os testes automatizados não substituem essa verificação com drivers e hardware reais.

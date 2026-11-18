@@ -9,6 +9,6 @@ mod wasapi;
 
 pub use engine::*;
 #[cfg(target_os = "linux")]
-pub use pulse::PulseBackend;
+pub use pulse::{PulseBackend, PulseDevice};
 #[cfg(windows)]
 pub use wasapi::WasapiBackend;

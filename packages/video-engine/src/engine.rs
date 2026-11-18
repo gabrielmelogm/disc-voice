@@ -1,16 +1,14 @@
 use crate::backend::{Backend, BackendDevice, Frames};
 use crate::format::{self, Encoding, Mode};
+use crate::worker::{self, Reply};
 use serde::Serialize;
 use std::{
     sync::{
-        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
+        mpsc::{Receiver, RecvTimeoutError, Sender},
         Arc,
     },
-    thread,
     time::Duration,
 };
-
-type Reply<T> = SyncSender<Result<T, String>>;
 
 const NOT_FOUND: &str = "A câmera selecionada não está disponível. Atualize os dispositivos.";
 const NO_MODE: &str = "A câmera não oferece um formato de vídeo compatível.";
@@ -64,39 +62,17 @@ impl CameraEngine {
         B: Backend + 'static,
         F: FnOnce() -> Result<B, String> + Send + 'static,
     {
-        let (sender, receiver) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let frames = Arc::new(Frames::default());
         let worker_frames = frames.clone();
-        thread::Builder::new()
-            .name("disc-video".into())
-            .spawn(move || {
-                let mut worker = match make() {
-                    Ok(backend) => {
-                        let _ = ready_tx.send(Ok(()));
-                        Worker::new(backend, worker_frames)
-                    }
-                    Err(error) => {
-                        let _ = ready_tx.send(Err(error));
-                        return;
-                    }
-                };
-                worker.run(receiver);
-                // Dropping Worker closes the capture, including on window shutdown.
-            })
-            .map_err(|error| error.to_string())?;
-        ready_rx.recv().map_err(|error| error.to_string())??;
+        // Dropping Worker closes the capture, including on window shutdown.
+        let sender = worker::spawn("disc-video", make, move |backend, receiver| {
+            Worker::new(backend, worker_frames).run(receiver)
+        })?;
         Ok(Self { sender, frames })
     }
 
     fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T, String> {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        self.sender
-            .send(make(sender))
-            .map_err(|_| "O motor de vídeo foi encerrado. Reinicie o aplicativo.".to_string())?;
-        receiver.recv().map_err(|_| {
-            "O motor de vídeo parou de responder. Reinicie o aplicativo.".to_string()
-        })?
+        worker::call(&self.sender, make)
     }
 
     pub fn devices(&self) -> Result<Vec<CameraDevice>, String> {
@@ -276,6 +252,7 @@ mod tests {
         cell::RefCell,
         rc::Rc,
         sync::{mpsc, Mutex},
+        thread,
         time::Instant,
     };
 

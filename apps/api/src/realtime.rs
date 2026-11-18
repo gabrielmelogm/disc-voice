@@ -33,6 +33,8 @@ struct Voice {
     server: Uuid,
     muted: bool,
     deafened: bool,
+    /// Sharing the screen: the video arrives over the peer connections.
+    screen: bool,
 }
 
 pub(crate) struct Hub {
@@ -79,7 +81,7 @@ impl Hub {
     fn participants(clients: &HashMap<Uuid, Client>, channel: Uuid) -> Vec<Value> {
         let mut members: Vec<_> = clients.iter().filter_map(|(id, c)| {
             let voice = c.voice.as_ref().filter(|v| v.channel == channel)?;
-            Some(json!({ "peerId": id, "user": c.user, "muted": voice.muted, "deafened": voice.deafened }))
+            Some(json!({ "peerId": id, "user": c.user, "muted": voice.muted, "deafened": voice.deafened, "screen": voice.screen }))
         }).collect();
         members.sort_by_key(|m| m["peerId"].as_str().unwrap_or_default().to_owned());
         members
@@ -185,6 +187,7 @@ impl Hub {
             server: channel.server_id,
             muted,
             deafened,
+            screen: false,
         };
         clients.get_mut(&id).unwrap().voice = Some(voice.clone());
         self.direct(
@@ -209,11 +212,12 @@ impl Hub {
         }
     }
 
-    fn update(&self, id: Uuid, muted: bool, deafened: bool) {
+    fn update(&self, id: Uuid, muted: bool, deafened: bool, screen: bool) {
         let mut clients = self.clients.lock().unwrap();
         if let Some(voice) = clients.get_mut(&id).and_then(|c| c.voice.as_mut()) {
             voice.muted = muted;
             voice.deafened = deafened;
+            voice.screen = screen;
             let voice = voice.clone();
             self.changed(&clients, &voice);
         }
@@ -249,7 +253,13 @@ enum Command {
     #[serde(rename = "voice.leave")]
     Leave,
     #[serde(rename = "voice.state")]
-    VoiceState { muted: bool, deafened: bool },
+    VoiceState {
+        muted: bool,
+        deafened: bool,
+        /// Absent in clients without screen sharing.
+        #[serde(default)]
+        screen: bool,
+    },
     #[serde(rename = "voice.signal", rename_all = "camelCase")]
     Signal { peer_id: Uuid, data: Value },
 }
@@ -272,7 +282,11 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             state.realtime.join(id, channel, muted, deafened)?;
         }
         Command::Leave => state.realtime.leave(id),
-        Command::VoiceState { muted, deafened } => state.realtime.update(id, muted, deafened),
+        Command::VoiceState {
+            muted,
+            deafened,
+            screen,
+        } => state.realtime.update(id, muted, deafened, screen),
         Command::Signal { peer_id, data } => state.realtime.signal(id, peer_id, data)?,
     }
     Ok(())

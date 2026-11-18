@@ -1,8 +1,10 @@
-//! WebKitGTK setup for voice calls. WebView2 enables media capture and shows
-//! its own permission prompt on Windows; WebKitGTK ships with capture and
-//! WebRTC off and silently denies any permission request no handler answers.
-//! The webcam is captured natively (disc-video), so only the microphone is
-//! granted to the page.
+//! WebKitGTK media setup. WebView2 enables media capture and shows its own
+//! permission prompt on Windows; WebKitGTK ships with capture and WebRTC off
+//! and silently denies any permission request no handler answers. Calls do
+//! not depend on it: distribution builds have no RTCPeerConnection even with
+//! WebRTC enabled, so calls run in the native engine (disc-call), and the
+//! webcam is captured natively (disc-video). Only the microphone is granted
+//! to the page.
 
 use tauri::{Manager, Runtime};
 use webkit2gtk::{

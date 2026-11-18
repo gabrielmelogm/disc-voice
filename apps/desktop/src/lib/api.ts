@@ -3,10 +3,10 @@ import type { AuthSession, Channel, ChatMessage, Invite, MessagePage, Server, Us
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
 // Browser builds use the same origin (Vite proxies /api); the native app uses
-// the configured remote API, falling back to the local development service.
+// the configured remote API, defaulting to the hosted Disc Voice server.
 const env = (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env;
 const native = "__TAURI_INTERNALS__" in window;
-const baseUrl = (env.VITE_API_URL || (native ? "http://127.0.0.1:3001/api" : "/api")).replace(/\/$/, "");
+const baseUrl = (env.VITE_API_URL || (native ? "https://discvoice.devgabrielmelo.shop/api" : "/api")).replace(/\/$/, "");
 
 export function realtimeUrl() {
   const url = new URL(`${baseUrl}/realtime`, window.location.href);

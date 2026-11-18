@@ -56,6 +56,29 @@ export interface CameraInfo {
   passthrough: boolean;
 }
 
+/** Native screen capture (Windows and Linux). Keep in sync with packages/video-engine/src/screen.rs. */
+export type ScreenSourceKind = "monitor" | "window" | "virtual" | "unknown";
+
+export interface ScreenRequest {
+  /** Larger sources are scaled down to fit, keeping their aspect ratio. */
+  maxWidth: number;
+  maxHeight: number;
+  /** Upper bound; an unchanged screen sends fewer frames. */
+  frameRate: number;
+  cursor: boolean;
+}
+
+export interface ScreenInfo {
+  source: ScreenSourceKind;
+  /** Native size of the shared source; 0 when the system does not report it. */
+  width: number;
+  height: number;
+  maxWidth: number;
+  maxHeight: number;
+  frameRate: number;
+  cursor: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -105,6 +128,8 @@ export interface VoiceParticipant {
   user: User;
   muted: boolean;
   deafened: boolean;
+  /** Sharing the screen; the video arrives over the peer connection. */
+  screen: boolean;
 }
 
 export type RealtimeEvent =
@@ -125,5 +150,5 @@ export type RealtimeCommand =
   | { type: "server.watch"; serverId: string | null }
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
-  | { type: "voice.state"; muted: boolean; deafened: boolean }
+  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean }
   | { type: "voice.signal"; peerId: string; data: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } };

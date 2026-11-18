@@ -1,9 +1,31 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "apps/api", "packages/audio-engine", "packages/video-engine"]
-default-members = ["packages/audio-engine", "packages/video-engine"]
+members = ["apps/desktop/src-tauri", "apps/api", "packages/audio-engine", "packages/video-engine", "packages/call-engine"]
+default-members = ["packages/audio-engine", "packages/video-engine", "packages/call-engine"]
 resolver = "2"
 
 [profile.release]
 codegen-units = 1
 lto = true
 strip = true
+
+# Calls encode and decode media in real time: unoptimized, a 1080p screen
+# frame takes ~0.5 s instead of ~25 ms, so `npm run dev` showed screens at
+# ~2 fps. Only these (rarely rebuilt) crates are optimized in dev builds.
+[profile.dev.package.disc-call]
+opt-level = 3
+[profile.dev.package.openh264]
+opt-level = 3
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+[profile.dev.package.opus]
+opt-level = 3
+[profile.dev.package.opusic-sys]
+opt-level = 3
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+[profile.dev.package.rtc-srtp]
+opt-level = 3
+[profile.dev.package.aes]
+opt-level = 3
+[profile.dev.package.ctr]
+opt-level = 3
