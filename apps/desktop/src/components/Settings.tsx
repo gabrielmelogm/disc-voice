@@ -5,6 +5,7 @@ import { DeviceSettings } from "../DeviceSettings";
 import { api, message } from "../lib/api";
 import { maskEmail } from "../lib/display";
 import { requestDesktopPermission, useNotificationPrefs } from "../lib/notifications";
+import { useTraySupported, useWindowPrefs } from "../lib/tray";
 import {
   addTheme, fetchTheme, MAX_THEME_BYTES, parseTheme, removeTheme, resolveTheme, THEME_EXAMPLE, THEME_TOKENS, ThemeError,
   themeById, useAppearance, useThemes, type Appearance, type CustomTheme,
@@ -15,7 +16,7 @@ import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
 export type SettingsPage = "overview" | "voice" | "profile" | "themes";
 
 const pages: { id: SettingsPage; label: string; icon: LucideIcon; keywords: string }[] = [
-  { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações excluir" },
+  { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações janela bandeja segundo plano fechar excluir" },
   { id: "profile", label: "Perfil", icon: IdCard, keywords: "nome pronomes avatar banner sobre mim" },
   { id: "voice", label: "Voz e vídeo", icon: Mic, keywords: "microfone saída áudio câmera webcam tela compartilhar" },
   { id: "themes", label: "Temas", icon: Palette, keywords: "cores claro escuro sistema importar aparência" },
@@ -103,6 +104,8 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
   const custom = themeById(appearance);
   const [showEmail, setShowEmail] = useState(false);
   const [notifications, setNotifications] = useNotificationPrefs();
+  const [windowPrefs, setWindowPrefs] = useWindowPrefs();
+  const traySupported = useTraySupported();
   return <>
     <section className="account-card">
       <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
@@ -138,6 +141,14 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
         <Switch id="voice-join" checked={notifications.voiceJoin} onChange={voiceJoin => setNotifications({ voiceJoin })} label="Avisar quando alguém entra na sala de voz" description="Só para as salas em que você estiver" />
       </div>
     </section>
+
+    {traySupported && <section aria-labelledby="window-title">
+      <h2 id="window-title" className="settings-section-title">Janela</h2>
+      <div className="switch-list">
+        <Switch id="close-to-tray" checked={windowPrefs.closeToTray} onChange={closeToTray => setWindowPrefs({ closeToTray })}
+          label="Fechar para a bandeja do sistema" description="O botão de fechar mantém o Disc Voice rodando em segundo plano. Para sair, use “Sair do Disc Voice” no ícone da bandeja." />
+      </div>
+    </section>}
 
     <section className="danger-zone">
       <div><h2>Excluir conta</h2><p>Suas mensagens ficam, mas seu nome vira “Usuário removido”. Não dá para desfazer.</p></div>
