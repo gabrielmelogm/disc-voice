@@ -2,11 +2,28 @@ name: Windows
 
 # Pull requests only install dependencies and run lint + tests, so review
 # feedback comes back fast. The full Windows build (and its installer
-# artifact) only runs on pushes to main or when triggered manually.
+# artifact) only runs on pushes to main or when triggered manually, in a
+# separate job so its release artifacts never bloat the checks' cache.
 on:
   push:
     branches: [main]
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - package-lock.json
+      - .github/workflows/windows.yml
   pull_request:
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - package-lock.json
+      - .github/workflows/windows.yml
   workflow_dispatch:
 
 permissions:
@@ -19,6 +36,11 @@ concurrency:
 jobs:
   desktop:
     runs-on: windows-latest
+    env:
+      # CI never rebuilds incrementally, and debug info is most of target/:
+      # without it the cache is far smaller and faster to restore.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,24 +50,40 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - uses: Swatinem/rust-cache@v2
         with:
           # Only main saves the cache; PRs reuse it without writing their own.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Install + checks (every PR and push to main)
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # disc-api has its own workflow (api.yml).
+      - run: cargo clippy --workspace --exclude disc-api --all-targets --locked -- -D warnings
+      - run: cargo nextest run --workspace --exclude disc-api --locked
 
-      # Build (push to main / manual only)
-      - if: github.event_name != 'pull_request'
-        run: npm run build:windows
-      - if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+  release:
+    needs: desktop
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      # A separate job gets its own cache key, holding only target/release.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: npm ci
+      - run: npm run build:windows
+      - uses: actions/upload-artifact@v4
         with:
           name: disc-voice-windows
           path: target/release/bundle/nsis/*.exe
