@@ -90,6 +90,8 @@ export interface User {
   pronouns?: string;
   bio?: string;
   banner?: BannerColor;
+  /** Profile photo URL (from the Google account), or null for initials. */
+  avatar?: string | null;
 }
 
 export type ProfileUpdate = Partial<Pick<User, "name" | "pronouns" | "bio" | "banner">>;
@@ -119,6 +121,19 @@ export interface SearchResults {
   messages: MessageHit[];
   /** Pass as `before` for older messages; null on the last page. */
   nextCursor: string | null;
+}
+
+/** OAuth client IDs; null when that platform isn't configured on the server. */
+export interface GoogleConfig {
+  desktopClientId: string | null;
+  webClientId: string | null;
+}
+
+export interface GoogleLogin {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+  platform: "desktop" | "web";
 }
 
 export interface AuthSession {

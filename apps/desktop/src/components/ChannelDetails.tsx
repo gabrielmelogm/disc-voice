@@ -36,7 +36,7 @@ export function ChannelDetails({ user, voiceChannels, participants, voiceState, 
   return <aside className="details-panel" aria-label="Detalhes da conversa">
     {live && <section className="live-room">
       <div className="live-room-heading"><h2>{live.name} agora</h2>{sharer && <LiveTag />}</div>
-      <div className="live-room-people">{people.slice(0, 5).map(p => <Avatar key={p.peerId} name={p.user.name} speaking={voiceState.speaking.includes(p.peerId)} />)}</div>
+      <div className="live-room-people">{people.slice(0, 5).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} speaking={voiceState.speaking.includes(p.peerId)} />)}</div>
       <p>{sharer ? `${sharer.user.name} está compartilhando a tela` : people.length === 1 ? `${people[0].user.name} está na sala` : `${people.length} pessoas conversando`}</p>
       {connectedId === live.id
         ? <button className="button on-dark full" onClick={() => onJoin(live)}><Headphones size={17} />Voltar para a chamada</button>
@@ -51,8 +51,8 @@ export function ChannelDetails({ user, voiceChannels, participants, voiceState, 
     <section className="detail-card">
       <div className="detail-heading"><h2 className="eyebrow">Pessoas</h2><button className="icon-button small" disabled aria-label="Buscar pessoas (em breve)"><Search size={16} /></button></div>
       <ul className="people-list">
-        <li><Avatar name={user.name} status="online" /><div><strong><ProfileButton user={user} /></strong><small>{connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"}</small></div></li>
-        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} status="online" /><div><strong><ProfileButton user={p.user} /></strong><small>{p.screen ? "Compartilhando a tela" : `Em ${live!.name}`}</small></div></li>)}
+        <li><Avatar name={user.name} src={user.avatar} status="online" /><div><strong><ProfileButton user={user} /></strong><small>{connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"}</small></div></li>
+        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} src={p.user.avatar} status="online" /><div><strong><ProfileButton user={p.user} /></strong><small>{p.screen ? "Compartilhando a tela" : `Em ${live!.name}`}</small></div></li>)}
       </ul>
       <p className="detail-footnote"><Users size={14} />Lista de membros e presença em breve</p>
     </section>

@@ -502,6 +502,7 @@ mod tests {
                     pronouns: String::new(),
                     bio: String::new(),
                     banner: "brand".into(),
+                    avatar: None,
                 },
                 session: id.to_string(),
                 watching: None,

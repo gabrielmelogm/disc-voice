@@ -1,13 +1,20 @@
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
-    Router,
+    routing::post,
+    Form, Json, Router,
 };
-use disc_api::{migration::Migrator, router, AppState};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use disc_api::{
+    google::{GoogleConfig, OAuthClient},
+    migration::Migrator,
+    router, AppState,
+};
 use futures_util::{SinkExt, StreamExt};
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 use sea_orm_migration::MigratorTrait;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -80,6 +87,80 @@ async fn call(
     (status, value)
 }
 
+/// A fake Google token endpoint. The code carries the claims as
+/// `sub|email|name|verified`; any other code is rejected like an invalid one.
+async fn fake_google() -> GoogleConfig {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let token = post(|Form(form): Form<HashMap<String, String>>| async move {
+        let parts: Vec<_> = form["code"].split('|').collect();
+        let secret = match form["client_id"].as_str() {
+            "desktop-client" => "desktop-secret",
+            _ => "web-secret",
+        };
+        if parts.len() != 4
+            || form["client_secret"] != secret
+            || form["code_verifier"].len() < 43
+            || form["grant_type"] != "authorization_code"
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_grant" })),
+            );
+        }
+        let claims = json!({
+            "iss": "https://accounts.google.com",
+            "aud": form["client_id"],
+            "exp": 4_102_444_800i64,
+            "sub": parts[0],
+            "email": parts[1],
+            "name": parts[2],
+            "email_verified": parts[3] == "true",
+            "picture": format!("https://lh3.googleusercontent.com/a/{}=s96-c", parts[0]),
+        });
+        let id_token = format!("e30.{}.sig", URL_SAFE_NO_PAD.encode(claims.to_string()));
+        (StatusCode::OK, Json(json!({ "id_token": id_token })))
+    });
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/token", token))
+            .await
+            .unwrap();
+    });
+    let client = |name: &str| OAuthClient {
+        id: format!("{name}-client"),
+        secret: format!("{name}-secret"),
+    };
+    GoogleConfig {
+        desktop: Some(client("desktop")),
+        web: Some(client("web")),
+        token_url: format!("http://{address}/token"),
+    }
+}
+
+fn google_code(sub: &str, email: &str, name: &str, verified: bool) -> String {
+    format!("{sub}|{email}|{name}|{verified}")
+}
+
+async fn google(app: &Router, code: &str, redirect: &str, platform: &str) -> (StatusCode, Value) {
+    call(
+        app,
+        "POST",
+        "/auth/google",
+        None,
+        Some(json!({
+            "code": code,
+            "codeVerifier": "v".repeat(43),
+            "redirectUri": redirect,
+            "platform": platform,
+        })),
+    )
+    .await
+}
+
+async fn google_desktop(app: &Router, code: &str) -> (StatusCode, Value) {
+    google(app, code, "http://127.0.0.1:53124", "desktop").await
+}
+
 #[tokio::test]
 #[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
 async fn accounts_invites_channels_and_authorization() {
@@ -90,79 +171,78 @@ async fn accounts_invites_channels_and_authorization() {
     // Migrations are repeatable and do not destroy existing data.
     Migrator::up(&db, None).await.unwrap();
     let app = router(
-        AppState::new(db.clone(), "https://discvoice.example".into()),
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
         vec![],
     );
     let suffix = Uuid::new_v4().simple().to_string();
     let email = format!("owner-{suffix}@example.com");
-    let password = "uma-senha-de-teste";
     assert_eq!(
         call(&app, "GET", "/servers", None, None).await.0,
         StatusCode::UNAUTHORIZED
     );
+    // Password accounts no longer exist.
     assert_eq!(
         call(
             &app,
             "POST",
             "/auth/register",
             None,
-            Some(json!({"email": "invalido", "password": password}))
+            Some(json!({"email": email, "password": "uma-senha-de-teste"}))
         )
         .await
         .0,
+        StatusCode::NOT_FOUND
+    );
+    let config = call(&app, "GET", "/auth/google/config", None, None).await.1;
+    assert_eq!(config["desktopClientId"], "desktop-client");
+    assert_eq!(config["webClientId"], "web-client");
+    let sub = format!("sub-{suffix}");
+    for (redirect, platform) in [
+        ("http://evil.example:9999", "desktop"),
+        ("https://evil.example/", "web"),
+    ] {
+        assert_eq!(
+            google(
+                &app,
+                &google_code(&sub, &email, "Dono", true),
+                redirect,
+                platform
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        google_desktop(&app, &google_code(&sub, &email, "Dono", false))
+            .await
+            .0,
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        call(
-            &app,
-            "POST",
-            "/auth/register",
-            None,
-            Some(json!({"email": email, "password": "curta", "name": "Dono"}))
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &app,
-            "POST",
-            "/auth/register",
-            None,
-            Some(json!({"email": email, "password": password, "name": "   "}))
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
+        google_desktop(&app, "rejeitado").await.0,
+        StatusCode::UNAUTHORIZED
     );
 
-    let (status, owner) = call(
+    let (status, owner) = google_desktop(
         &app,
-        "POST",
-        "/auth/register",
-        None,
-        Some(json!({"email": format!(" {} ", email.to_uppercase()), "password": password, "name": "  Dono   do Servidor "})),
+        &google_code(&sub, &email.to_uppercase(), "  Dono   do Servidor ", true),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{owner}");
     assert_eq!(owner["user"]["email"], email);
     assert_eq!(owner["user"]["name"], "Dono do Servidor");
-    assert!(owner["user"].get("password_hash").is_none());
+    assert_eq!(
+        owner["user"]["avatar"],
+        format!("https://lh3.googleusercontent.com/a/{sub}=s256-c")
+    );
+    assert!(owner["user"].get("google_sub").is_none());
     let token = owner["token"].as_str().unwrap();
     let owner_id = Uuid::parse_str(owner["user"]["id"].as_str().unwrap()).unwrap();
-    let row = db
-        .query_one(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            "SELECT password_hash FROM users WHERE id = $1",
-            [owner_id.into()],
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    let hash: String = row.try_get("", "password_hash").unwrap();
-    assert!(hash.starts_with("$argon2id$"));
-    assert!(!hash.contains(password));
     let session = db
         .query_one(Statement::from_sql_and_values(
             DbBackend::Postgres,
@@ -174,40 +254,46 @@ async fn accounts_invites_channels_and_authorization() {
         .unwrap();
     assert_ne!(session.try_get::<String>("", "token_hash").unwrap(), token);
 
+    // Another Google account with the same e-mail can't take this one over.
     assert_eq!(
-        call(
+        google_desktop(
             &app,
-            "POST",
-            "/auth/register",
-            None,
-            Some(json!({"email": email.to_uppercase(), "password": password, "name": "Outro"}))
+            &google_code(&format!("x{sub}"), &email, "Outro", true)
         )
         .await
         .0,
         StatusCode::CONFLICT
     );
-    assert_eq!(
-        call(
-            &app,
-            "POST",
-            "/auth/login",
-            None,
-            Some(json!({"email": email, "password": "senha-errada"}))
-        )
-        .await
-        .0,
-        StatusCode::UNAUTHORIZED
-    );
-    let (status, login) = call(
+    // Signing in again, from the browser, reuses the account (the name is kept).
+    let (status, login) = google(
         &app,
-        "POST",
-        "/auth/login",
-        None,
-        Some(json!({"email": email, "password": password})),
+        &google_code(&sub, &email, "Novo Nome", true),
+        "https://discvoice.example/auth/google/callback",
+        "web",
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{login}");
+    assert_eq!(login["user"]["id"], owner["user"]["id"]);
+    assert_eq!(login["user"]["name"], "Dono do Servidor");
     assert_ne!(login["token"], token);
+    // Accounts created before Google Sign-In are linked by e-mail.
+    let legacy_email = format!("legacy-{suffix}@example.com");
+    let legacy_id = Uuid::new_v4();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, 'Antiga', 'x')",
+        [legacy_id.into(), legacy_email.clone().into()],
+    ))
+    .await
+    .unwrap();
+    let linked = google_desktop(
+        &app,
+        &google_code(&format!("legacy-{sub}"), &legacy_email, "Nova", true),
+    )
+    .await
+    .1;
+    assert_eq!(linked["user"]["id"], legacy_id.to_string());
+    assert_eq!(linked["user"]["name"], "Antiga");
     assert_eq!(
         call(&app, "GET", "/me", Some(token), None).await.1["email"],
         email
@@ -270,12 +356,14 @@ async fn accounts_invites_channels_and_authorization() {
         created
     );
 
-    let (status, guest) = call(
+    let (status, guest) = google_desktop(
         &app,
-        "POST",
-        "/auth/register",
-        None,
-        Some(json!({"email": format!("guest-{suffix}@example.com"), "password": password, "name": "Convidado"})),
+        &google_code(
+            &format!("guest-{suffix}"),
+            &format!("guest-{suffix}@example.com"),
+            "Convidado",
+            true,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -761,7 +849,7 @@ async fn accounts_invites_channels_and_authorization() {
         .await
         .unwrap();
     }
-    for id in [owner_id, guest_id] {
+    for id in [owner_id, guest_id, legacy_id] {
         db.execute(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "DELETE FROM users WHERE id = $1",
@@ -773,19 +861,10 @@ async fn accounts_invites_channels_and_authorization() {
 }
 
 async fn register(app: &Router, name: &str) -> (String, String) {
-    let email = format!(
-        "{}-{}@example.com",
-        name.to_lowercase(),
-        Uuid::new_v4().simple()
-    );
-    let (status, body) = call(
-        app,
-        "POST",
-        "/auth/register",
-        None,
-        Some(json!({ "email": email, "password": "uma-senha-de-teste", "name": name })),
-    )
-    .await;
+    let id = Uuid::new_v4().simple();
+    let email = format!("{}-{id}@example.com", name.to_lowercase());
+    let (status, body) =
+        google_desktop(app, &google_code(&format!("sub-{id}"), &email, name, true)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     (
         body["token"].as_str().unwrap().to_owned(),
@@ -801,7 +880,11 @@ async fn profile_editing_and_global_search() {
         .unwrap();
     Migrator::up(&db, None).await.unwrap();
     let app = router(
-        AppState::new(db.clone(), "https://discvoice.example".into()),
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
         vec![],
     );
     let tag = Uuid::new_v4().simple().to_string()[..10].to_owned();

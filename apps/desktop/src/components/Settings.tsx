@@ -110,14 +110,14 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
     <section className="account-card">
       <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
       <div className="account-identity">
-        <Avatar name={user.name} size="xl" status="online" className="profile-avatar" />
+        <Avatar name={user.name} src={user.avatar} size="xl" status="online" className="profile-avatar" />
         <div><strong>{user.name}</strong><span>{user.email}</span></div>
         <button className="button primary small" onClick={onEditProfile}>Editar perfil</button>
       </div>
       <dl className="account-fields">
         <div><dt>Nome de exibição</dt><dd>{user.name}</dd><button className="button secondary small" onClick={onEditProfile}>Editar</button></div>
         <div><dt>E-mail</dt><dd>{showEmail ? user.email : maskEmail(user.email)}</dd><button className="link-button" onClick={() => setShowEmail(!showEmail)}>{showEmail ? "Ocultar" : "Mostrar"}</button></div>
-        <div className="with-icon"><KeyRound size={20} /><dt>Login</dt><dd>E-mail e senha</dd><span className="status-chip">Conectada</span></div>
+        <div className="with-icon"><KeyRound size={20} /><dt>Login</dt><dd>Google</dd><span className="status-chip">Conectada</span></div>
       </dl>
     </section>
 

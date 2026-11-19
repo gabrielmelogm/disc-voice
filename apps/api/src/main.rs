@@ -1,4 +1,4 @@
-use disc_api::{migration::Migrator, router, AppState};
+use disc_api::{google::GoogleConfig, migration::Migrator, router, AppState};
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_migration::MigratorTrait;
 use std::{env, path::PathBuf, time::Duration};
@@ -54,7 +54,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(str::parse)
         .collect::<Result<_, _>>()?;
     let dist = PathBuf::from(env::var("WEB_DIST").unwrap_or_else(|_| "apps/desktop/dist".into()));
-    let app = router(AppState::new(db, web_url), origins).fallback_service(
+    let google = GoogleConfig::from_env();
+    if google.desktop.is_none() && google.web.is_none() {
+        tracing::warn!(
+            "Login com Google desativado: defina GOOGLE_DESKTOP_CLIENT_ID/SECRET e GOOGLE_WEB_CLIENT_ID/SECRET."
+        );
+    }
+    let app = router(AppState::new(db, web_url, google), origins).fallback_service(
         ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html"))),
     );
     let listener = tokio::net::TcpListener::bind(
