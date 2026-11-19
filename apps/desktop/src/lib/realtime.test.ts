@@ -23,7 +23,7 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", Socket);
   sessionToken.set("a".repeat(64));
 });
-afterEach(() => { vi.useRealTimers(); sessionStorage.clear(); });
+afterEach(() => { vi.useRealTimers(); sessionStorage.clear(); localStorage.clear(); });
 
 it("authenticates in a frame and synchronizes history after the server acknowledges the subscription", () => {
   const client = new Realtime();

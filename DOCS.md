@@ -80,7 +80,7 @@ Sem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localho
 
 Todos exigem sessão; operações nos canais exigem associação ao servidor e o tipo correto de canal.
 
-As senhas usam Argon2id. A sessão é revogável, dura no máximo sete dias e seu token fica no `sessionStorage` do cliente (ao fechar o app/aba, faça login novamente). O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
+As senhas usam Argon2id. A sessão é revogável e continua ativa ao fechar e reabrir o app: o token fica no `localStorage` do cliente. Ela expira após 30 dias sem uso, e cada uso renova esse prazo. Sair da conta revoga a sessão no servidor. O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
 
 Para parar os serviços mantendo os dados:
 

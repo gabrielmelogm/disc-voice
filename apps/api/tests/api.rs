@@ -739,6 +739,28 @@ async fn accounts_invites_channels_and_authorization() {
             .0,
         StatusCode::OK
     );
+    // Using a session pushes its expiry forward, so active users stay signed in.
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "UPDATE sessions SET expires_at = now() + interval '1 day' WHERE user_id = $1",
+        [guest_id.into()],
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        call(&app, "GET", "/me", Some(guest_token), None).await.0,
+        StatusCode::OK
+    );
+    let renewed = db
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT bool_and(expires_at > now() + interval '29 days') AS renewed FROM sessions WHERE user_id = $1",
+            [guest_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(renewed.try_get::<bool>("", "renewed").unwrap());
     db.execute(Statement::from_sql_and_values(
         DbBackend::Postgres,
         "UPDATE sessions SET expires_at = now() - interval '1 second' WHERE user_id = $1",
