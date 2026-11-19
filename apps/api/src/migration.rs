@@ -10,7 +10,69 @@ impl MigratorTrait for Migrator {
             Box::new(Chat),
             Box::new(UserName),
             Box::new(ProfileAndSearch),
+            Box::new(GoogleAuth),
+            Box::new(Avatar),
         ]
+    }
+}
+
+struct Avatar;
+
+impl MigrationName for Avatar {
+    fn name(&self) -> &str {
+        "m20261119_000006_avatar"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Avatar {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE users ADD COLUMN avatar_url varchar(2048);")
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE users DROP COLUMN avatar_url;")
+            .await?;
+        Ok(())
+    }
+}
+
+struct GoogleAuth;
+
+impl MigrationName for GoogleAuth {
+    fn name(&self) -> &str {
+        "m20261118_000005_google_auth"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for GoogleAuth {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE users
+                ADD COLUMN google_sub text UNIQUE,
+                ALTER COLUMN password_hash DROP NOT NULL;
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE users DROP COLUMN google_sub;")
+            .await?;
+        Ok(())
     }
 }
 

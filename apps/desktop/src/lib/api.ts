@@ -1,4 +1,4 @@
-import type { AuthSession, Channel, ChatMessage, Invite, MessagePage, ProfileUpdate, SearchResults, Server, User } from "@disc-voice/shared";
+import type { AuthSession, Channel, ChatMessage, GoogleConfig, GoogleLogin, Invite, MessagePage, ProfileUpdate, SearchResults, Server, User } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
@@ -81,8 +81,8 @@ async function request<T>(path: string, options: {
 }
 
 export const api = {
-  register: (name: string, email: string, password: string) => request<AuthSession>("/auth/register", { method: "POST", body: { name, email, password }, public: true }),
-  login: (email: string, password: string) => request<AuthSession>("/auth/login", { method: "POST", body: { email, password }, public: true }),
+  googleConfig: () => request<GoogleConfig>("/auth/google/config", { public: true }),
+  googleLogin: (input: GoogleLogin) => request<AuthSession>("/auth/google", { method: "POST", body: input, public: true }),
   me: (signal?: AbortSignal) => request<User>("/me", { signal }),
   updateProfile: (changes: ProfileUpdate) => request<User>("/me", { method: "PATCH", body: changes }),
   search: (q: string, before?: string, signal?: AbortSignal) =>

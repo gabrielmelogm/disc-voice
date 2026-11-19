@@ -133,6 +133,6 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
     <button className={`bar-button ${view === "dms" ? "current" : ""}`} aria-current={view === "dms" ? "page" : undefined} aria-label="Mensagens diretas" title="Mensagens diretas" onClick={onDms}><MessageCircle size={20} /></button>
     {!inCall && <button className="bar-button" disabled={!canJoinVoice} aria-label="Ir para a sala de voz" title="Sala de voz" onClick={onVoice}><Headphones size={20} /></button>}
     <span className="bar-divider" />
-    <button className="bar-avatar" aria-label="Sua conta e configurações" title="Sua conta e configurações" onClick={onSettings}><Avatar name={user.name} status="online" /></button>
+    <button className="bar-avatar" aria-label="Sua conta e configurações" title="Sua conta e configurações" onClick={onSettings}><Avatar name={user.name} src={user.avatar} status="online" /></button>
   </nav>;
 }

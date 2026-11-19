@@ -1,57 +1,61 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, MicOff } from "lucide-react";
 import type { AuthSession } from "@disc-voice/shared";
-import { api, message } from "../lib/api";
-import { Avatar, BrandMark, GoogleMark, SoonTag } from "./ui";
+import { message } from "../lib/api";
+import { signInWithGoogle } from "../lib/google";
+import { Avatar, BrandMark, GoogleMark } from "./ui";
 
 export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
   onAuthenticated: (session: AuthSession) => void;
   hasInvite: boolean;
   notice: string;
 }) {
-  const [register, setRegister] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const pending = useRef<AbortController | null>(null);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  useEffect(() => () => pending.current?.abort(), []);
+
+  async function signIn() {
     if (busy) return;
+    const controller = new AbortController();
+    pending.current = controller;
     setBusy(true);
     setError("");
     try {
-      const session = await (register ? api.register(name, email, password) : api.login(email, password));
-      onAuthenticated(session);
+      onAuthenticated(await signInWithGoogle(controller.signal));
     } catch (cause) {
-      setError(message(cause));
+      if (!controller.signal.aborted) setError(message(cause));
     } finally {
-      setBusy(false);
+      if (pending.current === controller) {
+        pending.current = null;
+        setBusy(false);
+      }
     }
+  }
+
+  function cancel() {
+    pending.current?.abort();
+    pending.current = null;
+    setBusy(false);
   }
 
   return <main className="auth-page">
     <section className="auth-panel">
       <BrandMark />
       <div className="auth-form">
-        <h1>{register ? "Crie sua conta" : "Boas-vindas ao Disc Voice"}</h1>
-        <p className="lede">{register ? "Comece com seu nome, e-mail e uma senha." : "Entre para voltar às suas comunidades, chamadas e conversas."}</p>
-        {hasInvite && <div className="notice">Você tem um convite. Entre ou cadastre-se para continuar.</div>}
+        <h1>Boas-vindas ao Disc Voice</h1>
+        <p className="lede">Entre com sua conta Google para voltar às suas comunidades, chamadas e conversas.</p>
+        {hasInvite && <div className="notice">Você tem um convite. Entre para continuar.</div>}
         {notice && <p className="notice" role="status">{notice}</p>}
 
-        {/* Google Sign-In is tracked in issue #7. */}
-        <button type="button" className="button secondary full google-button" disabled title="Login com Google em breve"><GoogleMark />Continuar com Google<SoonTag /></button>
-        <div className="divider"><span>ou use seu e-mail</span></div>
-
-        <form onSubmit={submit} className="stack-form">
-          {register && <div className="field"><label htmlFor="name">Nome</label><input id="name" autoComplete="name" required maxLength={32} value={name} disabled={busy} onChange={e => setName(e.target.value)} /><small>É o nome que aparece nas mensagens e chamadas.</small></div>}
-          <div className="field"><label htmlFor="email">E-mail</label><input id="email" type="email" autoComplete="email" placeholder="voce@exemplo.com" required maxLength={254} value={email} disabled={busy} onChange={e => setEmail(e.target.value)} /></div>
-          <div className="field"><label htmlFor="password">Senha</label><input id="password" type="password" autoComplete={register ? "new-password" : "current-password"} required minLength={8} maxLength={128} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} aria-describedby={register ? "password-help" : undefined} />{register && <small id="password-help">Use pelo menos 8 caracteres.</small>}</div>
-          {error && <p className="inline-error" role="alert">{error}</p>}
-          <button className="button primary full large" disabled={busy}>{busy && <LoaderCircle size={17} className="spin" />}{busy ? "Aguarde…" : register ? "Criar conta" : "Entrar"}</button>
-        </form>
-        <p className="auth-switch">{register ? "Já tem uma conta?" : "Primeira vez por aqui?"} <button className="link-button" disabled={busy} onClick={() => { setRegister(!register); setError(""); }}>{register ? "Fazer login" : "Cadastre-se"}</button></p>
+        <button type="button" className="button primary full large google-button" disabled={busy} onClick={() => void signIn()}>
+          {busy ? <LoaderCircle size={17} className="spin" /> : <GoogleMark />}
+          {busy ? "Continue no navegador…" : "Continuar com Google"}
+        </button>
+        {busy && <button type="button" className="link-button" onClick={cancel}>Cancelar</button>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        <p className="auth-switch">Primeira vez por aqui? Sua conta é criada no primeiro acesso.</p>
       </div>
     </section>
 

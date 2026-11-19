@@ -32,6 +32,8 @@ async fn audio_action(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_oauth::init())
         .setup(|app| {
             let engine = AudioEngine::new().map_err(std::io::Error::other)?;
             app.manage(engine);

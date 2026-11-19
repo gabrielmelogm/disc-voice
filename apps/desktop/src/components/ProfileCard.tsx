@@ -18,7 +18,7 @@ export function bannerColor(banner: BannerColor | undefined) {
 export function ProfileSummary({ user, subtitle }: { user: User; subtitle?: string }) {
   return <>
     <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
-    <Avatar name={user.name} size="xl" status="online" className="profile-avatar" />
+    <Avatar name={user.name} src={user.avatar} size="xl" status="online" className="profile-avatar" />
     <strong>{user.name}</strong>
     {(subtitle ?? user.pronouns) && <span>{subtitle ?? user.pronouns}</span>}
     <div className="detail-card"><h3 className="eyebrow">Sobre mim</h3><p className="profile-bio">{user.bio || "Ainda não escreveu nada por aqui."}</p></div>

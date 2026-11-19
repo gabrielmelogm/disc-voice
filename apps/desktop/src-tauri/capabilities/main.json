@@ -4,5 +4,5 @@
   "description": "Permissões da janela principal do Disc Voice",
   "windows": ["main"],
   "platforms": ["windows", "linux"],
-  "permissions": ["core:default", "notification:default"]
+  "permissions": ["core:default", "notification:default", "opener:default", "oauth:allow-start", "oauth:allow-cancel"]
 }
