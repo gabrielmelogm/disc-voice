@@ -51,10 +51,10 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
-      - uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: ${{ env.APT_PACKAGES }}
-          version: 1
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -82,10 +82,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: ${{ env.APT_PACKAGES }}
-          version: 1
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
       - uses: actions/setup-node@v4
         with:
           node-version: 24
