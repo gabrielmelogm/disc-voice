@@ -18,10 +18,23 @@ export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 
+// The session survives closing the app: localStorage persists in the Tauri
+// webview and the browser. The server revokes it on logout or expiry.
 export const sessionToken = {
-  get: () => sessionStorage.getItem(TOKEN_KEY),
-  set: (token: string) => sessionStorage.setItem(TOKEN_KEY, token),
-  clear: () => sessionStorage.removeItem(TOKEN_KEY),
+  get: () => {
+    // Sessions used to live in sessionStorage; carry them over once.
+    const legacy = sessionStorage.getItem(TOKEN_KEY);
+    if (legacy) {
+      localStorage.setItem(TOKEN_KEY, legacy);
+      sessionStorage.removeItem(TOKEN_KEY);
+    }
+    return localStorage.getItem(TOKEN_KEY);
+  },
+  set: (token: string) => localStorage.setItem(TOKEN_KEY, token),
+  clear: () => {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+  },
 };
 
 export function pendingInvite(): string {

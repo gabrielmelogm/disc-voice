@@ -40,7 +40,7 @@ beforeEach(() => {
     close() {}
     send() {}
   });
-  sessionStorage.clear();
+  sessionStorage.clear(); localStorage.clear();
   window.history.replaceState(null, "", "/");
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute("open", ""); },
@@ -166,6 +166,24 @@ describe("accounts and communities", () => {
     expect(await screen.findByText(/Resposta de login inválida/)).toBeVisible();
     expect(fetch).not.toHaveBeenCalled();
     expect(sessionToken.get()).toBeNull();
+  });
+
+  it("keeps the session after the app is closed, carrying over the old sessionStorage one", async () => {
+    sessionStorage.setItem("discvoice.session", "session-token");
+    mockApi(path => {
+      if (path.endsWith("/me")) return { body: account };
+      if (path.endsWith("/servers")) return { body: [] };
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const { unmount } = render(<App />);
+    expect(await screen.findByRole("button", { name: "Sua conta e configurações" })).toBeVisible();
+    expect(localStorage.getItem("discvoice.session")).toBe("session-token");
+    expect(sessionStorage.getItem("discvoice.session")).toBeNull();
+    // Reopening the app (a fresh session storage) still finds the session.
+    unmount();
+    sessionStorage.clear();
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Sua conta e configurações" })).toBeVisible();
   });
 
   it("restores sessions, revokes them on logout and returns to login", async () => {

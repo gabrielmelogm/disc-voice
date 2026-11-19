@@ -189,6 +189,20 @@ fn token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
+/// Sessions end after this long without use; each use pushes it forward.
+const SESSION_LIFETIME: Duration = Duration::days(30);
+
+/// Slides the expiry of a session in use, writing at most once a day.
+async fn renew(db: &DatabaseConnection, session: session::Model) -> ApiResult<()> {
+    let expires_at = Utc::now() + SESSION_LIFETIME;
+    if expires_at - session.expires_at >= Duration::days(1) {
+        let mut active: session::ActiveModel = session.into();
+        active.expires_at = Set(expires_at);
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct AuthView {
     user: UserView,
@@ -200,7 +214,7 @@ async fn new_session(db: &DatabaseConnection, user: UserView) -> ApiResult<Json<
     session::ActiveModel {
         token_hash: Set(token_hash(&token)),
         user_id: Set(user.id),
-        expires_at: Set(Utc::now() + Duration::days(7)),
+        expires_at: Set(Utc::now() + SESSION_LIFETIME),
     }
     .insert(db)
     .await?;
@@ -343,6 +357,7 @@ async fn authenticate(
         .one(&state.db)
         .await?
         .ok_or_else(ApiError::unauthorized)?;
+    renew(&state.db, session.clone()).await?;
     let user = user::Entity::find_by_id(session.user_id)
         .one(&state.db)
         .await?
