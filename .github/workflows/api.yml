@@ -3,7 +3,17 @@ name: API
 on:
   push:
     branches: [main]
+    paths:
+      - apps/api/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/api.yml
   pull_request:
+    paths:
+      - apps/api/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/api.yml
   workflow_dispatch:
 
 permissions:
@@ -38,6 +48,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache; PRs reuse it without writing their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p disc-api --all-targets --locked -- -D warnings
       - run: cargo test -p disc-api --locked --test api -- --ignored --test-threads=1

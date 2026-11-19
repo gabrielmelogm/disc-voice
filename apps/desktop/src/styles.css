@@ -172,6 +172,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .avatar-sm { width: 32px; height: 32px; font-size: 12px; }
 .avatar-lg { width: 56px; height: 56px; font-size: 20px; }
 .avatar-xl { width: 80px; height: 80px; font-size: 28px; }
+.avatar-photo { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
 .avatar-square { border-radius: var(--radius-lg); }
 .avatar-square.avatar-xl { border-radius: var(--radius-xl); }
 .avatar.is-speaking { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--speaking); }
@@ -196,7 +197,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .auth-form { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: 380px; margin: auto; padding: 40px 0; }
 .auth-form h1 { font-size: 32px; }
 .google-button { position: relative; }
-.google-button .soon-tag { margin-left: 4px; }
 .auth-switch { color: var(--ink-muted); text-align: center; }
 .auth-showcase { display: grid; place-items: center; padding: 40px; background: var(--surface-sunken); }
 .showcase { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 520px; }

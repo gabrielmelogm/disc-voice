@@ -154,7 +154,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
         return <Fragment key={item.id}>
           {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
           <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
-            {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} /></ProfileButton>}
+            {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} /></ProfileButton>}
             <div className="message-body">
               {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
               <p>{item.content}</p>
@@ -163,7 +163,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
         </Fragment>;
       })}
       {pending.map(item => <article className="chat-message pending-message" key={item.clientId}>
-        <Avatar name={self?.name || "Você"} />
+        <Avatar name={self?.name || "Você"} src={self?.avatar} />
         <div className="message-body">
           <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div><p>{item.content}</p>
           {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}

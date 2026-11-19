@@ -20,6 +20,19 @@ function mockApi(handler: Handler) {
   });
 }
 
+/** The browser build coming back from Google to the callback route. */
+function returnFromGoogle(query = "code=google-code&state=flow-state") {
+  sessionStorage.setItem("discvoice.google", JSON.stringify({ state: "flow-state", verifier: "flow-verifier" }));
+  window.history.replaceState(null, "", `/auth/google/callback?${query}`);
+}
+
+const googleLogin = () => ({
+  code: "google-code",
+  codeVerifier: "flow-verifier",
+  redirectUri: `${window.location.origin}/auth/google/callback`,
+  platform: "web",
+});
+
 beforeEach(() => {
   vi.stubGlobal("WebSocket", class {
     static OPEN = 1;
@@ -60,11 +73,12 @@ describe("accounts and communities", () => {
     }));
   });
 
-  it("registers, creates a server, copies its invite and creates a text channel", async () => {
+  it("signs in with Google, creates a server, copies its invite and creates a text channel", async () => {
     const user = userEvent.setup();
+    returnFromGoogle();
     const fetch = mockApi((path, init) => {
-      if (path.endsWith("/auth/register")) {
-        expect(JSON.parse(String(init?.body))).toEqual({ name: account.name, email: account.email, password: "senha-segura" });
+      if (path.endsWith("/auth/google")) {
+        expect(JSON.parse(String(init?.body))).toEqual(googleLogin());
         return { body: { user: account, token: "session-token" } };
       }
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
@@ -75,12 +89,12 @@ describe("accounts and communities", () => {
       throw new Error(`Unexpected request: ${path}`);
     });
     render(<App />);
-    await user.click(screen.getByRole("button", { name: "Cadastre-se" }));
-    await user.type(screen.getByLabelText("Nome"), account.name);
-    await user.type(screen.getByLabelText("E-mail"), account.email);
-    await user.type(screen.getByLabelText("Senha"), "senha-segura");
-    await user.click(screen.getByRole("button", { name: "Criar conta" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Entrando com Google…");
     await user.click(await screen.findByRole("button", { name: "Criar meu servidor" }));
+    // The code is used once and removed from the address bar.
+    expect(window.location.pathname).toBe("/");
+    expect(sessionStorage.getItem("discvoice.google")).toBeNull();
+    expect(sessionToken.get()).toBe("session-token");
     let dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByLabelText("Nome do servidor"), "Amigos");
     await user.click(within(dialog).getByRole("button", { name: "Criar servidor" }));
@@ -102,17 +116,18 @@ describe("accounts and communities", () => {
     const user = userEvent.setup();
     window.history.replaceState(null, "", `/?invite=${code}`);
     const fetch = mockApi((path, init) => {
-      if (path.endsWith("/auth/login")) return { body: { user: account, token: "session-token" } };
+      if (path.endsWith("/auth/google")) return { body: { user: account, token: "session-token" } };
       if (path.endsWith(`/invites/${code}`)) return { body: invite };
       if (path.endsWith("/join")) return { body: server };
       if (path.endsWith("/servers") || path.endsWith("/channels")) return { body: [] };
       throw new Error(`Unexpected ${init?.method}: ${path}`);
     });
-    render(<App />);
+    const first = render(<App />);
     expect(screen.getByText(/Você tem um convite/)).toBeVisible();
-    await user.type(screen.getByLabelText("E-mail"), account.email);
-    await user.type(screen.getByLabelText("Senha"), "senha-segura");
-    await user.click(screen.getByRole("button", { name: "Entrar" }));
+    first.unmount();
+    // The page goes to Google and comes back; the invite survives the round trip.
+    returnFromGoogle();
+    render(<App />);
     const accept = await screen.findByRole("button", { name: "Aceitar convite" });
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/join"))).toBe(false);
     await user.click(accept);
@@ -121,15 +136,35 @@ describe("accounts and communities", () => {
     expect(sessionStorage.getItem("discvoice.invite")).toBeNull();
   });
 
-  it("shows login failures and allows correcting credentials", async () => {
+  it("explains when Google Sign-In is not configured and lets the user retry", async () => {
     const user = userEvent.setup();
-    mockApi(() => ({ status: 401, body: { error: "E-mail ou senha incorretos." } }));
+    mockApi(path => {
+      if (path.endsWith("/auth/google/config")) return { body: { desktopClientId: null, webClientId: null } };
+      throw new Error(`Unexpected request: ${path}`);
+    });
     render(<App />);
-    await user.type(screen.getByLabelText("E-mail"), account.email);
-    await user.type(screen.getByLabelText("Senha"), "senha-errada");
-    await user.click(screen.getByRole("button", { name: "Entrar" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("E-mail ou senha incorretos.");
-    expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Continuar com Google" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("não está configurado");
+    expect(screen.getByRole("button", { name: "Continuar com Google" })).toBeEnabled();
+    expect(sessionToken.get()).toBeNull();
+  });
+
+  it("shows Google failures after the redirect without calling the API", async () => {
+    const fetch = mockApi(path => { throw new Error(`Unexpected request: ${path}`); });
+    returnFromGoogle("error=access_denied&state=flow-state");
+    render(<App />);
+    expect(await screen.findByText("O login com Google foi cancelado.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Continuar com Google" })).toBeEnabled();
+    expect(window.location.pathname).toBe("/");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a redirect whose state does not match", async () => {
+    const fetch = mockApi(path => { throw new Error(`Unexpected request: ${path}`); });
+    returnFromGoogle("code=google-code&state=forged");
+    render(<App />);
+    expect(await screen.findByText(/Resposta de login inválida/)).toBeVisible();
+    expect(fetch).not.toHaveBeenCalled();
     expect(sessionToken.get()).toBeNull();
   });
 
@@ -163,7 +198,7 @@ describe("accounts and communities", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Sua conta e configurações" }));
     await user.click(screen.getByRole("button", { name: "Sair da conta" }));
-    expect(await screen.findByRole("button", { name: "Entrar" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Continuar com Google" })).toBeVisible();
     expect(sessionToken.get()).toBeNull();
     expect(fetch).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ method: "POST" }));
   });
@@ -173,7 +208,7 @@ describe("accounts and communities", () => {
     window.history.replaceState(null, "", `/?invite=${code}`);
     mockApi(() => ({ status: 401, body: { error: "Sessão expirada." } }));
     render(<App />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Entrar" })).toBeVisible());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continuar com Google" })).toBeVisible());
     expect(screen.getByText(/Sua sessão expirou/)).toBeVisible();
     expect(screen.getByText(/Você tem um convite/)).toBeVisible();
     expect(sessionToken.get()).toBeNull();

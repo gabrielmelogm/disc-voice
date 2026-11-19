@@ -36,7 +36,7 @@ verdade com seus dispositivos.
 
 | | |
 |:--|:--|
-| 👤 **Contas e sessões** | Cadastro com e-mail e senha protegida por **Argon2id**. Sessão revogável que continua ativa ao reabrir o app e expira após 30 dias sem uso. |
+| 👤 **Contas e sessões** | Login com **Google** (OAuth 2.0 com PKCE). Sessão revogável que continua ativa ao reabrir o app e expira após 30 dias sem uso. |
 | 🏠 **Servidores e convites** | Crie seu servidor, compartilhe um convite e entre em comunidades pelo link ou pelo app. |
 | 💬 **Canais de texto** | Mensagens em tempo real, histórico no PostgreSQL e reenvio sem duplicação. |
 | 🎧 **Canais de voz** | Chamadas WebRTC ponto a ponto, participantes ao vivo, mute, controle de áudio recebido e reconexão. |

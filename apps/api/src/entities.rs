@@ -11,7 +11,10 @@ pub mod user {
         pub pronouns: String,
         pub bio: String,
         pub banner: String,
-        pub password_hash: String,
+        pub password_hash: Option<String>,
+        #[sea_orm(unique)]
+        pub google_sub: Option<String>,
+        pub avatar_url: Option<String>,
         pub created_at: DateTimeUtc,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

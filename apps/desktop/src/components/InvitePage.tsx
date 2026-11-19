@@ -44,7 +44,7 @@ export function InvitePage({ code, user, onJoined, onDismiss, onSwitchAccount }:
         <h1 id="invite-title">{invite.server.name}</h1>
         <button className="button primary full large" disabled={joining} onClick={() => void accept()}>{joining && <LoaderCircle size={17} className="spin" />}{joining ? "Entrando…" : "Aceitar convite"}</button>
         {error && <p className="inline-error" role="alert">{error}</p>}
-        <p className="invite-account"><Avatar name={user.name} size="xs" />Entrando como {user.name} <button className="link-button" disabled={joining} onClick={onSwitchAccount}>Trocar conta</button></p>
+        <p className="invite-account"><Avatar name={user.name} src={user.avatar} size="xs" />Entrando como {user.name} <button className="link-button" disabled={joining} onClick={onSwitchAccount}>Trocar conta</button></p>
         <button className="link-button subtle" disabled={joining} onClick={onDismiss}>Agora não</button>
       </> : <>
         <span className="invite-broken"><LinkIcon size={28} /></span>

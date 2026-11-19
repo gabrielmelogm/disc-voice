@@ -1,14 +1,11 @@
 mod entities;
+pub mod google;
 mod messages;
 pub mod migration;
 mod profile;
 mod realtime;
 mod search;
 
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
 use axum::{
     extract::{DefaultBodyLimit, Path, Request, State},
     http::{header, HeaderValue, Method, StatusCode},
@@ -26,7 +23,6 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
@@ -34,16 +30,21 @@ use uuid::Uuid;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub web_url: String,
-    password_jobs: Arc<Semaphore>,
+    google: Arc<google::GoogleConfig>,
+    http: reqwest::Client,
     realtime: Arc<realtime::Hub>,
 }
 
 impl AppState {
-    pub fn new(db: DatabaseConnection, web_url: String) -> Self {
+    pub fn new(db: DatabaseConnection, web_url: String, google: google::GoogleConfig) -> Self {
         Self {
             db,
             web_url,
-            password_jobs: Arc::new(Semaphore::new(8)),
+            google: Arc::new(google),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("HTTP client"),
             realtime: Arc::new(realtime::Hub::new()),
         }
     }
@@ -78,8 +79,8 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                     "/health",
                     get(|| async { Json(serde_json::json!({ "status": "ok" })) }),
                 )
-                .route("/auth/register", post(register))
-                .route("/auth/login", post(login))
+                .route("/auth/google/config", get(google_config))
+                .route("/auth/google", post(google_login))
                 .route(
                     "/realtime",
                     get(move |state, headers, ws| {
@@ -158,6 +159,8 @@ pub struct UserView {
     pub pronouns: String,
     pub bio: String,
     pub banner: String,
+    /// Profile photo URL (from Google), or null to show initials.
+    pub avatar: Option<String>,
 }
 
 impl From<user::Model> for UserView {
@@ -169,43 +172,9 @@ impl From<user::Model> for UserView {
             pronouns: user.pronouns,
             bio: user.bio,
             banner: user.banner,
+            avatar: user.avatar_url,
         }
     }
-}
-
-#[derive(Deserialize)]
-struct Credentials {
-    email: String,
-    password: String,
-}
-
-fn credentials(input: &Credentials) -> ApiResult<String> {
-    let email = input.email.trim().to_lowercase();
-    let parts: Vec<_> = email.split('@').collect();
-    if email.len() > 254
-        || parts.len() != 2
-        || parts[0].is_empty()
-        || !parts[1].contains('.')
-        || parts[1].starts_with('.')
-        || parts[1].ends_with('.')
-        || email.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err(ApiError::bad("Informe um e-mail válido."));
-    }
-    if input.password.chars().count() < 8 || input.password.len() > 128 {
-        return Err(ApiError::bad(
-            "A senha deve ter pelo menos 8 caracteres e no máximo 128 bytes.",
-        ));
-    }
-    Ok(email)
-}
-
-#[derive(Deserialize)]
-struct Registration {
-    #[serde(flatten)]
-    credentials: Credentials,
-    #[serde(default)]
-    name: String,
 }
 
 fn user_name(name: &str) -> ApiResult<String> {
@@ -252,94 +221,119 @@ async fn new_session(db: &DatabaseConnection, user: UserView) -> ApiResult<Json<
     Ok(Json(AuthView { user, token }))
 }
 
-async fn register(
-    State(state): State<AppState>,
-    Json(Registration {
-        credentials: input,
-        name,
-    }): Json<Registration>,
-) -> ApiResult<Json<AuthView>> {
-    let email = credentials(&input)?;
-    let name = user_name(&name)?;
-    let permit = state
-        .password_jobs
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| {
-            ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Tente novamente em alguns segundos.".into(),
-            )
-        })?;
-    let password_hash = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        Argon2::default()
-            .hash_password(input.password.as_bytes(), &SaltString::generate(&mut OsRng))
-            .map(|hash| hash.to_string())
-            .map_err(ApiError::internal)
-    })
-    .await
-    .map_err(ApiError::internal)??;
-    let user = user::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        email: Set(email),
-        name: Set(name),
-        pronouns: Set(String::new()),
-        bio: Set(String::new()),
-        banner: Set(profile::DEFAULT_BANNER.into()),
-        password_hash: Set(password_hash),
-        created_at: Set(Utc::now()),
-    }
-    .insert(&state.db)
-    .await?;
-    new_session(&state.db, user.into()).await
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleClientIds {
+    desktop_client_id: Option<String>,
+    web_client_id: Option<String>,
 }
 
-async fn login(
+async fn google_config(State(state): State<AppState>) -> Json<GoogleClientIds> {
+    Json(GoogleClientIds {
+        desktop_client_id: state.google.desktop.as_ref().map(|c| c.id.clone()),
+        web_client_id: state.google.web.as_ref().map(|c| c.id.clone()),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleLogin {
+    code: String,
+    code_verifier: String,
+    redirect_uri: String,
+    platform: google::Platform,
+}
+
+/// Display name for a new account: the Google name, or the e-mail's local part.
+fn google_name(claims: &google::Claims) -> String {
+    let local = claims.email.split('@').next().unwrap_or_default();
+    [claims.name.as_deref().unwrap_or_default(), local]
+        .into_iter()
+        .map(|name| name.chars().take(32).collect::<String>())
+        .find_map(|name| user_name(&name).ok())
+        .unwrap_or_else(|| "Usuário".into())
+}
+
+async fn google_login(
     State(state): State<AppState>,
-    Json(input): Json<Credentials>,
+    Json(input): Json<GoogleLogin>,
 ) -> ApiResult<Json<AuthView>> {
-    let email = credentials(&input)?;
-    let user = user::Entity::find()
-        .filter(user::Column::Email.eq(email))
+    let client = match input.platform {
+        google::Platform::Desktop => state.google.desktop.as_ref(),
+        google::Platform::Web => state.google.web.as_ref(),
+    }
+    .ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "O login com Google não está configurado neste servidor.".into(),
+        )
+    })?;
+    if !google::valid_redirect(input.platform, &input.redirect_uri)
+        || input.code.is_empty()
+        || input.code.len() > 512
+        || !(43..=128).contains(&input.code_verifier.len())
+    {
+        return Err(ApiError::bad("Requisição de login inválida."));
+    }
+    let claims = google::exchange(
+        &state.http,
+        &state.google.token_url,
+        client,
+        &input.code,
+        &input.code_verifier,
+        &input.redirect_uri,
+    )
+    .await?;
+
+    let existing = user::Entity::find()
+        .filter(user::Column::GoogleSub.eq(&claims.sub))
         .one(&state.db)
         .await?;
-    let permit = state
-        .password_jobs
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| {
-            ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Tente novamente em alguns segundos.".into(),
-            )
-        })?;
-    let hash = user.as_ref().map(|u| u.password_hash.clone());
-    let valid = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        match hash {
-            Some(hash) => PasswordHash::new(&hash).is_ok_and(|hash| {
-                Argon2::default()
-                    .verify_password(input.password.as_bytes(), &hash)
-                    .is_ok()
-            }),
-            None => {
-                // Also perform password work for unknown accounts.
-                let _ = Argon2::default()
-                    .hash_password(input.password.as_bytes(), &SaltString::generate(&mut OsRng));
-                false
-            }
+    let user = match existing {
+        // The photo follows the Google account; it is refreshed on every sign-in.
+        Some(user) if user.avatar_url != claims.picture => {
+            let mut active: user::ActiveModel = user.into();
+            active.avatar_url = Set(claims.picture.clone());
+            active.update(&state.db).await?
         }
-    })
-    .await
-    .map_err(ApiError::internal)?;
-    match user {
-        Some(user) if valid => new_session(&state.db, user.into()).await,
-        _ => Err(ApiError(
-            StatusCode::UNAUTHORIZED,
-            "E-mail ou senha incorretos.".into(),
-        )),
-    }
+        Some(user) => user,
+        None => match user::Entity::find()
+            .filter(user::Column::Email.eq(&claims.email))
+            .one(&state.db)
+            .await?
+        {
+            // Accounts created before Google Sign-In are linked by verified e-mail.
+            Some(user) if user.google_sub.is_none() => {
+                let mut active: user::ActiveModel = user.into();
+                active.google_sub = Set(Some(claims.sub.clone()));
+                active.avatar_url = Set(claims.picture.clone());
+                active.update(&state.db).await?
+            }
+            Some(_) => {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    "Este e-mail já está ligado a outra conta Google.".into(),
+                ))
+            }
+            None => {
+                user::ActiveModel {
+                    id: Set(Uuid::new_v4()),
+                    email: Set(claims.email.clone()),
+                    name: Set(google_name(&claims)),
+                    pronouns: Set(String::new()),
+                    bio: Set(String::new()),
+                    banner: Set(profile::DEFAULT_BANNER.into()),
+                    password_hash: Set(None),
+                    google_sub: Set(Some(claims.sub.clone())),
+                    avatar_url: Set(claims.picture.clone()),
+                    created_at: Set(Utc::now()),
+                }
+                .insert(&state.db)
+                .await?
+            }
+        },
+    };
+    new_session(&state.db, user.into()).await
 }
 
 #[derive(Clone)]

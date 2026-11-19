@@ -1,18 +1,25 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { initials } from "../lib/display";
 
 export type Presence = "online" | "idle" | "dnd" | "offline";
 
-export function Avatar({ name, size = "md", status, speaking = false, square = false, className = "" }: {
+export function Avatar({ name, src, size = "md", status, speaking = false, square = false, className = "" }: {
   name: string;
+  /** Profile photo; the initials show while it is missing or fails to load. */
+  src?: string | null;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
   status?: Presence;
   speaking?: boolean;
   square?: boolean;
   className?: string;
 }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const photo = src && failed !== src ? src : null;
   return <span className={`avatar avatar-${size} ${square ? "avatar-square" : ""} ${speaking ? "is-speaking" : ""} ${className}`} aria-hidden="true">
-    {initials(name)}
+    {photo
+      // Google photos refuse requests that carry a Referer from other sites.
+      ? <img className="avatar-photo" src={photo} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(photo)} />
+      : initials(name)}
     {status && <span className={`presence presence-${status}`} />}
   </span>;
 }

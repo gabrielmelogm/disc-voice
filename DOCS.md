@@ -18,7 +18,7 @@ npm run services:up
 
 No Linux, use `cp .env.example .env`. O comando `services:up` compila a API e a interface web, inicia PostgreSQL e aplica as migrações automaticamente. Abra **http://localhost:3001** para usar a versão web.
 
-1. Clique em **Cadastre-se**, informe e-mail e senha (mínimo de 8 caracteres).
+1. Clique em **Continuar com Google** (veja [Login com Google](#login-com-google)); a conta é criada no primeiro acesso.
 2. Clique em **Criar meu servidor** ou no **+** da lateral e informe um nome.
 3. Copie o convite exibido. Ele também está disponível em **Convidar amigos**.
 4. Outra pessoa pode abrir o link no navegador, entrar/cadastrar-se e **Aceitar convite**, ou colá-lo em **Entrar em servidor** no app.
@@ -80,7 +80,7 @@ Sem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localho
 
 Todos exigem sessão; operações nos canais exigem associação ao servidor e o tipo correto de canal.
 
-As senhas usam Argon2id. A sessão é revogável e continua ativa ao fechar e reabrir o app: o token fica no `localStorage` do cliente. Ela expira após 30 dias sem uso, e cada uso renova esse prazo. Sair da conta revoga a sessão no servidor. O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
+O login é feito somente com Google. A sessão é revogável e continua ativa ao fechar e reabrir o app: o token fica no `localStorage` do cliente. Ela expira após 30 dias sem uso, e cada uso renova esse prazo. Sair da conta revoga a sessão no servidor. O banco guarda somente o hash do token. Servidores, membros, convites e canais ficam no PostgreSQL. Convites são reutilizáveis, sem expiração nesta versão; aceitar o mesmo convite duas vezes não duplica a associação.
 
 Para parar os serviços mantendo os dados:
 
@@ -203,6 +203,27 @@ VITE_API_URL=https://comunidade.exemplo.com/api
 
 Os links são convites web; no desktop, use **Entrar em servidor** para colar o link. Links `localhost` servem somente para uso no mesmo computador.
 
+### Login com Google
+
+O login é feito somente com Google (OAuth 2.0 com PKCE). O app obtém um código de autorização e a API o troca pelo token no Google, com o segredo do cliente, que fica apenas na API. Contas antigas, criadas com e-mail e senha, são vinculadas automaticamente pelo e-mail verificado no primeiro login.
+
+No [Google Cloud Console](https://console.cloud.google.com), em **Google Auth Platform**:
+
+1. **Branding**: nome do app, e-mail de suporte e domínio autorizado (ex.: `exemplo.com`).
+2. **Audience**: tipo **External**. Em modo *Testing*, adicione as contas em *Test users*; para liberar a todos, use **Publish app**. Os escopos `openid email profile` não exigem verificação.
+3. **Clients**, criar dois clientes:
+   - **App para computador** (Desktop app): não precisa de URI de redirecionamento, pois o Google aceita qualquer `http://127.0.0.1:<porta>`.
+   - **Aplicativo da Web**: em *Origens JavaScript autorizadas*, coloque `https://comunidade.exemplo.com` e `http://localhost:1420`. Em *URIs de redirecionamento autorizados*, coloque `https://comunidade.exemplo.com/auth/google/callback` e `http://localhost:1420/auth/google/callback`.
+
+```dotenv
+GOOGLE_DESKTOP_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_DESKTOP_CLIENT_SECRET=...
+GOOGLE_WEB_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_WEB_CLIENT_SECRET=...
+```
+
+Se o cliente da plataforma (desktop ou web) não estiver configurado, **Continuar com Google** mostra um aviso em vez de abrir o login.
+
 ## Executar no Windows
 
 Instale:
@@ -285,7 +306,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 Os testes cobrem seleção e troca de dispositivos, comandos IPC, erros, liberação da webcam, cancelamento de permissões pendentes, estados de captura, limite da gravação, reamostragem e geração do tom. Também verificam reenvio idempotente de mensagens, recuperação de lacunas e liberação do microfone durante cancelamento/reconexão. Hardware real não é necessário para esses testes.
 
-Também há testes da interface para cadastro, criação de servidor/canal, cópia de convite, entrada após login, sessão expirada e logout.
+Também há testes da interface para login com Google, criação de servidor/canal, cópia de convite, entrada após login, sessão expirada e logout.
 
 Os testes de integração da API usam PostgreSQL real. Aponte `TEST_DATABASE_URL` para um banco de teste e execute:
 
