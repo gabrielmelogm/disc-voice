@@ -1,6 +1,14 @@
+#[cfg(windows)]
+use crate::tray;
 use crate::{call, camera, notify, screen};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
+
+/// Whether the app can live in the system tray (Windows only for now).
+#[tauri::command]
+fn tray_supported() -> bool {
+    cfg!(windows)
+}
 
 #[tauri::command]
 async fn list_audio_devices(engine: tauri::State<'_, AudioEngine>) -> Result<AudioDevices, String> {
@@ -30,7 +38,13 @@ async fn audio_action(
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Opening the app again while it sits in the tray brings back the running one.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        tray::show_main(app)
+    }));
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_oauth::init())
@@ -41,11 +55,21 @@ pub fn run() {
             screen::manage(app).map_err(std::io::Error::other)?;
             call::manage(app).map_err(std::io::Error::other)?;
             notify::manage(app);
+            #[cfg(windows)]
+            tray::manage(app)?;
             #[cfg(target_os = "linux")]
             crate::linux::enable_media(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // The call and the connection keep running; Quit in the tray menu exits.
+                if window.state::<tray::TrayState>().close_to_tray() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<AudioEngine>().shutdown();
                 camera::shutdown(window);
@@ -83,6 +107,11 @@ pub fn run() {
             call::native::call_camera_stop,
             call::native::call_video_frame,
             notify::show_notification,
+            tray_supported,
+            #[cfg(windows)]
+            tray::set_close_to_tray,
+            #[cfg(windows)]
+            tray::set_tray_status,
         ])
         .run(tauri::generate_context!())
         .expect("Não foi possível iniciar o Disc Voice");
