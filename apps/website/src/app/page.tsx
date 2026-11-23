@@ -98,7 +98,7 @@ export default function Home() {
             <Reveal>
               <span className="inline-flex items-center gap-2 rounded-full border border-brand-text/25 bg-brand-soft/60 px-3.5 py-1.5 text-xs font-bold text-brand-text">
                 <span className="size-1.5 rounded-full bg-online" />
-                Grátis para Windows, macOS e Linux
+                Grátis para Windows e Linux · macOS em breve
               </span>
             </Reveal>
             <Reveal delay={80}>

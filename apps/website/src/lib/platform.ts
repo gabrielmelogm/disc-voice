@@ -2,28 +2,39 @@ export type Platform = "windows" | "mac" | "linux";
 /** What the visitor runs: a desktop platform, a phone/tablet, or not detected (yet). */
 export type Visitor = Platform | "mobile" | "unknown";
 
-export const PLATFORM_ORDER: Platform[] = ["windows", "mac", "linux"];
+export const PLATFORM_ORDER: Platform[] = ["windows", "linux", "mac"];
 
 const RELEASES = "https://github.com/gabrielmelogm/disc-voice/releases/latest";
 
+/**
+ * stable: ready to download. alpha: downloadable, marked as early version.
+ * soon: no build yet; the download is shown disabled.
+ */
+export type PlatformStatus = "stable" | "alpha" | "soon";
+
 /** Download links. Override them with NEXT_PUBLIC_DOWNLOAD_* at build time. */
-export const PLATFORMS: Record<Platform, { name: string; detail: string; href: string }> = {
+export const PLATFORMS: Record<Platform, { name: string; detail: string; href: string; status: PlatformStatus }> = {
   windows: {
     name: "Windows",
     detail: "Windows 10 e 11 · instalador .exe",
     href: process.env.NEXT_PUBLIC_DOWNLOAD_WINDOWS || RELEASES,
+    status: "stable",
   },
   mac: {
     name: "macOS",
-    detail: "Apple Silicon e Intel · .dmg",
+    detail: "Ainda não disponível para Mac",
     href: process.env.NEXT_PUBLIC_DOWNLOAD_MAC || RELEASES,
+    status: "soon",
   },
   linux: {
     name: "Linux",
-    detail: "Pacotes .deb e .rpm",
+    detail: "Versão alpha · pacotes .deb e .rpm",
     href: process.env.NEXT_PUBLIC_DOWNLOAD_LINUX || RELEASES,
+    status: "alpha",
   },
 };
+
+export const isAvailable = (platform: Platform) => PLATFORMS[platform].status !== "soon";
 
 /**
  * Runs in <head> before the first paint and stores the visitor's system in
