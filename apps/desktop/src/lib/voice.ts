@@ -5,6 +5,7 @@ import { cameraError, stopStream } from "./camera";
 import { nativeCamera, type CameraClaim } from "./nativeCamera";
 import { deviceInfos, nativeCall, type CallEvent, type VideoSource } from "./nativeCall";
 import { nativeScreen, type ScreenClaim } from "./nativeScreen";
+import { playLeaveSound, playMicSound, playScreenSound } from "./notifications";
 import type { Realtime } from "./realtime";
 import { screenTrack, type ScreenTrack } from "./screenTrack";
 
@@ -348,6 +349,12 @@ export class Voice {
     this.update({ status: "idle", channel: null, participants: [], speaking: [], error: "", playbackBlocked: false, deviceBusy: false, peerId: "" });
   };
 
+  /** The user hangs up: the cue plays here, not on the leaves the app does on its own. */
+  hangUp = () => {
+    if (this.state.channel && this.state.status !== "error") playLeaveSound();
+    this.leave();
+  };
+
   private fail(error: string) {
     const channel = this.state.channel;
     this.leave();
@@ -366,6 +373,8 @@ export class Voice {
   toggleMute = () => {
     this.update({ muted: !this.state.muted });
     this.syncControls();
+    // Feedback only in a call; before joining, the button just sets how we will enter.
+    if (this.state.channel) playMicSound();
   };
   toggleDeafen = () => {
     this.update({ deafened: !this.state.deafened });
@@ -400,6 +409,7 @@ export class Voice {
     const claim: ScreenClaim = nativeScreen.claim(() => {
       if (this.screenClaim !== claim) return;
       this.screenClaim = undefined;
+      if (this.state.screen === "live") playScreenSound();
       this.endScreen();
       this.update({ error: SCREEN_TAKEN });
       this.syncControls();
@@ -423,6 +433,7 @@ export class Voice {
         if (!current()) { void nativeCall.stopScreen().catch(() => {}); return; }
         this.update({ screen: "live", screenInfo: info, localScreen: { pull: nativeScreen.frame } });
         this.syncControls();
+        playScreenSound();
         return;
       }
       const share: ScreenTrack = screenTrack(nativeScreen.frame, info.frameRate, error => {
@@ -434,6 +445,7 @@ export class Voice {
       this.peers.forEach(peer => this.sendScreen(peer));
       this.update({ screen: "live", screenInfo: info, localScreen: share.stream });
       this.syncControls();
+      playScreenSound();
     } catch (error) {
       if (!current()) return;
       this.nativeShare = false;
@@ -446,6 +458,8 @@ export class Voice {
   /** Stops sharing, or closes the picker while it is open. */
   stopScreen = () => {
     if (this.state.screen === "idle" && !this.share) return;
+    // Closing the picker shared nothing; leaving the call ends sharing through cleanup, silently.
+    if (this.state.screen === "live") playScreenSound();
     const claim = this.screenClaim;
     this.screenClaim = undefined;
     this.endScreen();

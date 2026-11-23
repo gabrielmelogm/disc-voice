@@ -7,11 +7,13 @@ import { useNotifications } from "./useNotifications";
 const lib = vi.hoisted(() => ({
   prefs: { desktop: true, messageSounds: true, voiceJoin: true },
   playNotificationSound: vi.fn(),
+  playVoiceConnectSound: vi.fn(),
   showDesktopNotification: vi.fn(async () => {}),
 }));
 vi.mock("../lib/notifications", () => ({
   notificationPrefs: () => lib.prefs,
   playNotificationSound: lib.playNotificationSound,
+  playVoiceConnectSound: lib.playVoiceConnectSound,
   showDesktopNotification: lib.showDesktopNotification,
 }));
 
@@ -31,10 +33,10 @@ const arrival = (who: User, where: Partial<{ serverId: string; serverName: strin
   type: "voice.member.joined", serverId: call.serverId, serverName: "Meu servidor", channelId: call.id, channelName: call.name, user: who, ...where,
 });
 
-function setup({ viewing = text.id as string | null, inCall = false } = {}) {
+function setup({ viewing = text.id as string | null, inCall = false, deafened = false } = {}) {
   let listener: (event: RealtimeEvent) => void = () => {};
   const realtime = { onEvent: (fn: typeof listener) => { listener = fn; return () => {}; } } as unknown as Realtime;
-  const voiceState = { channel: inCall ? call : null };
+  const voiceState = { channel: inCall ? call : null, deafened };
   renderHook(() => useNotifications({ realtime, user: me, voiceState, viewingChannelId: viewing, channels: [text, other, call] }));
   return (event: RealtimeEvent) => act(() => listener(event));
 }
@@ -100,13 +102,28 @@ describe("useNotifications", () => {
     expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo entrou em #Sala", "Meu servidor", "Amigo");
   });
 
-  it("stays quiet while we are in a call, in our room or any other", () => {
+  it("in a call, plays only the connect cue for who connects to ours, with no OS notification", () => {
     focus(false);
     const emit = setup({ inCall: true });
     emit(arrival(friend));
-    emit(arrival(friend, { channelId: "voice-2", channelName: "Outra" }));
+    expect(lib.playVoiceConnectSound).toHaveBeenCalledTimes(1);
     expect(lib.playNotificationSound).not.toHaveBeenCalled();
     expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+  });
+
+  it("in a call, stays quiet for other rooms, while deafened and with the preference off", () => {
+    setup({ inCall: true })(arrival(friend, { channelId: "voice-2", channelName: "Outra" }));
+    setup({ inCall: true, deafened: true })(arrival(friend));
+    lib.prefs = { ...lib.prefs, voiceJoin: false };
+    setup({ inCall: true })(arrival(friend));
+    expect(lib.playVoiceConnectSound).not.toHaveBeenCalled();
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+  });
+
+  it("plays no connect cue for our own arrival in our call", () => {
+    setup({ inCall: true })(arrival(me));
+    expect(lib.playVoiceConnectSound).not.toHaveBeenCalled();
   });
 
   it("stays quiet for our own arrival (e.g. from another device)", () => {

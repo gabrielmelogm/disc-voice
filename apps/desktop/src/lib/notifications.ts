@@ -8,12 +8,19 @@ export interface NotificationPrefs {
   desktop: boolean;
   /** Sound when a message arrives. */
   messageSounds: boolean;
-  /** Alert when someone enters a voice channel of your servers while you are not in a call. */
+  /**
+   * Alert when someone enters a voice channel of your servers while you are not in a call;
+   * in a call, only a sound when someone connects to yours.
+   */
   voiceJoin: boolean;
 }
 
 const KEY = "discvoice.notifications";
 const SOUND_URL = "/songs/notification.mp3";
+const VOICE_CONNECT_URL = "/songs/user-voicecall-connect.mp3";
+const MIC_URL = "/songs/mic-control-notification.mp3";
+const SCREEN_URL = "/songs/share-media-voicecall-notification.mp3";
+const LEAVE_URL = "/songs/notification-beep.mp3";
 /** Bursts (several messages at once) play the sound only once. */
 const SOUND_GAP_MS = 750;
 const defaults: NotificationPrefs = { desktop: true, messageSounds: true, voiceJoin: true };
@@ -49,15 +56,16 @@ export function useNotificationPrefs() {
   return [value, setNotificationPrefs] as const;
 }
 
-let audio: HTMLAudioElement | null = null;
-let lastSound = -Infinity;
+const sounds = new Map<string, { audio: HTMLAudioElement | null; last: number }>();
 
-export function playNotificationSound() {
+function playSound(url: string, gap = SOUND_GAP_MS) {
+  const sound = sounds.get(url) ?? { audio: null, last: -Infinity };
+  sounds.set(url, sound);
   const now = Date.now();
-  if (now - lastSound < SOUND_GAP_MS) return;
-  lastSound = now;
+  if (now - sound.last < gap) return;
+  sound.last = now;
   try {
-    audio ??= new Audio(SOUND_URL);
+    const audio = sound.audio ??= new Audio(url);
     let output = "";
     try { output = localStorage.getItem("discvoice.voice.output") || ""; } catch { /* Default output. */ }
     // Follow the output chosen for calls; if that device is gone, the default one plays it.
@@ -65,6 +73,30 @@ export function playNotificationSound() {
     audio.currentTime = 0;
     void audio.play()?.catch(() => {});
   } catch { /* Sounds are best effort. */ }
+}
+
+export function playNotificationSound() {
+  playSound(SOUND_URL);
+}
+
+/** Someone connected to the call we are in. */
+export function playVoiceConnectSound() {
+  playSound(VOICE_CONNECT_URL);
+}
+
+/** We muted or unmuted ourselves: every click answers, so no throttle (it restarts instead). */
+export function playMicSound() {
+  playSound(MIC_URL, 0);
+}
+
+/** We started or stopped sharing the screen in a call. */
+export function playScreenSound() {
+  playSound(SCREEN_URL, 0);
+}
+
+/** We left the call. */
+export function playLeaveSound() {
+  playSound(LEAVE_URL, 0);
 }
 
 async function allowed() {
@@ -121,8 +153,7 @@ export async function showDesktopNotification(title: string, body: string, from?
   } catch { /* Notifications are best effort. */ }
 }
 
-/** Test hook: forgets the throttle and the cached audio element. */
+/** Test hook: forgets the throttles and the cached audio elements. */
 export function resetNotificationSound() {
-  audio = null;
-  lastSound = -Infinity;
+  sounds.clear();
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Channel, RealtimeEvent, User } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
 import type { VoiceState } from "../lib/voice";
-import { notificationPrefs, playNotificationSound, showDesktopNotification } from "../lib/notifications";
+import { notificationPrefs, playNotificationSound, playVoiceConnectSound, showDesktopNotification } from "../lib/notifications";
 
 const PREVIEW_LENGTH = 100;
 
@@ -18,12 +18,12 @@ function focused() {
 /**
  * Plays the notification sound (and shows an OS notification in the background) when
  * someone else posts a message, or enters a voice room of any of our servers while we
- * are not in a call.
+ * are not in a call. In a call, someone connecting to ours plays a cue with no notification.
  */
 export function useNotifications({ realtime, user, voiceState, viewingChannelId, channels }: {
   realtime: Realtime;
   user: User;
-  voiceState: Pick<VoiceState, "channel">;
+  voiceState: Pick<VoiceState, "channel" | "deafened">;
   /** Text channel on screen, if any: its messages need no alert while the window has focus. */
   viewingChannelId: string | null;
   channels: Channel[];
@@ -49,8 +49,13 @@ export function useNotifications({ realtime, user, voiceState, viewingChannelId,
     }
 
     if (event.type === "voice.member.joined") {
-      // While in a call, arrivals (in ours or any other room) would only interrupt.
-      if (event.user.id === user.id || voiceState.channel || !prefs.voiceJoin) return;
+      if (event.user.id === user.id || !prefs.voiceJoin) return;
+      const call = voiceState.channel;
+      if (call) {
+        // In a call: only a cue for who connects to ours, no OS notification; other rooms would only interrupt.
+        if (event.channelId === call.id && !voiceState.deafened) playVoiceConnectSound();
+        return;
+      }
       playNotificationSound();
       if (!focused() && prefs.desktop) {
         void showDesktopNotification(`${event.user.name} entrou em #${event.channelName}`, event.serverName, event.user.name);

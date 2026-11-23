@@ -23,7 +23,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
 
 function voice() {
   return {
-    startScreen: vi.fn().mockResolvedValue(undefined), stopScreen: vi.fn(), join: vi.fn(), leave: vi.fn(), toggleMute: vi.fn(), toggleDeafen: vi.fn(),
+    startScreen: vi.fn().mockResolvedValue(undefined), stopScreen: vi.fn(), join: vi.fn(), leave: vi.fn(), hangUp: vi.fn(), toggleMute: vi.fn(), toggleDeafen: vi.fn(),
     startCamera: vi.fn().mockResolvedValue(undefined), stopCamera: vi.fn(), setCamera: vi.fn(), setCameraQuality: vi.fn(), refreshCameras: vi.fn().mockResolvedValue(undefined),
   };
 }
