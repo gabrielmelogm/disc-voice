@@ -12,7 +12,7 @@ const jakarta = localFont({
 
 export const metadata: Metadata = {
   title: "Disc Voice — Seu espaço para amigos e comunidades",
-  description: "Crie servidores, converse por voz com seus amigos e compartilhe a tela. Baixe o Disc Voice para Windows, macOS e Linux.",
+  description: "Crie servidores, converse por voz com seus amigos e compartilhe a tela. Baixe o Disc Voice para Windows e Linux.",
   openGraph: {
     title: "Disc Voice",
     description: "Crie servidores, converse por voz com seus amigos e compartilhe a tela.",

@@ -21,6 +21,8 @@
   --color-online: #2dc56c;
   --color-idle: #f0b232;
   --color-danger: #d12a37;
+  --color-warning-soft: #33270f;
+  --color-warning-text: #f0b232;
   --color-video-bg: #15121c;
   --color-video-surface: #221e2b;
 
@@ -177,3 +179,4 @@ body {
   .reveal { opacity: 1; transform: none; transition: none; }
   .btn-3d::before, .animate-float, .animate-eq, .animate-pulse-ring { animation: none; }
 }
+
