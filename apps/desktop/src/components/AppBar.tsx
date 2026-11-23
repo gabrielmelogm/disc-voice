@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import type { Server, User } from "@disc-voice/shared";
 import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
-import { Avatar } from "./ui";
+import { Avatar, Badge, unreadLabel } from "./ui";
 
 export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
   if (!state.screenSupported) {
@@ -59,8 +59,10 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, servers, server, view, voice, voiceState, canJoinVoice, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch }: {
+export function AppBar({ user, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch }: {
   user: User;
+  /** Unread messages across all direct conversations. */
+  dmUnread?: number;
   servers: Server[];
   server: Server | undefined;
   view: "server" | "dms";
@@ -130,7 +132,10 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
 
     <span className="bar-divider" />
     <button className="bar-button" aria-haspopup="dialog" aria-keyshortcuts="Control+K" aria-label="Buscar mensagens, pessoas e canais" title="Buscar (Ctrl+K)" onClick={onSearch}><Search size={20} /></button>
-    <button className={`bar-button ${view === "dms" ? "current" : ""}`} aria-current={view === "dms" ? "page" : undefined} aria-label="Mensagens diretas" title="Mensagens diretas" onClick={onDms}><MessageCircle size={20} /></button>
+    <button className={`bar-button ${view === "dms" ? "current" : ""}`} aria-current={view === "dms" ? "page" : undefined}
+      aria-label={dmUnread > 0 ? `Mensagens diretas, ${unreadLabel(dmUnread)}` : "Mensagens diretas"} title="Mensagens diretas" onClick={onDms}>
+      <MessageCircle size={20} />{dmUnread > 0 && <span className="bar-badge"><Badge count={dmUnread} /></span>}
+    </button>
     {!inCall && <button className="bar-button" disabled={!canJoinVoice} aria-label="Ir para a sala de voz" title="Sala de voz" onClick={onVoice}><Headphones size={20} /></button>}
     <span className="bar-divider" />
     <button className="bar-avatar" aria-label="Sua conta e configurações" title="Sua conta e configurações" onClick={onSettings}><Avatar name={user.name} src={user.avatar} status="online" /></button>

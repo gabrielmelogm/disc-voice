@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { Channel, ChatMessage, User } from "@disc-voice/shared";
 import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
+import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
@@ -18,8 +19,20 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
 
 interface Pending { clientId: string; content: string; error: string; sending: boolean }
 
-/** `focusId`: open the history at this message and highlight it. */
-export function TextChannel({ channel, realtime, revision, self, focusId }: { channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string }) {
+function focused() {
+  return typeof document.hasFocus === "function" ? document.hasFocus() : true;
+}
+
+/**
+ * `focusId`: open the history at this message and highlight it.
+ * `onRead`: called with the newest message while the user can see it (window
+ * focused and the list scrolled to the bottom).
+ * `peer`: the other person, when the channel is a direct conversation.
+ */
+export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer }: {
+  channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string;
+  onRead?: (messageId: string) => void; peer?: User;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
   const [content, setContent] = useState("");
@@ -36,6 +49,27 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
   const inFlight = useRef(new Set<string>());
   // Scroll to the focused message once it is rendered.
   const scrollToFocus = useRef(!!focusId);
+  const typing = useTyping(realtime, channel.id, self?.id);
+  const lastTyping = useRef(0);
+  const newest = useRef<string | undefined>(undefined);
+  const reader = useRef(onRead);
+  reader.current = onRead;
+
+  /** Reports the newest message as read when the user can actually see it. */
+  const reportRead = useRef(() => {
+    const id = newest.current;
+    if (id && pinBottom.current && document.visibilityState !== "hidden" && focused()) reader.current?.(id);
+  }).current;
+
+  useEffect(() => {
+    const visible = () => reportRead();
+    window.addEventListener("focus", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("focus", visible);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [reportRead]);
 
   const accept = (incoming: ChatMessage[]) => {
     setMessages(current => mergeMessages(current, incoming));
@@ -110,6 +144,11 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
     }
   }, [messages, pending]);
 
+  useEffect(() => {
+    newest.current = messages.at(-1)?.id;
+    reportRead();
+  }, [messages, reportRead]);
+
   async function loadOlder() {
     if (older || !messages[0]) return;
     setOlder(true);
@@ -143,22 +182,36 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
     setPending(current => [...current, item]);
     setContent("");
     pinBottom.current = true;
+    // The next message starts a new announcement right away.
+    lastTyping.current = 0;
     void send(item);
+  }
+
+  function type(value: string) {
+    setContent(value);
+    const now = Date.now();
+    if (!value.trim() || now - lastTyping.current < TYPING_INTERVAL) return;
+    lastTyping.current = now;
+    // Offline: nobody would see it anyway.
+    try { realtime.send({ type: "typing.start", channelId: channel.id }); } catch { /* not connected */ }
   }
 
   const welcome = !messages.length && !loading && !hasMore;
   const imported = channel.source === "discord";
   const importing = imported && !!channel.readOnly;
-  return <section className="text-chat" aria-label={`Chat de texto ${channel.name}`}>
+  const typingText = typingLabel(typing);
+  return <section className="text-chat" aria-label={peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`}>
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
       const element = list.current!;
       pinBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      reportRead();
     }}>
       {hasMore && <button className="button secondary history-button" disabled={older} onClick={() => void loadOlder()}>{older ? "Carregando…" : "Carregar mensagens anteriores"}</button>}
       {loading && <p className="chat-status" role="status">Sincronizando mensagens…</p>}
       {welcome && (importing
         ? <div className="chat-welcome"><span className="welcome-icon"><History size={28} /></span><h2>#{channel.name} vem do Discord</h2><p>As mensagens aparecem aqui conforme a importação avança.</p></div>
+        : peer ? <div className="chat-welcome"><Avatar name={peer.name} src={peer.avatar} size="xl" /><h2>{peer.name}</h2><p>Esse é o começo da sua conversa com {peer.name}.</p></div>
         : <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>)}
       {messages.map((item, index) => {
         const previous = messages[index - 1];
@@ -188,9 +241,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
     </div>
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
     {importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
-      <label className="sr-only" htmlFor="message-content">Mensagem em #{channel.name}</label>
-      <textarea id="message-content" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-        onChange={event => setContent(event.target.value)}
+      <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
+      <textarea id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
+        onChange={event => type(event.target.value)}
         onKeyDown={event => {
           if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault(); event.currentTarget.form?.requestSubmit();
@@ -200,7 +253,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
         {/* Attachments and emoji are designed but not implemented yet. */}
         <button type="button" className="icon-button" disabled aria-label="Anexar arquivo (em breve)" title="Anexos em breve"><Plus size={18} /></button>
         <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
-        <span className="composer-hint">Enter para enviar · Shift+Enter para nova linha</span>
+        {/* Who is typing takes the hint's place, so the composer never jumps. */}
+        <span className="composer-hint" aria-live="polite">{typingText
+          ? <span className="typing-indicator"><span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>{typingText}</span>
+          : "Enter para enviar · Shift+Enter para nova linha"}</span>
         <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
       </div>
     </form>}

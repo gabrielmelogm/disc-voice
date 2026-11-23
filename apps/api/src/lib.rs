@@ -1,11 +1,14 @@
 mod activity;
 pub mod discord;
+mod dms;
 mod entities;
 mod files;
+mod friends;
 pub mod google;
 mod messages;
 pub mod migration;
 mod profile;
+mod reads;
 mod realtime;
 mod search;
 
@@ -90,6 +93,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/channels/{id}/messages",
             get(messages::list).post(messages::send),
         )
+        .route("/channels/{id}/read", post(reads::mark))
+        .route("/reads", get(reads::list))
+        .route("/dms", get(dms::list).post(dms::open))
+        .route("/friends", get(friends::list))
+        .route("/friends/requests", post(friends::request))
+        .route("/friends/requests/{id}/accept", post(friends::accept))
+        .route("/friends/{id}", axum::routing::delete(friends::remove))
+        .route("/users/{id}/profile", get(friends::profile))
         .route("/voice/config", get(realtime::ice_config))
         .route("/activities", get(activity::list))
         .route("/discord", get(discord::routes::status))
@@ -635,7 +646,8 @@ async fn join_invite(
 #[serde(rename_all = "camelCase")]
 struct ChannelView {
     id: Uuid,
-    server_id: Uuid,
+    /// Null for direct message conversations.
+    server_id: Option<Uuid>,
     name: String,
     #[serde(rename = "type")]
     kind: String,
@@ -691,7 +703,7 @@ async fn create_channel(
     let name = channel_name(&input.name)?;
     let channel = channel::ActiveModel {
         id: Set(Uuid::new_v4()),
-        server_id: Set(id),
+        server_id: Set(Some(id)),
         name: Set(name),
         kind: Set(input.kind.as_str().into()),
         created_by: Set(user.id),
@@ -742,11 +754,24 @@ async fn require_channel(
         .one(db)
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Canal não encontrado.".into()))?;
-    require_member(db, channel.server_id, user).await?;
-    if channel.kind != kind {
+    match channel.server_id {
+        Some(server) => require_member(db, server, user).await?,
+        None => {
+            dms::require_participant(db, channel.id, user).await?;
+        }
+    }
+    // Direct messages hold messages like text channels do.
+    if channel.kind != kind && !(kind == "text" && channel.kind == "dm") {
         return Err(ApiError::bad(
             "Este tipo de canal não suporta esta operação.",
         ));
     }
     Ok(channel)
+}
+
+/// The server of a channel that must belong to one (anything but a DM).
+fn server_of(channel: &channel::Model) -> ApiResult<Uuid> {
+    channel
+        .server_id
+        .ok_or_else(|| ApiError::bad("Este tipo de canal não suporta esta operação."))
 }

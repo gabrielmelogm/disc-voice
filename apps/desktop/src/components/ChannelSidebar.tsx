@@ -1,12 +1,14 @@
 import { History, Import, MessageSquareText, Plus, RefreshCw, UserPlus, Volume2 } from "lucide-react";
 import type { Channel, Server, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
-import { Avatar, LiveTag } from "./ui";
+import { Avatar, Badge, LiveTag, unreadLabel } from "./ui";
 
-export function ChannelSidebar({ server, channels, channelId, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord }: {
+export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord }: {
   server: Server;
   channels: Channel[];
   channelId: string | null;
+  /** Unread messages per text channel. */
+  unread?: Record<string, number>;
   participants: Record<string, VoiceParticipant[]>;
   voiceState: VoiceState;
   loading: boolean;
@@ -33,10 +35,16 @@ export function ChannelSidebar({ server, channels, channelId, participants, voic
 
     <div className="section-heading"><span>Conversas</span><button className="icon-button small" aria-label="Criar canal de texto" title="Criar canal de texto" disabled={loading} onClick={() => onCreate("text")}><Plus size={17} /></button></div>
     <nav className="channel-list" aria-label="Canais de texto">
-      {text.map(item => <button key={item.id} className={`channel-item ${channelId === item.id ? "selected" : ""}`} aria-pressed={channelId === item.id} onClick={() => onSelect(item)}
-        title={item.readOnly ? "Importando do Discord…" : undefined}>
-        {item.readOnly ? <History size={18} aria-label="Importando do Discord" /> : <MessageSquareText size={18} />}<span>{item.name}</span>
-      </button>)}
+      {text.map(item => {
+        const selected = channelId === item.id;
+        // The open channel is being read: no badge there.
+        const count = selected ? 0 : unread[item.id] || 0;
+        return <button key={item.id} className={`channel-item ${selected ? "selected" : ""} ${count ? "unread" : ""}`} aria-pressed={selected} onClick={() => onSelect(item)}
+          title={item.readOnly ? "Importando do Discord…" : undefined}>
+          {item.readOnly ? <History size={18} aria-label="Importando do Discord" /> : <MessageSquareText size={18} />}<span>{item.name}</span>
+          <Badge count={count} label={unreadLabel(count)} />
+        </button>;
+      })}
     </nav>
 
     <div className="section-heading"><span>Salas de voz</span><button className="icon-button small" aria-label="Criar canal de voz" title="Criar canal de voz" disabled={loading} onClick={() => onCreate("voice")}><Plus size={17} /></button></div>

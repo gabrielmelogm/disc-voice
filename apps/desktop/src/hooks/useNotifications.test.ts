@@ -21,7 +21,7 @@ const me: User = { id: "me", email: "eu@example.com", name: "Eu" };
 const friend: User = { id: "friend", email: "amigo@example.com", name: "Amigo" };
 const text: Channel = { id: "text-1", serverId: "server-1", name: "geral", type: "text" };
 const other: Channel = { id: "text-2", serverId: "server-1", name: "memes", type: "text" };
-const call: Channel = { id: "voice-1", serverId: "server-1", name: "Sala", type: "voice" };
+const call = { id: "voice-1", serverId: "server-1", name: "Sala", type: "voice" } satisfies Channel;
 
 const chat = (author: User, channelId = text.id): ChatMessage => ({
   id: "m1", channelId, clientId: "c1", author, content: "Olá pessoal", createdAt: "2026-11-18T10:00:00Z",

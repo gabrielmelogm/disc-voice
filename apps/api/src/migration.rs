@@ -14,7 +14,124 @@ impl MigratorTrait for Migrator {
             Box::new(Avatar),
             Box::new(Discord),
             Box::new(OneTimeImportAndFiles),
+            Box::new(DmsAndReadState),
+            Box::new(Friendships),
         ]
+    }
+}
+
+struct Friendships;
+
+impl MigrationName for Friendships {
+    fn name(&self) -> &str {
+        "m20261126_000010_friendships"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Friendships {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A friend request, and once accepted, the friendship itself.
+            -- Declining, cancelling and removing all delete the row.
+            CREATE TABLE friendships (
+                requester_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                addressee_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status varchar(8) NOT NULL CHECK (status IN ('pending', 'accepted')),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                accepted_at timestamptz,
+                PRIMARY KEY (requester_id, addressee_id),
+                CHECK (requester_id <> addressee_id)
+            );
+            -- One row per pair, whoever asked first.
+            CREATE UNIQUE INDEX friendships_pair ON friendships
+                (LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id));
+            CREATE INDEX friendships_addressee ON friendships(addressee_id);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("DROP TABLE friendships;")
+            .await?;
+        Ok(())
+    }
+}
+
+struct DmsAndReadState;
+
+impl MigrationName for DmsAndReadState {
+    fn name(&self) -> &str {
+        "m20261125_000009_dms_and_read_state"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for DmsAndReadState {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A direct message conversation is a channel outside any server.
+            ALTER TABLE channels
+                ALTER COLUMN server_id DROP NOT NULL,
+                DROP CONSTRAINT channels_type_check,
+                ADD CONSTRAINT channels_type_check CHECK (type IN ('text', 'voice', 'dm')),
+                ADD CONSTRAINT channels_dm_check CHECK ((type = 'dm') = (server_id IS NULL));
+            -- The two people of a conversation, in a fixed order so a pair has one row.
+            CREATE TABLE dm_channels (
+                channel_id uuid PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+                user_a uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                user_b uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                CHECK (user_a < user_b),
+                UNIQUE (user_a, user_b)
+            );
+            CREATE INDEX dm_channels_user_b ON dm_channels(user_b);
+            -- The last message each person has read in each channel.
+            CREATE TABLE channel_reads (
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                channel_id uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                last_read_message_id bigint NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (user_id, channel_id)
+            );
+            -- Existing history counts as read, so nobody starts with every channel unread.
+            INSERT INTO channel_reads (user_id, channel_id, last_read_message_id)
+            SELECT m.user_id, c.id, latest.id
+            FROM channels c
+            JOIN members m ON m.server_id = c.server_id
+            JOIN LATERAL (SELECT max(id) AS id FROM messages WHERE channel_id = c.id) latest ON true
+            WHERE c.type = 'text' AND latest.id IS NOT NULL;
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            DROP TABLE channel_reads, dm_channels;
+            DELETE FROM channels WHERE type = 'dm';
+            ALTER TABLE channels
+                DROP CONSTRAINT channels_dm_check,
+                DROP CONSTRAINT channels_type_check,
+                ADD CONSTRAINT channels_type_check CHECK (type IN ('text', 'voice')),
+                ALTER COLUMN server_id SET NOT NULL;
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

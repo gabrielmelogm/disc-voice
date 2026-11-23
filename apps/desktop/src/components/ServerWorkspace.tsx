@@ -4,13 +4,17 @@ import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared
 import { api, message } from "../lib/api";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useActivities } from "../hooks/useActivities";
+import { useDirectMessages } from "../hooks/useDirectMessages";
+import { useFriends } from "../hooks/useFriends";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
+import { useUnread } from "../hooks/useUnread";
 import { useVoice } from "../hooks/useVoice";
 import { AppBar } from "./AppBar";
 import { ChannelDetails, ChannelHeader } from "./ChannelDetails";
 import { ChannelSidebar } from "./ChannelSidebar";
-import { DirectMessages, DirectMessagesSidebar } from "./DirectMessages";
+import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
+import { FriendsPage, friendshipWith } from "./Friends";
 import { DiscordImportDialog } from "./DiscordImportDialog";
 import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
 import { SearchDialog, type SearchPick } from "./SearchDialog";
@@ -52,15 +56,24 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [participants, setParticipants] = useState<Record<string, VoiceParticipant[]>>({});
   // Latest profile of each user seen in a profile update, for the profile cards.
   const [profiles, setProfiles] = useState<Record<string, User>>({});
+  const dms = useDirectMessages(realtime.client, realtime.revision);
+  const friends = useFriends(realtime.client, realtime.revision);
+  const presence = Object.fromEntries(friends.friends.map(f => [f.user.id, f.status]));
+  // The open conversation; none shows the friends page.
+  const [dmId, setDmId] = useState<string | null>(null);
+  const [newDm, setNewDm] = useState(false);
+  const [dmError, setDmError] = useState("");
+  const unread = useUnread(realtime.client, realtime.revision, { userId: user.id, serverId: selected });
   const server = servers.find(s => s.id === selected);
   const channel = channels.find(c => c.id === channelId);
+  const conversation = dms.conversations.find(c => c.channel.id === dmId);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
   const voiceChannels = channels.filter(c => c.type === "voice");
   useNotifications({
     realtime: realtime.client,
     user,
     voiceState,
-    viewingChannelId: view === "server" && channel?.type === "text" ? channel.id : null,
+    viewingChannelId: view === "dms" ? conversation?.channel.id ?? null : view === "server" && channel?.type === "text" ? channel.id : null,
     channels,
   });
 
@@ -205,6 +218,15 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     }
   }
 
+  /** Opens (or starts) the conversation with someone and shows it. */
+  async function messagePerson(person: User) {
+    const opened = await dms.open(person.id);
+    setDmError("");
+    setDmId(opened.channel.id);
+    setSettingsOpen(false);
+    show("dms");
+  }
+
   function joinVoice(next: Channel) {
     openChannel(next);
     if (voiceState.channel?.id !== next.id || voiceState.status === "error") void voice.join(next);
@@ -237,9 +259,18 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
 
   const viewingCall = view === "server" && channel?.type === "voice";
   const showDetails = view === "server" && channel?.type === "text";
+  const showProfile = view === "dms" && !!conversation;
 
-  return <ProfileCardProvider profiles={visibleProfiles} activities={activities}><div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
-    {view === "dms" ? <DirectMessagesSidebar /> : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId}
+  const profileMessage = (person: User) => {
+    void messagePerson(person).catch(cause => { setDmError(message(cause)); show("dms"); });
+  };
+
+  return <ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
+    {view === "dms" ? <DirectMessagesSidebar conversations={dms.conversations} selectedId={dmId} selfId={user.id} unread={unread.counts} presence={presence}
+      friendsOpen={!dmId} requests={friends.incoming.length} loading={dms.loading}
+      error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onFriends={() => { setDmError(""); setDmId(null); }}
+      onNew={() => setNewDm(true)} onRetry={() => { setDmError(""); dms.retry(); }} />
+    : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId} unread={unread.counts}
       participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
       onSelect={openChannel} onJoin={joinVoice} onCreate={type => setDialog({ kind: "channel", server, channelType: type })}
       onInvite={() => setDialog({ kind: "invite", server })} onReload={() => setChannelReload(n => n + 1)}
@@ -252,11 +283,14 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       {realtime.status !== "connected" && !loading && <p className="connection-banner" role="status"><WifiOff size={15} />{realtime.status === "reconnecting" ? "Reconectando ao servidor…" : "Conectando ao servidor…"}</p>}
       {error && <div className="workspace-error"><p className="error-banner" role="alert">{error}</p><button className="button secondary" onClick={() => setReload(n => n + 1)} disabled={loading}>Tentar novamente</button></div>}
 
-      {view === "dms" ? <DirectMessages /> : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
+      {view === "dms" ? (dmId
+        ? <DirectMessages conversation={conversation} realtime={realtime.client} revision={realtime.revision} self={user}
+          onRead={unread.markRead} onNew={() => setNewDm(true)} />
+        : <FriendsPage friends={friends} selfId={user.id} onMessage={messagePerson} />) : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
-          focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} /></main>
+          focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
@@ -275,7 +309,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       <div className="bar-dock">
         <CallStatus voice={voice} state={voiceState} serverName={servers.find(s => s.id === voiceState.channel?.serverId)?.name} onOpen={goToVoice} />
         <AppBar user={user} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
-          canJoinVoice={voiceChannels.length > 0} onSelectServer={selectServer}
+          canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
           onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} onSearch={() => setSearching(true)} />
@@ -283,10 +317,14 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     </div>
 
     {showDetails && <ChannelDetails user={user} voiceChannels={voiceChannels} participants={participants} voiceState={voiceState} onJoin={joinVoice} />}
+    {showProfile && conversation && <DirectProfilePanel key={conversation.user.id} user={visibleProfiles[conversation.user.id] || conversation.user}
+      friendship={friendshipWith(friends, conversation.user.id)} status={presence[conversation.user.id]}
+      onAddFriend={() => friendshipWith(friends, conversation.user.id) === "incoming" ? friends.accept(conversation.user.id) : friends.add(conversation.user.id)} />}
 
     {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
       leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} realtime={realtime.client} />}
     {search}
+    {newDm && <NewMessageDialog selfId={user.id} onClose={() => setNewDm(false)} onPick={async person => { await messagePerson(person); setNewDm(false); }} />}
     {discordOpen && server && <DiscordImportDialog server={server} realtime={realtime.client} onClose={() => setDiscordOpen(false)}
       onOpenChannel={id => { setDiscordOpen(false); goToChannel(server.id, id); }} />}
     {dialog && !loading && <ServerDialog mode={dialog} onClose={() => setDialog(null)} onServer={acceptServer} onChannel={next => {

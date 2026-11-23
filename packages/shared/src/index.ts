@@ -241,9 +241,10 @@ export interface Invite {
 
 export interface Channel {
   id: string;
-  serverId: string;
+  /** Null for direct message conversations (`type: "dm"`). */
+  serverId: string | null;
   name: string;
-  type: "text" | "voice";
+  type: "text" | "voice" | "dm";
   /** `discord` for channels imported from Discord. Absent from older servers. */
   source?: "local" | "discord";
   /** Still importing its Discord history: nobody can send messages yet. */
@@ -265,6 +266,71 @@ export interface ChatMessage {
 export interface MessagePage {
   messages: ChatMessage[];
   hasMore: boolean;
+}
+
+/** A private conversation between the user and one other person. */
+export interface DirectConversation {
+  channel: Channel;
+  /** The other person. */
+  user: User;
+  /** Newest message, or null while the conversation is empty. */
+  lastMessageId: string | null;
+  /** Preview of the newest message. Absent from older servers. */
+  lastMessage?: MessagePreview | null;
+}
+
+export interface MessagePreview {
+  id: string;
+  authorId: string | null;
+  content: string;
+  createdAt: string;
+}
+
+export type PresenceStatus = "online" | "offline";
+
+export interface Friend {
+  user: User;
+  status: PresenceStatus;
+  /** When the friendship started. */
+  since: string;
+}
+
+export interface FriendRequest {
+  user: User;
+  createdAt: string;
+}
+
+export interface Friends {
+  friends: Friend[];
+  /** Requests waiting for the user's answer. */
+  incoming: FriendRequest[];
+  /** Requests the user sent. */
+  outgoing: FriendRequest[];
+}
+
+/** Where the user stands with someone: `outgoing` means the user asked. */
+export type Friendship = "none" | "outgoing" | "incoming" | "friends";
+
+/** Someone's profile as the user sees it. */
+export interface UserProfile {
+  user: User;
+  memberSince: string;
+  /** Servers both people are in. */
+  mutualServers: Server[];
+  friendship: Friendship;
+  /** Shared only between friends. */
+  status: PresenceStatus | null;
+}
+
+/** How far the user has read a text channel or conversation. */
+export interface ReadState {
+  channelId: string;
+  /** Null for direct message conversations. */
+  serverId: string | null;
+  /** Last message read, as a message id; "0" when nothing was read. */
+  lastReadId: string;
+  /** Messages from other people after it, capped at 100. */
+  unread: number;
 }
 
 export interface VoiceParticipant {
@@ -307,7 +373,17 @@ export type RealtimeEvent =
   | { type: "activity.updated"; userId: string; activity: Activity | null }
   /** The user's Discord account or a server's Discord connections changed. */
   | { type: "discord.updated"; serverId: string | null }
-  | { type: "discord.import"; serverId: string; import: DiscordImport };
+  | { type: "discord.import"; serverId: string; import: DiscordImport }
+  /** Someone is typing; repeated every few seconds while they keep typing. */
+  | { type: "typing"; channelId: string; user: User }
+  /** The user read a channel, possibly on another device. */
+  | { type: "read.updated"; channelId: string; lastReadId: string }
+  /** A conversation with the user was started. */
+  | { type: "dm.created"; conversation: DirectConversation }
+  /** A friend request was sent, answered or removed: reload the friends list. */
+  | { type: "friends.changed" }
+  /** A friend opened or closed the app. */
+  | { type: "presence.updated"; userId: string; status: PresenceStatus };
 
 export type RealtimeCommand =
   | { type: "ping" }
@@ -315,4 +391,5 @@ export type RealtimeCommand =
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
   | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean }
-  | { type: "voice.signal"; peerId: string; data: SignalPayload };
+  | { type: "voice.signal"; peerId: string; data: SignalPayload }
+  | { type: "typing.start"; channelId: string };
