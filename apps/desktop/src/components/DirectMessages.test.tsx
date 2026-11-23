@@ -18,8 +18,29 @@ describe("direct messages sidebar", () => {
     conversations: [conversation(elisa), conversation(bruno)],
     selectedId: "dm-bruno",
     unread: { "dm-elisa": 3, "dm-bruno": 2 },
-    loading: false, error: "", onSelect: vi.fn(), onNew: vi.fn(), onRetry: vi.fn(),
+    selfId: "me",
+    loading: false, error: "", onSelect: vi.fn(), onFriends: vi.fn(), onNew: vi.fn(), onRetry: vi.fn(),
   };
+
+  it("previews the newest message of each conversation", () => {
+    const preview = (authorId: string, content: string) => ({ id: "9", authorId, content, createdAt: "2026-11-23T10:00:00Z" });
+    render(<DirectMessagesSidebar {...props} conversations={[
+      { ...conversation(elisa), lastMessage: preview("elisa", "Bora jogar\nhoje?") },
+      { ...conversation(bruno), lastMessage: preview("me", "") },
+    ]} />);
+    expect(screen.getByText("Bora jogar hoje?")).toBeVisible();
+    expect(screen.getByText("Você: Anexo")).toBeVisible();
+  });
+
+  it("opens the friends page, showing pending requests", async () => {
+    const user = userEvent.setup();
+    const onFriends = vi.fn();
+    render(<DirectMessagesSidebar {...props} selectedId={null} friendsOpen requests={2} onFriends={onFriends} />);
+    const entry = screen.getByRole("button", { name: "Amigos, 2 pedidos pendentes" });
+    expect(entry).toHaveAttribute("aria-pressed", "true");
+    await user.click(entry);
+    expect(onFriends).toHaveBeenCalled();
+  });
 
   it("shows unread conversations in bold with a badge, except the open one", () => {
     render(<DirectMessagesSidebar {...props} />);

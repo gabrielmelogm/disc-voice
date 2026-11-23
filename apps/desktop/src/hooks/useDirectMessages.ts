@@ -39,8 +39,11 @@ export function useDirectMessages(realtime: Realtime, revision: number) {
     if (event.type === "message.created") {
       const { message } = event;
       setConversations(current => {
-        if (!current.some(c => c.channel.id === message.channelId)) return current;
-        return current.map(c => c.channel.id === message.channelId ? { ...c, lastMessageId: message.id } : c).sort(newest);
+        const known = current.find(c => c.channel.id === message.channelId);
+        // Unknown, or older than the preview (a replay after reconnecting).
+        if (!known || (known.lastMessageId && BigInt(known.lastMessageId) >= BigInt(message.id))) return current;
+        const preview = { id: message.id, authorId: message.author.id, content: message.content, createdAt: message.createdAt };
+        return current.map(c => c.channel.id === message.channelId ? { ...c, lastMessageId: message.id, lastMessage: preview } : c).sort(newest);
       });
     }
     // Keep the other person's name and photo current.

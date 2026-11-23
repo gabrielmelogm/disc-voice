@@ -15,7 +15,53 @@ impl MigratorTrait for Migrator {
             Box::new(Discord),
             Box::new(OneTimeImportAndFiles),
             Box::new(DmsAndReadState),
+            Box::new(Friendships),
         ]
+    }
+}
+
+struct Friendships;
+
+impl MigrationName for Friendships {
+    fn name(&self) -> &str {
+        "m20261126_000010_friendships"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Friendships {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A friend request, and once accepted, the friendship itself.
+            -- Declining, cancelling and removing all delete the row.
+            CREATE TABLE friendships (
+                requester_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                addressee_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status varchar(8) NOT NULL CHECK (status IN ('pending', 'accepted')),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                accepted_at timestamptz,
+                PRIMARY KEY (requester_id, addressee_id),
+                CHECK (requester_id <> addressee_id)
+            );
+            -- One row per pair, whoever asked first.
+            CREATE UNIQUE INDEX friendships_pair ON friendships
+                (LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id));
+            CREATE INDEX friendships_addressee ON friendships(addressee_id);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("DROP TABLE friendships;")
+            .await?;
+        Ok(())
     }
 }
 

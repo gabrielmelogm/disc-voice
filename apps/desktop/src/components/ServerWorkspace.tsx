@@ -5,6 +5,7 @@ import { api, message } from "../lib/api";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useActivities } from "../hooks/useActivities";
 import { useDirectMessages } from "../hooks/useDirectMessages";
+import { useFriends } from "../hooks/useFriends";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
 import { useUnread } from "../hooks/useUnread";
@@ -12,7 +13,8 @@ import { useVoice } from "../hooks/useVoice";
 import { AppBar } from "./AppBar";
 import { ChannelDetails, ChannelHeader } from "./ChannelDetails";
 import { ChannelSidebar } from "./ChannelSidebar";
-import { DirectMessages, DirectMessagesSidebar, NewMessageDialog } from "./DirectMessages";
+import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
+import { FriendsPage, friendshipWith } from "./Friends";
 import { DiscordImportDialog } from "./DiscordImportDialog";
 import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
 import { SearchDialog, type SearchPick } from "./SearchDialog";
@@ -55,6 +57,9 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   // Latest profile of each user seen in a profile update, for the profile cards.
   const [profiles, setProfiles] = useState<Record<string, User>>({});
   const dms = useDirectMessages(realtime.client, realtime.revision);
+  const friends = useFriends(realtime.client, realtime.revision);
+  const presence = Object.fromEntries(friends.friends.map(f => [f.user.id, f.status]));
+  // The open conversation; none shows the friends page.
   const [dmId, setDmId] = useState<string | null>(null);
   const [newDm, setNewDm] = useState(false);
   const [dmError, setDmError] = useState("");
@@ -254,15 +259,17 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
 
   const viewingCall = view === "server" && channel?.type === "voice";
   const showDetails = view === "server" && channel?.type === "text";
+  const showProfile = view === "dms" && !!conversation;
 
   const profileMessage = (person: User) => {
     void messagePerson(person).catch(cause => { setDmError(message(cause)); show("dms"); });
   };
 
-  return <ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
-    {view === "dms" ? <DirectMessagesSidebar conversations={dms.conversations} selectedId={dmId} unread={unread.counts} loading={dms.loading}
-      error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onNew={() => setNewDm(true)}
-      onRetry={() => { setDmError(""); dms.retry(); }} />
+  return <ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
+    {view === "dms" ? <DirectMessagesSidebar conversations={dms.conversations} selectedId={dmId} selfId={user.id} unread={unread.counts} presence={presence}
+      friendsOpen={!dmId} requests={friends.incoming.length} loading={dms.loading}
+      error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onFriends={() => { setDmError(""); setDmId(null); }}
+      onNew={() => setNewDm(true)} onRetry={() => { setDmError(""); dms.retry(); }} />
     : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId} unread={unread.counts}
       participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
       onSelect={openChannel} onJoin={joinVoice} onCreate={type => setDialog({ kind: "channel", server, channelType: type })}
@@ -276,8 +283,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       {realtime.status !== "connected" && !loading && <p className="connection-banner" role="status"><WifiOff size={15} />{realtime.status === "reconnecting" ? "Reconectando ao servidor…" : "Conectando ao servidor…"}</p>}
       {error && <div className="workspace-error"><p className="error-banner" role="alert">{error}</p><button className="button secondary" onClick={() => setReload(n => n + 1)} disabled={loading}>Tentar novamente</button></div>}
 
-      {view === "dms" ? <DirectMessages conversation={conversation} realtime={realtime.client} revision={realtime.revision} self={user}
-        onRead={unread.markRead} onNew={() => setNewDm(true)} /> : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
+      {view === "dms" ? (dmId
+        ? <DirectMessages conversation={conversation} realtime={realtime.client} revision={realtime.revision} self={user}
+          onRead={unread.markRead} onNew={() => setNewDm(true)} />
+        : <FriendsPage friends={friends} selfId={user.id} onMessage={messagePerson} />) : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
@@ -308,6 +317,9 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     </div>
 
     {showDetails && <ChannelDetails user={user} voiceChannels={voiceChannels} participants={participants} voiceState={voiceState} onJoin={joinVoice} />}
+    {showProfile && conversation && <DirectProfilePanel key={conversation.user.id} user={visibleProfiles[conversation.user.id] || conversation.user}
+      friendship={friendshipWith(friends, conversation.user.id)} status={presence[conversation.user.id]}
+      onAddFriend={() => friendshipWith(friends, conversation.user.id) === "incoming" ? friends.accept(conversation.user.id) : friends.add(conversation.user.id)} />}
 
     {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
       leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} realtime={realtime.client} />}

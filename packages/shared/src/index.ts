@@ -275,6 +275,51 @@ export interface DirectConversation {
   user: User;
   /** Newest message, or null while the conversation is empty. */
   lastMessageId: string | null;
+  /** Preview of the newest message. Absent from older servers. */
+  lastMessage?: MessagePreview | null;
+}
+
+export interface MessagePreview {
+  id: string;
+  authorId: string | null;
+  content: string;
+  createdAt: string;
+}
+
+export type PresenceStatus = "online" | "offline";
+
+export interface Friend {
+  user: User;
+  status: PresenceStatus;
+  /** When the friendship started. */
+  since: string;
+}
+
+export interface FriendRequest {
+  user: User;
+  createdAt: string;
+}
+
+export interface Friends {
+  friends: Friend[];
+  /** Requests waiting for the user's answer. */
+  incoming: FriendRequest[];
+  /** Requests the user sent. */
+  outgoing: FriendRequest[];
+}
+
+/** Where the user stands with someone: `outgoing` means the user asked. */
+export type Friendship = "none" | "outgoing" | "incoming" | "friends";
+
+/** Someone's profile as the user sees it. */
+export interface UserProfile {
+  user: User;
+  memberSince: string;
+  /** Servers both people are in. */
+  mutualServers: Server[];
+  friendship: Friendship;
+  /** Shared only between friends. */
+  status: PresenceStatus | null;
 }
 
 /** How far the user has read a text channel or conversation. */
@@ -334,7 +379,11 @@ export type RealtimeEvent =
   /** The user read a channel, possibly on another device. */
   | { type: "read.updated"; channelId: string; lastReadId: string }
   /** A conversation with the user was started. */
-  | { type: "dm.created"; conversation: DirectConversation };
+  | { type: "dm.created"; conversation: DirectConversation }
+  /** A friend request was sent, answered or removed: reload the friends list. */
+  | { type: "friends.changed" }
+  /** A friend opened or closed the app. */
+  | { type: "presence.updated"; userId: string; status: PresenceStatus };
 
 export type RealtimeCommand =
   | { type: "ping" }

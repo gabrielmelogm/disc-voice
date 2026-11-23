@@ -1,6 +1,6 @@
 import type {
   Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite,
-  MessagePage, ProfileUpdate, ReadState, SearchResults, Server, User,
+  Friends, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, User, UserProfile,
 } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
@@ -120,6 +120,13 @@ export const api = {
     request<{ channelId: string; lastReadId: string }>(`/channels/${channelId}/read`, { method: "POST", body: { messageId } }),
   dms: (signal?: AbortSignal) => request<DirectConversation[]>("/dms", { signal }),
   openDm: (userId: string) => request<DirectConversation>("/dms", { method: "POST", body: { userId } }),
+  friends: (signal?: AbortSignal) => request<Friends>("/friends", { signal }),
+  /** Sends a request, or accepts theirs when they had already asked. */
+  addFriend: (userId: string) => request<{ status: "outgoing" | "friends" }>("/friends/requests", { method: "POST", body: { userId } }),
+  acceptFriend: (userId: string) => request<{ status: "friends" }>(`/friends/requests/${userId}/accept`, { method: "POST" }),
+  /** Declines or cancels a request, or ends a friendship. */
+  removeFriend: (userId: string) => request<void>(`/friends/${userId}`, { method: "DELETE" }),
+  profile: (userId: string, signal?: AbortSignal) => request<UserProfile>(`/users/${userId}/profile`, { signal }),
   voiceConfig: () => request<{ iceServers: RTCIceServer[] }>("/voice/config"),
   activities: (signal?: AbortSignal) => request<Record<string, Activity>>("/activities", { signal }),
   discord: (signal?: AbortSignal) => request<DiscordStatus>("/discord", { signal }),

@@ -1,20 +1,37 @@
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, Plus, RefreshCw, Search, Users, X } from "lucide-react";
-import type { DirectConversation, User } from "@disc-voice/shared";
+import { Clock, MessageCircle, Plus, RefreshCw, Search, UserCheck, UserPlus, Users, X } from "lucide-react";
+import type { DirectConversation, Friendship, PresenceStatus, User, UserProfile } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
 import type { Realtime } from "../lib/realtime";
+import { bannerColor } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
-import { Avatar, Badge, SoonTag, unreadLabel } from "./ui";
+import { Avatar, Badge, unreadLabel } from "./ui";
+
+/** One line about the newest message: "Você: Oi!", or "Anexo" for files only. */
+export function previewText(conversation: DirectConversation, selfId: string) {
+  const last = conversation.lastMessage;
+  if (!last) return "Nenhuma mensagem ainda";
+  const text = last.content.replace(/\s+/g, " ").trim() || "Anexo";
+  return last.authorId === selfId ? `Você: ${text}` : text;
+}
 
 /** The list of conversations, next to the open one. */
-export function DirectMessagesSidebar({ conversations, selectedId, unread, loading, error, onSelect, onNew, onRetry }: {
+export function DirectMessagesSidebar({ conversations, selectedId, selfId, unread, presence = {}, friendsOpen = false, requests = 0, loading, error, onSelect, onFriends, onNew, onRetry }: {
   conversations: DirectConversation[];
   selectedId: string | null;
+  selfId: string;
   /** Unread messages per conversation channel. */
   unread: Record<string, number>;
+  /** Presence of friends, by user id. */
+  presence?: Record<string, PresenceStatus>;
+  /** The friends page is open. */
+  friendsOpen?: boolean;
+  /** Friend requests waiting for an answer. */
+  requests?: number;
   loading: boolean;
   error: string;
   onSelect: (conversation: DirectConversation) => void;
+  onFriends: () => void;
   onNew: () => void;
   onRetry: () => void;
 }) {
@@ -24,8 +41,10 @@ export function DirectMessagesSidebar({ conversations, selectedId, unread, loadi
   return <aside className="sidebar" aria-label="Mensagens diretas">
     <div className="search-field"><Search size={16} /><label className="sr-only" htmlFor="dm-search">Encontrar conversa</label>
       <input id="dm-search" className="search-input" placeholder="Encontrar conversa" value={filter} onChange={event => setFilter(event.target.value)} /></div>
-    {/* Friends are designed but not implemented yet. */}
-    <button className="channel-item" disabled><Users size={18} /><span>Amigos</span><SoonTag /></button>
+    <button className={`channel-item ${friendsOpen ? "selected" : ""} ${requests ? "unread" : ""}`} aria-pressed={friendsOpen} onClick={onFriends}
+      aria-label={requests ? `Amigos, ${requests} ${requests === 1 ? "pedido pendente" : "pedidos pendentes"}` : "Amigos"}>
+      <Users size={18} /><span>Amigos</span><Badge count={requests} />
+    </button>
     <div className="section-heading"><span>Mensagens diretas</span><button className="icon-button small" aria-label="Nova mensagem direta" title="Nova mensagem direta" onClick={onNew}><Plus size={17} /></button></div>
     {loading && !conversations.length && <p className="sidebar-status" role="status">Carregando conversas…</p>}
     {error && <div className="sidebar-status"><p role="alert">{error}</p><button className="link-button" onClick={onRetry}><RefreshCw size={13} />Tentar novamente</button></div>}
@@ -37,8 +56,8 @@ export function DirectMessagesSidebar({ conversations, selectedId, unread, loadi
         const count = selected ? 0 : unread[conversation.channel.id] || 0;
         return <button key={conversation.channel.id} className={`channel-item dm-item ${selected ? "selected" : ""} ${count ? "unread" : ""}`}
           aria-pressed={selected} onClick={() => onSelect(conversation)}>
-          <Avatar name={conversation.user.name} src={conversation.user.avatar} size="sm" />
-          <span>{conversation.user.name}</span>
+          <Avatar name={conversation.user.name} src={conversation.user.avatar} size="sm" status={presence[conversation.user.id]} />
+          <span className="dm-text"><span className="dm-name">{conversation.user.name}</span><small className="dm-preview">{previewText(conversation, selfId)}</small></span>
           <Badge count={count} label={unreadLabel(count)} />
         </button>;
       })}
@@ -74,6 +93,65 @@ export function DirectMessages({ conversation, realtime, revision, self, onRead,
     <TextChannel key={channel.id} channel={channel} peer={user} realtime={realtime} revision={revision} self={self}
       onRead={messageId => onRead(channel.id, messageId)} />
   </main>;
+}
+
+const ACTIONS: Record<Friendship, string> = {
+  none: "Adicionar amigo",
+  outgoing: "Pedido enviado",
+  incoming: "Aceitar pedido de amizade",
+  friends: "Amigos",
+};
+
+/** The other person's profile, beside a direct conversation. */
+export function DirectProfilePanel({ user, friendship, status, onAddFriend }: {
+  user: User;
+  /** From the live friends list, so the panel follows changes at once. */
+  friendship: Friendship;
+  status?: PresenceStatus;
+  onAddFriend: () => Promise<void>;
+}) {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setError("");
+    void api.profile(user.id, controller.signal)
+      .then(result => { if (!controller.signal.aborted) setProfile(result); })
+      .catch(cause => { if (!controller.signal.aborted) setError(message(cause)); });
+    return () => controller.abort();
+  }, [user.id, friendship]);
+
+  async function add() {
+    setBusy(true);
+    setError("");
+    try { await onAddFriend(); }
+    catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  }
+
+  const person = profile?.user.id === user.id ? { ...profile.user, ...user } : user;
+  return <aside className="details-panel dm-profile" aria-label={`Perfil de ${user.name}`}>
+    <div className="profile-preview">
+      <div className="profile-banner" style={{ background: bannerColor(person.banner) }} />
+      <Avatar name={person.name} src={person.avatar} size="xl" status={status} className="profile-avatar" />
+      <strong>{person.name}</strong>
+      {person.pronouns && <span>{person.pronouns}</span>}
+      <div className="detail-card"><h3 className="eyebrow">Sobre mim</h3><p className="profile-bio">{person.bio || "Ainda não escreveu nada por aqui."}</p></div>
+      {profile && <div className="detail-card"><h3 className="eyebrow">Membro desde</h3>
+        <p>{new Date(profile.memberSince).toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" })}</p></div>}
+      {profile && <div className="detail-card"><h3 className="eyebrow">Servidores em comum — {profile.mutualServers.length}</h3>
+        {profile.mutualServers.length
+          ? <ul className="mutual-servers">{profile.mutualServers.map(server => <li key={server.id}><Avatar name={server.name} size="xs" square />{server.name}</li>)}</ul>
+          : <p className="muted">Nenhum servidor em comum.</p>}
+      </div>}
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      {friendship === "friends" || friendship === "outgoing"
+        ? <p className="friend-state">{friendship === "friends" ? <><UserCheck size={16} />Vocês são amigos</> : <><Clock size={16} />Pedido de amizade enviado</>}</p>
+        : <button className="button primary small full" disabled={busy} onClick={() => void add()}><UserPlus size={16} />{ACTIONS[friendship]}</button>}
+    </div>
+  </aside>;
 }
 
 /** Picks someone from the user's servers to talk to. */

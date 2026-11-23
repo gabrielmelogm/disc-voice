@@ -136,6 +136,28 @@ impl Hub {
         self.emit(recipients, payload, false);
     }
 
+    /// Which of these accounts have the app open somewhere.
+    pub(crate) fn online(
+        &self,
+        users: &std::collections::HashSet<Uuid>,
+    ) -> std::collections::HashSet<Uuid> {
+        let clients = self.clients.lock().unwrap();
+        clients
+            .values()
+            .map(|c| c.user.id)
+            .filter(|id| users.contains(id))
+            .collect()
+    }
+
+    /// Adds a connection; returns whether it is the account's first one.
+    fn connect(&self, id: Uuid, client: Client) -> bool {
+        let mut clients = self.clients.lock().unwrap();
+        let user = client.user.id;
+        let first = !clients.values().any(|c| c.user.id == user);
+        clients.insert(id, client);
+        first
+    }
+
     /// Stores a user's activity; returns whether it changed.
     pub(crate) fn set_activity(
         &self,
@@ -561,7 +583,7 @@ async fn connected(state: AppState, mut socket: WebSocket) {
     };
     let id = Uuid::new_v4();
     let mut events = state.realtime.events.subscribe();
-    state.realtime.clients.lock().unwrap().insert(
+    let first = state.realtime.connect(
         id,
         Client {
             user: user.clone(),
@@ -571,10 +593,14 @@ async fn connected(state: AppState, mut socket: WebSocket) {
             typing: HashMap::new(),
         },
     );
+    if first {
+        presence(&state, user.id, true).await;
+    }
     let (mut sender, mut receiver) = socket.split();
     let ready = Message::Text(json!({ "type": "ready", "peerId": id }).to_string().into());
     if sender.send(ready).await.is_err() {
         state.realtime.disconnect(id);
+        went_offline(&state, user.id).await;
         return;
     }
     let mut heartbeat = interval(Timeout::from_secs(15));
@@ -628,7 +654,26 @@ async fn connected(state: AppState, mut socket: WebSocket) {
         }
     }
     state.realtime.disconnect(id);
+    went_offline(&state, user.id).await;
     let _ = timeout(Timeout::from_secs(1), sender.close()).await;
+}
+
+/// Presence is a courtesy: a failure to tell friends must not drop the connection.
+async fn presence(state: &AppState, user: Uuid, online: bool) {
+    if let Err(error) = crate::friends::announce_presence(state, user, online).await {
+        tracing::warn!(error = %error.1, "Não foi possível avisar a presença aos amigos");
+    }
+}
+
+/// After a connection ends (or a logout revoked it), the account may be gone.
+async fn went_offline(state: &AppState, user: Uuid) {
+    if state
+        .realtime
+        .online(&std::collections::HashSet::from([user]))
+        .is_empty()
+    {
+        presence(state, user, false).await;
+    }
 }
 
 pub(crate) async fn ice_config(Extension(user): Extension<UserView>) -> ApiResult<Json<Value>> {

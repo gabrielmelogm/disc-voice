@@ -2465,3 +2465,298 @@ async fn direct_messages_read_state_and_typing() {
         .unwrap();
     }
 }
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn friends_presence_and_profiles() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
+        vec![],
+    );
+    let (ana, ana_id) = register(&app, "Ana").await;
+    let (bia, bia_id) = register(&app, "Bia").await;
+    let (caio, caio_id) = register(&app, "Caio").await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut ana_ws, _) = socket(&url, &ana).await;
+    let (mut bia_ws, _) = socket(&url, &bia).await;
+
+    // Without a shared server or a friendship, there is no conversation.
+    let open_dm = call(
+        &app,
+        "POST",
+        "/dms",
+        Some(&ana),
+        Some(json!({ "userId": bia_id })),
+    )
+    .await;
+    assert_eq!(open_dm.0, StatusCode::FORBIDDEN);
+    // Nor a profile to look at.
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/users/{bia_id}/profile"),
+            Some(&ana),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let ask = |token: &str, user: &str| {
+        let (app, token, user) = (app.clone(), token.to_owned(), user.to_owned());
+        async move {
+            call(
+                &app,
+                "POST",
+                "/friends/requests",
+                Some(&token),
+                Some(json!({ "userId": user })),
+            )
+            .await
+        }
+    };
+    assert_eq!(ask(&ana, &ana_id).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        ask(&ana, &Uuid::new_v4().to_string()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, sent) = ask(&ana, &bia_id).await;
+    assert_eq!(
+        (status, &sent["status"]),
+        (StatusCode::OK, &json!("outgoing"))
+    );
+    event(&mut bia_ws, "friends.changed").await;
+    // Asking twice changes nothing.
+    assert_eq!(ask(&ana, &bia_id).await.1["status"], "outgoing");
+    let bias = call(&app, "GET", "/friends", Some(&bia), None).await.1;
+    assert_eq!(bias["incoming"][0]["user"]["id"], ana_id);
+    assert!(bias["friends"].as_array().unwrap().is_empty());
+    let anas = call(&app, "GET", "/friends", Some(&ana), None).await.1;
+    assert_eq!(anas["outgoing"][0]["user"]["id"], bia_id);
+    // Requests can be seen by the person they were sent to, and only accepted by them.
+    let profile = call(
+        &app,
+        "GET",
+        &format!("/users/{ana_id}/profile"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(profile["friendship"], "incoming");
+    assert_eq!(profile["status"], Value::Null);
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/friends/requests/{bia_id}/accept"),
+            Some(&ana),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/friends/requests/{ana_id}/accept"),
+            Some(&caio),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, accepted) = call(
+        &app,
+        "POST",
+        &format!("/friends/requests/{ana_id}/accept"),
+        Some(&bia),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, &accepted["status"]),
+        (StatusCode::OK, &json!("friends"))
+    );
+    // New friends see each other's presence at once.
+    loop {
+        let presence = event(&mut ana_ws, "presence.updated").await;
+        if presence["userId"] == bia_id {
+            assert_eq!(presence["status"], "online");
+            break;
+        }
+    }
+    let anas = call(&app, "GET", "/friends", Some(&ana), None).await.1;
+    assert_eq!(anas["friends"][0]["user"]["id"], bia_id);
+    assert_eq!(anas["friends"][0]["status"], "online");
+    assert!(anas["outgoing"].as_array().unwrap().is_empty());
+    assert_eq!(ask(&ana, &bia_id).await.0, StatusCode::CONFLICT);
+
+    // Closing the app tells friends; opening it again too.
+    bia_ws.close(None).await.unwrap();
+    let presence = event(&mut ana_ws, "presence.updated").await;
+    assert_eq!(
+        (&presence["userId"], &presence["status"]),
+        (&json!(bia_id), &json!("offline"))
+    );
+    let (_bia_back, _) = socket(&url, &bia).await;
+    let presence = event(&mut ana_ws, "presence.updated").await;
+    assert_eq!(
+        (&presence["userId"], &presence["status"]),
+        (&json!(bia_id), &json!("online"))
+    );
+
+    // Friends can talk without sharing a server; the list previews the latest message.
+    let (status, opened) = call(
+        &app,
+        "POST",
+        "/dms",
+        Some(&ana),
+        Some(json!({ "userId": bia_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let dm_id = opened["channel"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(opened["lastMessage"], Value::Null);
+    for content in ["Oi!", "Tudo bem?"] {
+        call(
+            &app,
+            "POST",
+            &format!("/channels/{dm_id}/messages"),
+            Some(&ana),
+            Some(json!({ "clientId": Uuid::new_v4(), "content": content })),
+        )
+        .await;
+    }
+    let listed = call(&app, "GET", "/dms", Some(&bia), None).await.1;
+    assert_eq!(listed[0]["lastMessage"]["content"], "Tudo bem?");
+    assert_eq!(listed[0]["lastMessage"]["authorId"], ana_id);
+    assert_eq!(listed[0]["lastMessageId"], listed[0]["lastMessage"]["id"]);
+
+    let profile = call(
+        &app,
+        "GET",
+        &format!("/users/{bia_id}/profile"),
+        Some(&ana),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(profile["user"]["name"], "Bia");
+    assert_eq!(profile["friendship"], "friends");
+    assert_eq!(profile["status"], "online");
+    assert!(profile["memberSince"].is_string());
+    assert!(profile["mutualServers"].as_array().unwrap().is_empty());
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/users/{ana_id}/profile"),
+            Some(&caio),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Removing a friend: either side, once. The conversation stays readable.
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/friends/{ana_id}"),
+            Some(&bia),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    event(&mut ana_ws, "friends.changed").await;
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/friends/{bia_id}"),
+            Some(&ana),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let anas = call(&app, "GET", "/friends", Some(&ana), None).await.1;
+    assert!(anas["friends"].as_array().unwrap().is_empty());
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/channels/{dm_id}/messages"),
+            Some(&bia),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    // Two people asking each other become friends.
+    assert_eq!(ask(&caio, &ana_id).await.1["status"], "outgoing");
+    assert_eq!(ask(&ana, &caio_id).await.1["status"], "friends");
+    // Declining is removing a pending request.
+    assert_eq!(ask(&bia, &caio_id).await.1["status"], "outgoing");
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/friends/{bia_id}"),
+            Some(&caio),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let caios = call(&app, "GET", "/friends", Some(&caio), None).await.1;
+    assert_eq!(caios["friends"][0]["user"]["id"], ana_id);
+    assert!(caios["incoming"].as_array().unwrap().is_empty());
+
+    live.abort();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM channels WHERE id = $1",
+        [Uuid::parse_str(&dm_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    for id in [ana_id, bia_id, caio_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM users WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+}

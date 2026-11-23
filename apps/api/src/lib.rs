@@ -3,6 +3,7 @@ pub mod discord;
 mod dms;
 mod entities;
 mod files;
+mod friends;
 pub mod google;
 mod messages;
 pub mod migration;
@@ -95,6 +96,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/channels/{id}/read", post(reads::mark))
         .route("/reads", get(reads::list))
         .route("/dms", get(dms::list).post(dms::open))
+        .route("/friends", get(friends::list))
+        .route("/friends/requests", post(friends::request))
+        .route("/friends/requests/{id}/accept", post(friends::accept))
+        .route("/friends/{id}", axum::routing::delete(friends::remove))
+        .route("/users/{id}/profile", get(friends::profile))
         .route("/voice/config", get(realtime::ice_config))
         .route("/activities", get(activity::list))
         .route("/discord", get(discord::routes::status))
