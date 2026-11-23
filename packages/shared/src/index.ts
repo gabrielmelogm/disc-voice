@@ -92,6 +92,92 @@ export interface User {
   banner?: BannerColor;
   /** Profile photo URL (from the Google account), or null for initials. */
   avatar?: string | null;
+  /** Discord username of an author known only from imported Discord messages. */
+  discord?: string;
+}
+
+export type ActivityKind = "playing" | "streaming" | "listening" | "watching" | "competing";
+
+/** What a user is doing right now, e.g. playing a game. */
+export interface Activity {
+  kind: ActivityKind;
+  name: string;
+  details: string | null;
+  state: string | null;
+  startedAt: string | null;
+  /** Where it came from; Discord is the only source for now. */
+  source: "discord";
+}
+
+export interface DiscordAccount {
+  id: string;
+  username: string;
+  displayName: string | null;
+  avatar: string | null;
+  shareActivity: boolean;
+  /** The bot saw this account in a Discord server it is in. */
+  presenceSeen: boolean;
+}
+
+export interface DiscordStatus {
+  /** The integration is configured on the API. */
+  enabled: boolean;
+  /** The bot is receiving Discord presences right now. */
+  presence: boolean;
+  account: DiscordAccount | null;
+}
+
+export interface DiscordImport {
+  channelId: string;
+  serverId: string;
+  guildId: string;
+  discordChannelId: string;
+  discordChannelName: string;
+  /** `history` while importing; `done` once the channel belongs to Disc Voice. */
+  phase: "history" | "done";
+  status: "queued" | "running" | "idle" | "error";
+  imported: number;
+  error: string | null;
+  syncedAt: string | null;
+}
+
+export interface DiscordChannel {
+  id: string;
+  name: string;
+  category: string | null;
+  /** The bot can view the channel and read its history. */
+  readable: boolean;
+  import: DiscordImport | null;
+}
+
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  icon: string | null;
+  available: boolean;
+  error: string | null;
+  channels: DiscordChannel[];
+}
+
+export interface DiscordServer {
+  /** Message Content intent of the bot; null when unknown. */
+  messageContent: boolean | null;
+  guilds: DiscordGuild[];
+  imports: DiscordImport[];
+}
+
+/** A file attached to a message (for now, media imported from Discord). */
+export interface Attachment {
+  id: string;
+  filename: string;
+  /** `/api/files/...` for files kept by the API (resolve with `mediaUrl`). */
+  url: string;
+  /** Could not be copied from Discord: the link may no longer open. */
+  unavailable?: boolean;
+  size: number;
+  contentType: string | null;
+  width: number | null;
+  height: number | null;
 }
 
 export type ProfileUpdate = Partial<Pick<User, "name" | "pronouns" | "bio" | "banner">>;
@@ -158,6 +244,10 @@ export interface Channel {
   serverId: string;
   name: string;
   type: "text" | "voice";
+  /** `discord` for channels imported from Discord. Absent from older servers. */
+  source?: "local" | "discord";
+  /** Still importing its Discord history: nobody can send messages yet. */
+  readOnly?: boolean;
 }
 
 export interface ChatMessage {
@@ -167,6 +257,9 @@ export interface ChatMessage {
   author: User;
   content: string;
   createdAt: string;
+  /** Present on messages imported from Discord. */
+  discordId?: string;
+  attachments?: Attachment[];
 }
 
 export interface MessagePage {
@@ -208,7 +301,11 @@ export type RealtimeEvent =
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }
   | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }
   | { type: "voice.left"; channelId: string; reason: "left" | "replaced" }
-  | { type: "voice.signal"; channelId: string; peerId: string; data: SignalPayload };
+  | { type: "voice.signal"; channelId: string; peerId: string; data: SignalPayload }
+  | { type: "activity.updated"; userId: string; activity: Activity | null }
+  /** The user's Discord account or a server's Discord connections changed. */
+  | { type: "discord.updated"; serverId: string | null }
+  | { type: "discord.import"; serverId: string; import: DiscordImport };
 
 export type RealtimeCommand =
   | { type: "ping" }

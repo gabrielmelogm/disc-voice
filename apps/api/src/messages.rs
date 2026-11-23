@@ -1,8 +1,57 @@
 use super::*;
 use axum::extract::Query;
-use entities::message;
+use entities::{discord_account, message};
 use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement};
 use std::collections::HashMap;
+
+/// Author of an imported Discord message, stored with the message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiscordAuthor {
+    pub id: String,
+    pub username: String,
+    /// Display name (global name, or the username).
+    pub name: String,
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub bot: bool,
+}
+
+/// Disc Voice ids for Discord-only authors: stable, and never a real user id.
+const DISCORD_AUTHOR_PREFIX: u64 = 0xd15c_0000_0000_0000;
+
+impl DiscordAuthor {
+    fn view(&self) -> UserView {
+        UserView {
+            id: Uuid::from_u64_pair(DISCORD_AUTHOR_PREFIX, self.id.parse().unwrap_or_default()),
+            email: String::new(),
+            name: self.name.clone(),
+            pronouns: String::new(),
+            bio: String::new(),
+            banner: profile::DEFAULT_BANNER.into(),
+            avatar: self.avatar.clone(),
+            discord: Some(self.username.clone()),
+        }
+    }
+}
+
+/// A file attached to a message. Media imported from Discord is copied to
+/// the API (`url` is then `/api/files/...`), since Discord's links expire.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Attachment {
+    pub id: String,
+    pub filename: String,
+    pub url: String,
+    pub size: u64,
+    pub content_type: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Could not be copied to the API (too large, or the link had expired):
+    /// `url` still points to Discord and may not open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unavailable: bool,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +62,11 @@ pub(crate) struct MessageView {
     author: UserView,
     content: String,
     created_at: chrono::DateTime<Utc>,
+    /// Present on messages imported from Discord.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discord_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<Attachment>,
 }
 
 impl MessageView {
@@ -24,7 +78,74 @@ impl MessageView {
             author,
             content: m.content,
             created_at: m.created_at,
+            discord_id: m.discord_id,
+            attachments: serde_json::from_value(m.attachments).unwrap_or_default(),
         }
+    }
+}
+
+/// Authors of a page of messages. A Discord author whose account is linked
+/// to a Disc Voice user shows as that user.
+#[derive(Default)]
+pub(crate) struct Authors {
+    users: HashMap<Uuid, UserView>,
+    linked: HashMap<String, UserView>,
+}
+
+impl Authors {
+    pub(crate) async fn load<'a>(
+        db: &DatabaseConnection,
+        rows: impl Iterator<Item = (Option<Uuid>, Option<&'a serde_json::Value>)>,
+    ) -> ApiResult<Self> {
+        let (mut ids, mut discord) = (Vec::new(), Vec::new());
+        for (user, author) in rows {
+            ids.extend(user);
+            if let Some(id) = author.and_then(|a| a["id"].as_str()) {
+                discord.push(id.to_owned());
+            }
+        }
+        let accounts = if discord.is_empty() {
+            Vec::new()
+        } else {
+            discord_account::Entity::find()
+                .filter(discord_account::Column::DiscordId.is_in(discord))
+                .all(db)
+                .await?
+        };
+        ids.extend(accounts.iter().map(|a| a.user_id));
+        let users: HashMap<_, _> = if ids.is_empty() {
+            HashMap::new()
+        } else {
+            user::Entity::find()
+                .filter(user::Column::Id.is_in(ids))
+                .all(db)
+                .await?
+                .into_iter()
+                .map(|u| (u.id, UserView::from(u)))
+                .collect()
+        };
+        let linked = accounts
+            .into_iter()
+            .filter_map(|a| Some((a.discord_id, users.get(&a.user_id)?.clone())))
+            .collect();
+        Ok(Self { users, linked })
+    }
+
+    pub(crate) fn get(
+        &self,
+        user: Option<Uuid>,
+        discord: Option<&serde_json::Value>,
+    ) -> Option<UserView> {
+        if let Some(id) = user {
+            return self.users.get(&id).cloned();
+        }
+        let author: DiscordAuthor = serde_json::from_value(discord?.clone()).ok()?;
+        Some(
+            self.linked
+                .get(&author.id)
+                .cloned()
+                .unwrap_or_else(|| author.view()),
+        )
     }
 }
 
@@ -70,18 +191,17 @@ pub(crate) async fn list(
     if input.after.is_none() {
         rows.reverse();
     }
-    let authors: HashMap<_, _> = user::Entity::find()
-        .filter(user::Column::Id.is_in(rows.iter().map(|m| m.author_id)))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|u| (u.id, UserView::from(u)))
-        .collect();
+    let authors = Authors::load(
+        &state.db,
+        rows.iter()
+            .map(|m| (m.author_id, m.discord_author.as_ref())),
+    )
+    .await?;
     let messages = rows
         .into_iter()
-        .map(|m| {
-            let author = authors[&m.author_id].clone();
-            MessageView::new(m, author)
+        .filter_map(|m| {
+            let author = authors.get(m.author_id, m.discord_author.as_ref())?;
+            Some(MessageView::new(m, author))
         })
         .collect();
     Ok(Json(Page { messages, has_more }))
@@ -101,6 +221,17 @@ pub(crate) async fn send(
     Json(input): Json<SendMessage>,
 ) -> ApiResult<Json<MessageView>> {
     let channel = require_channel(&state.db, id, user.id, "text").await?;
+    // New messages would land among the history still being imported.
+    if channel.source == "discord"
+        && crate::discord::importing(&state.db, channel.server_id)
+            .await?
+            .contains(&id)
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Este canal ainda está sendo importado do Discord. Você poderá enviar mensagens quando a importação terminar.".into(),
+        ));
+    }
     let content = input.content.trim();
     if content.is_empty() || content.chars().count() > 4000 || content.contains('\0') {
         return Err(ApiError::bad(
@@ -108,14 +239,7 @@ pub(crate) async fn send(
         ));
     }
     let tx = state.db.begin().await?;
-    // Serialize commits within a channel: history cursors must never skip a
-    // lower sequence whose transaction was still open when the page was read.
-    tx.execute(Statement::from_sql_and_values(
-        DbBackend::Postgres,
-        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-        [id.to_string().into()],
-    ))
-    .await?;
+    lock_channel(&tx, id).await?;
     let existing = message::Entity::find()
         .filter(message::Column::AuthorId.eq(user.id))
         .filter(message::Column::ClientId.eq(input.client_id))
@@ -132,10 +256,11 @@ pub(crate) async fn send(
     } else {
         message::ActiveModel {
             channel_id: Set(id),
-            author_id: Set(user.id),
+            author_id: Set(Some(user.id)),
             client_id: Set(input.client_id),
             content: Set(content.into()),
             created_at: Set(Utc::now()),
+            attachments: Set(serde_json::json!([])),
             ..Default::default()
         }
         .insert(&tx)
@@ -150,4 +275,41 @@ pub(crate) async fn send(
         }),
     );
     Ok(Json(view))
+}
+
+/// Serializes commits within a channel: history cursors must never skip a
+/// lower sequence whose transaction was still open when the page was read.
+pub(crate) async fn lock_channel(tx: &impl ConnectionTrait, channel: Uuid) -> ApiResult<()> {
+    tx.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [channel.to_string().into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_authors_get_stable_distinct_ids() {
+        let author = DiscordAuthor {
+            id: "80351110224678912".into(),
+            username: "nelly".into(),
+            name: "Nelly".into(),
+            avatar: None,
+            bot: false,
+        };
+        let view = author.view();
+        assert_eq!(view.id, author.view().id);
+        assert_eq!(view.discord.as_deref(), Some("nelly"));
+        assert_eq!(view.name, "Nelly");
+        let json = serde_json::to_value(&author).unwrap();
+        let authors = Authors::default();
+        assert_eq!(authors.get(None, Some(&json)).unwrap().id, view.id);
+        // A local author that no longer exists is skipped.
+        assert!(authors.get(Some(Uuid::new_v4()), None).is_none());
+    }
 }

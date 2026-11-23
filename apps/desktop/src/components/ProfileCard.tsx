@@ -1,6 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { BannerColor, User } from "@disc-voice/shared";
+import { Gamepad2 } from "lucide-react";
+import type { Activity, BannerColor, User } from "@disc-voice/shared";
+import { activityDetail, activityLabel } from "../lib/activity";
 import { Avatar } from "./ui";
+
+const ActivityContext = createContext<Record<string, Activity>>({});
+
+/** What a user is doing right now, if they share it. */
+export const useActivity = (userId: string): Activity | undefined => useContext(ActivityContext)[userId];
+
+export function ActivityLine({ activity }: { activity: Activity }) {
+  const detail = activityDetail(activity);
+  return <div className="activity-line" title={activity.source === "discord" ? "Atividade sincronizada com o Discord" : undefined}>
+    <Gamepad2 size={16} aria-hidden="true" />
+    <div><strong>{activityLabel(activity)}</strong>{detail && <small>{detail}</small>}</div>
+  </div>;
+}
 
 export const BANNER_COLORS: { id: BannerColor; name: string; value: string }[] = [
   { id: "brand", name: "Roxo", value: "var(--brand)" },
@@ -16,11 +31,23 @@ export function bannerColor(banner: BannerColor | undefined) {
 
 /** Banner, avatar, name, pronouns and "Sobre mim". */
 export function ProfileSummary({ user, subtitle }: { user: User; subtitle?: string }) {
+  const activity = useActivity(user.id);
+  // Authors known only from imported Discord messages have no Disc Voice profile.
+  if (user.discord) {
+    return <>
+      <div className="profile-banner" style={{ background: bannerColor("graphite") }} />
+      <Avatar name={user.name} src={user.avatar} size="xl" className="profile-avatar" />
+      <strong>{user.name}</strong>
+      <span>@{user.discord} · Discord</span>
+      <div className="detail-card"><p className="muted">Pessoa das mensagens importadas do Discord. Quando ela vincular a conta do Discord ao Disc Voice, as mensagens passam a mostrar o perfil dela.</p></div>
+    </>;
+  }
   return <>
     <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
     <Avatar name={user.name} src={user.avatar} size="xl" status="online" className="profile-avatar" />
     <strong>{user.name}</strong>
     {(subtitle ?? user.pronouns) && <span>{subtitle ?? user.pronouns}</span>}
+    {activity && <div className="detail-card"><h3 className="eyebrow">Agora</h3><ActivityLine activity={activity} /></div>}
     <div className="detail-card"><h3 className="eyebrow">Sobre mim</h3><p className="profile-bio">{user.bio || "Ainda não escreveu nada por aqui."}</p></div>
   </>;
 }
@@ -35,13 +62,18 @@ export const useProfileCard = () => useContext(ProfileContext);
  * Hosts the profile card. `profiles` holds the latest known version of each
  * user, so a card opened from an old message still shows the current profile.
  */
-export function ProfileCardProvider({ profiles, children }: { profiles: Record<string, User>; children: ReactNode }) {
+export function ProfileCardProvider({ profiles, activities = {}, children }: {
+  profiles: Record<string, User>;
+  /** Current activity of each user, by id. */
+  activities?: Record<string, Activity>;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState<{ user: User; anchor: HTMLElement } | null>(null);
   const close = useCallback(() => setOpen(null), []);
-  return <ProfileContext.Provider value={(user, anchor) => setOpen({ user, anchor })}>
+  return <ActivityContext.Provider value={activities}><ProfileContext.Provider value={(user, anchor) => setOpen({ user, anchor })}>
     {children}
     {open && <ProfilePopover user={profiles[open.user.id] || open.user} anchor={open.anchor} onClose={close} />}
-  </ProfileContext.Provider>;
+  </ProfileContext.Provider></ActivityContext.Provider>;
 }
 
 function ProfilePopover({ user, anchor, onClose }: { user: User; anchor: HTMLElement; onClose: () => void }) {

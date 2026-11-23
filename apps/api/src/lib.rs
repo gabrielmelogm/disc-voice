@@ -1,4 +1,7 @@
+mod activity;
+pub mod discord;
 mod entities;
+mod files;
 pub mod google;
 mod messages;
 pub mod migration;
@@ -33,20 +36,39 @@ pub struct AppState {
     google: Arc<google::GoogleConfig>,
     http: reqwest::Client,
     realtime: Arc<realtime::Hub>,
+    /// Present when the Discord integration is configured.
+    discord: Option<Arc<discord::Discord>>,
+    /// Where stored files live (see [`files`]).
+    uploads: std::path::PathBuf,
 }
 
 impl AppState {
     pub fn new(db: DatabaseConnection, web_url: String, google: google::GoogleConfig) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("HTTP client");
         Self {
             db,
             web_url,
             google: Arc::new(google),
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("HTTP client"),
+            http,
             realtime: Arc::new(realtime::Hub::new()),
+            discord: None,
+            uploads: std::env::temp_dir().join("disc-voice-files"),
         }
+    }
+
+    /// Directory for stored files; it must persist across restarts.
+    pub fn with_uploads(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.uploads = dir.into();
+        self
+    }
+
+    /// Enables the Discord integration (bot, imports and activity).
+    pub fn with_discord(mut self, config: discord::DiscordConfig) -> Self {
+        self.discord = Some(Arc::new(discord::Discord::new(config, self.http.clone())));
+        self
     }
 }
 
@@ -69,6 +91,35 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             get(messages::list).post(messages::send),
         )
         .route("/voice/config", get(realtime::ice_config))
+        .route("/activities", get(activity::list))
+        .route("/discord", get(discord::routes::status))
+        .route("/discord/link", post(discord::routes::link_account))
+        .route(
+            "/discord/account",
+            axum::routing::patch(discord::routes::update_account)
+                .delete(discord::routes::unlink_account),
+        )
+        .route("/servers/{id}/discord", get(discord::routes::server))
+        .route(
+            "/servers/{id}/discord/install",
+            post(discord::routes::install),
+        )
+        .route(
+            "/servers/{id}/discord/guilds/{guild}",
+            axum::routing::delete(discord::routes::unlink_guild),
+        )
+        .route(
+            "/servers/{id}/discord/imports",
+            post(discord::routes::create_import),
+        )
+        .route(
+            "/discord/imports/{channel}/retry",
+            post(discord::routes::retry_import),
+        )
+        .route(
+            "/discord/imports/{channel}/finish",
+            post(discord::routes::finish_import),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
 
     Router::new()
@@ -81,6 +132,8 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 )
                 .route("/auth/google/config", get(google_config))
                 .route("/auth/google", post(google_login))
+                .route("/discord/callback", get(discord::routes::callback))
+                .route("/files/{id}/{name}", get(files::serve))
                 .route(
                     "/realtime",
                     get(move |state, headers, ws| {
@@ -96,7 +149,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
-                .allow_methods([Method::GET, Method::POST, Method::PATCH])
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
         )
         .layer(TraceLayer::new_for_http())
@@ -161,6 +214,9 @@ pub struct UserView {
     pub banner: String,
     /// Profile photo URL (from Google), or null to show initials.
     pub avatar: Option<String>,
+    /// Discord username of an author known only from imported messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord: Option<String>,
 }
 
 impl From<user::Model> for UserView {
@@ -173,6 +229,7 @@ impl From<user::Model> for UserView {
             bio: user.bio,
             banner: user.banner,
             avatar: user.avatar_url,
+            discord: None,
         }
     }
 }
@@ -582,6 +639,10 @@ struct ChannelView {
     name: String,
     #[serde(rename = "type")]
     kind: String,
+    /// `discord` for channels imported from Discord.
+    source: String,
+    /// Still importing its Discord history: nobody can send messages yet.
+    read_only: bool,
 }
 impl From<channel::Model> for ChannelView {
     fn from(c: channel::Model) -> Self {
@@ -590,6 +651,8 @@ impl From<channel::Model> for ChannelView {
             server_id: c.server_id,
             name: c.name,
             kind: c.kind,
+            source: c.source,
+            read_only: false,
         }
     }
 }
@@ -606,7 +669,16 @@ async fn list_channels(
         .order_by_asc(channel::Column::Id)
         .all(&state.db)
         .await?;
-    Ok(Json(channels.into_iter().map(Into::into).collect()))
+    let importing = discord::importing(&state.db, id).await?;
+    Ok(Json(
+        channels
+            .into_iter()
+            .map(|c| ChannelView {
+                read_only: importing.contains(&c.id),
+                ..c.into()
+            })
+            .collect(),
+    ))
 }
 
 async fn create_channel(
@@ -624,6 +696,7 @@ async fn create_channel(
         kind: Set(input.kind.as_str().into()),
         created_by: Set(user.id),
         created_at: Set(Utc::now()),
+        source: Set("local".into()),
     }
     .insert(&state.db)
     .await?;

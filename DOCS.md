@@ -224,6 +224,30 @@ GOOGLE_WEB_CLIENT_SECRET=...
 
 Se o cliente da plataforma (desktop ou web) não estiver configurado, **Continuar com Google** mostra um aviso em vez de abrir o login.
 
+### Integração com o Discord
+
+Duas funções usam o mesmo aplicativo do Discord (somente leitura):
+
+- **Importar canais** (dono do servidor, botão **Importar do Discord** na barra de canais): instala o bot em um servidor do Discord e traz o histórico de canais de texto para canais do Disc Voice, **uma vez**. O histórico é importado do mais antigo para o mais novo, 100 mensagens por requisição (`after=<último id>`), com autor, data e texto; menções por id (`<@123>`, `<#456>`, emojis próprios) viram texto legível. Enquanto importa, o canal fica bloqueado para envio, para as mensagens novas não se misturarem ao histórico. Ao terminar, ele vira um canal comum do Disc Voice, e mensagens enviadas depois no Discord não são trazidas. Mensagens nunca se repetem (`discord_id` único por canal), limites de requisição (429 e `X-RateLimit-*`) são respeitados com nova tentativa, e falhas de permissão aparecem no diálogo com **Tentar de novo** ou **Concluir com o que já foi importado**.
+- **Mídias importadas**: os links de anexos do Discord expiram, então imagens, vídeos e arquivos de até 25 MB são copiados para a API (`UPLOADS_DIR`, no Docker o volume `api-uploads`) e servidos em `/api/files/<id>/<nome>`. O link é aleatório, como na CDN do Discord: quem tem o link abre o arquivo. Imagens, vídeo e áudio aparecem no app com prévia e visualizador; outros tipos baixam, e nenhum arquivo servido executa scripts (`Content-Security-Policy: sandbox`, `nosniff`). Anexos maiores ou com link já expirado ficam como cartão com o link original.
+- **Atividade** (cada pessoa, em **Configurações → Conexões**): vincula a conta do Discord (escopo `identify`) e mostra no perfil o que ela está jogando, ouvindo ou assistindo. O Discord não entrega a atividade de outros apps por OAuth; ela vem do bot (intent `GUILD_PRESENCES`), então só aparece para quem está em algum servidor do Discord que tenha o bot. A pessoa pode desligar o compartilhamento a qualquer momento. As atividades ficam só em memória e vão apenas para quem compartilha um servidor com ela (evento `activity.updated`, `GET /api/activities`).
+
+No [Discord Developer Portal](https://discord.com/developers/applications), crie um aplicativo:
+
+1. **OAuth2 → Redirects**: adicione `<PUBLIC_WEB_URL>/api/discord/callback` (ex.: `https://comunidade.exemplo.com/api/discord/callback` e, localmente, `http://localhost:3001/api/discord/callback`). Copie *Client ID* e *Client Secret*.
+2. **Bot**: gere o token. Em *Privileged Gateway Intents*, ative **Presence Intent** (atividades) e **Message Content Intent** (sem ele as mensagens importadas chegam sem texto). Acima de 100 servidores, o Discord exige verificação para manter essas intents.
+3. O bot pede só **Ver canal** e **Ler histórico de mensagens**. Canais com permissões próprias que escondem o bot aparecem como “Sem permissão para ler”.
+
+```dotenv
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_BOT_TOKEN=...
+```
+
+Sem essas três variáveis a integração fica desativada e a interface avisa. A API mantém uma única conexão de gateway; rode só uma instância da API com o bot configurado.
+
+Canais de texto e de voz podem ter o mesmo nome (ex.: `geral` de texto e `geral` de voz); dois canais do mesmo tipo, não.
+
 ## Executar no Windows
 
 Instale:

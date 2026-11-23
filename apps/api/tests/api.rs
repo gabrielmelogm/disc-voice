@@ -882,6 +882,985 @@ async fn accounts_invites_channels_and_authorization() {
     }
 }
 
+/// A fake Discord API: one guild (700) with a readable channel (500) holding
+/// `messages`, a hidden one (501) and a voice channel (502). OAuth codes are
+/// `install:<guild>` or `account:<id>:<username>`.
+#[derive(Clone, Default)]
+struct FakeDiscord {
+    messages: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    throttled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+const BOT: &str = "Bot test-bot-token";
+const CALLBACK: &str = "https://discvoice.example/api/discord/callback";
+
+/// Bytes of the fake attachment served by [`fake_discord`].
+const PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nfake-picture-bytes";
+
+/// `BASE` in attachment URLs becomes the fake server's address.
+fn discord_message(id: u64, kind: u64, author: &str) -> Value {
+    let content = if id == 1003 {
+        "<@11> veja <#500>".to_owned()
+    } else {
+        format!("Mensagem {id}")
+    };
+    json!({
+        "id": id.to_string(), "type": kind, "content": content,
+        "timestamp": format!("2024-05-01T12:{:02}:{:02}+00:00", (id / 60) % 60, id % 60),
+        "author": { "id": author, "username": format!("user{author}"), "global_name": format!("Pessoa {author}") },
+        "mentions": if id == 1003 { json!([{ "id": "11", "username": "user11", "global_name": "Pessoa 11" }]) } else { json!([]) },
+        "attachments": if id == 1005 {
+            json!([{ "id": "77", "filename": "mapa.png", "url": "BASE/attachments/500/77/mapa.png", "size": PICTURE.len(), "content_type": "image/png", "width": 64, "height": 32 }])
+        } else { json!([]) },
+    })
+}
+
+/// A request with custom headers, returning the raw response.
+async fn raw(
+    app: &Router,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut request = Request::builder().uri(path);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let (parts, body) = response.into_parts();
+    let bytes = to_bytes(body, 1024 * 1024).await.unwrap().to_vec();
+    (parts.status, parts.headers, bytes)
+}
+
+async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
+    use axum::{
+        extract::{Path, Query},
+        http::HeaderMap,
+        routing::get,
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let base = format!("http://{address}");
+    let bot = |headers: &HeaderMap| headers.get("authorization").is_some_and(|v| v == BOT);
+    let forbidden = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "message": "401: Unauthorized", "code": 0 })),
+        )
+    };
+    let token = post(|Form(form): Form<HashMap<String, String>>| async move {
+        if form["client_id"] != "discord-client"
+            || form["client_secret"] != "discord-secret"
+            || form["redirect_uri"] != CALLBACK
+            || form["grant_type"] != "authorization_code"
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_grant" })),
+            );
+        }
+        let code = &form["code"];
+        let guild = code
+            .strip_prefix("install:")
+            .map(|id| json!({ "id": id, "name": "Comunidade Discord", "icon": "abc" }));
+        (
+            StatusCode::OK,
+            Json(json!({ "access_token": code, "token_type": "Bearer", "guild": guild })),
+        )
+    });
+    let me = get(move |headers: HeaderMap| async move {
+        if bot(&headers) {
+            return (
+                StatusCode::OK,
+                Json(json!({ "id": "999", "username": "discvoice" })),
+            );
+        }
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        match auth
+            .strip_prefix("Bearer account:")
+            .map(|s| s.split(':').collect::<Vec<_>>())
+        {
+            Some(parts) if parts.len() == 2 => (
+                StatusCode::OK,
+                Json(
+                    json!({ "id": parts[0], "username": parts[1], "global_name": "Nome Discord", "avatar": "def" }),
+                ),
+            ),
+            _ => forbidden(),
+        }
+    });
+    let app_info = get(move |headers: HeaderMap| async move {
+        if !bot(&headers) {
+            return forbidden();
+        }
+        // Presence and Message Content intents enabled.
+        (
+            StatusCode::OK,
+            Json(json!({ "id": "1", "flags": (1 << 12) | (1 << 18) })),
+        )
+    });
+    let guild = get(
+        move |headers: HeaderMap, Path(id): Path<String>| async move {
+            if !bot(&headers) {
+                return forbidden();
+            }
+            let read = (1u64 << 10) | (1u64 << 16);
+            (
+                StatusCode::OK,
+                Json(
+                    json!({ "id": id, "owner_id": "1", "roles": [{ "id": id, "permissions": read.to_string() }] }),
+                ),
+            )
+        },
+    );
+    let member = get(move |headers: HeaderMap| async move {
+        if !bot(&headers) {
+            return forbidden();
+        }
+        (StatusCode::OK, Json(json!({ "roles": [] })))
+    });
+    let channels = get(
+        move |headers: HeaderMap, Path(id): Path<String>| async move {
+            if !bot(&headers) {
+                return forbidden();
+            }
+            (
+                StatusCode::OK,
+                Json(json!([
+                    { "id": "502", "type": 2, "name": "Voz", "position": 0, "guild_id": id },
+                    { "id": "501", "type": 0, "name": "secreto", "parent_id": "400", "position": 1, "guild_id": id,
+                      "permission_overwrites": [{ "id": id, "type": 0, "allow": "0", "deny": (1u64 << 10).to_string() }] },
+                    { "id": "500", "type": 0, "name": "Geral", "parent_id": "400", "position": 0, "guild_id": id, "permission_overwrites": [] },
+                    { "id": "400", "type": 4, "name": "Texto", "position": 0, "guild_id": id },
+                ])),
+            )
+        },
+    );
+    let channel = get(
+        move |headers: HeaderMap, Path(id): Path<String>| async move {
+            if !bot(&headers) {
+                return forbidden();
+            }
+            let kind = if id == "502" { 2 } else { 0 };
+            (
+                StatusCode::OK,
+                Json(
+                    json!({ "id": id, "type": kind, "guild_id": "700", "name": if id == "500" { "Geral" } else { "secreto" } }),
+                ),
+            )
+        },
+    );
+    let history_fake = fake.clone();
+    let history_base = base.clone();
+    let history = get(
+        move |headers: HeaderMap,
+              Path(id): Path<String>,
+              Query(query): Query<HashMap<String, String>>| {
+            let fake = history_fake.clone();
+            let base = history_base.clone();
+            async move {
+                use axum::response::IntoResponse;
+                if !bot(&headers) {
+                    return forbidden().into_response();
+                }
+                if id == "501" {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({ "message": "Missing Access", "code": 50001 })),
+                    )
+                        .into_response();
+                }
+                // The first request is rate limited.
+                if !fake
+                    .throttled
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({ "message": "You are being rate limited.", "retry_after": 0.01, "global": false })),
+                    )
+                        .into_response();
+                }
+                let after: u64 = query["after"].parse().unwrap();
+                let limit: usize = query["limit"].parse().unwrap();
+                let mut page: Vec<Value> = fake
+                    .messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|m| m["id"].as_str().unwrap().parse::<u64>().unwrap() > after)
+                    .take(limit)
+                    .cloned()
+                    .collect();
+                // Discord lists newest first.
+                page.reverse();
+                let page: Value =
+                    serde_json::from_str(&Value::Array(page).to_string().replace("BASE", &base))
+                        .unwrap();
+                (
+                    [
+                        ("x-ratelimit-remaining", "0"),
+                        ("x-ratelimit-reset-after", "0.01"),
+                    ],
+                    Json(page),
+                )
+                    .into_response()
+            }
+        },
+    );
+    let attachment = get(|| async { ([("content-type", "image/png")], PICTURE) });
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/oauth2/token", token)
+                .route("/users/@me", me)
+                .route("/applications/@me", app_info)
+                .route("/guilds/{id}", guild)
+                .route("/guilds/{id}/members/{member}", member)
+                .route("/guilds/{id}/channels", channels)
+                .route("/channels/{id}", channel)
+                .route("/channels/{id}/messages", history)
+                .route("/attachments/{channel}/{id}/{name}", attachment),
+        )
+        .await
+        .unwrap();
+    });
+    disc_api::discord::DiscordConfig {
+        client_id: "discord-client".into(),
+        client_secret: "discord-secret".into(),
+        bot_token: "test-bot-token".into(),
+        api_url: base,
+        authorize_url: "https://discord.example/oauth2/authorize".into(),
+    }
+}
+
+async fn html(app: &Router, path: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api{path}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    String::from_utf8(
+        to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+/// Finishes an OAuth flow: reads `state` from the authorize URL and follows
+/// Discord's redirect with `code`.
+async fn authorize(app: &Router, url: &str, code: &str) -> String {
+    let url = reqwest::Url::parse(url).unwrap();
+    let params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(params["redirect_uri"], CALLBACK);
+    html(
+        app,
+        &format!("/discord/callback?code={code}&state={}", params["state"]),
+    )
+    .await
+}
+
+async fn wait_import(
+    app: &Router,
+    token: &str,
+    server: &str,
+    done: impl Fn(&Value) -> bool,
+) -> Value {
+    for _ in 0..200 {
+        let view = call(
+            app,
+            "GET",
+            &format!("/servers/{server}/discord"),
+            Some(token),
+            None,
+        )
+        .await
+        .1;
+        if done(&view) {
+            return view;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("A importação não terminou a tempo");
+}
+
+fn import_of<'a>(view: &'a Value, discord_channel: &str) -> &'a Value {
+    view["imports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["discordChannelId"] == discord_channel)
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn discord_import_and_activity() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let fake = FakeDiscord::default();
+    {
+        let mut messages = fake.messages.lock().unwrap();
+        for id in 1000..1250u64 {
+            // A system message (member joined) in the middle is skipped.
+            let kind = if id == 1010 { 7 } else { 0 };
+            messages.push(discord_message(
+                id,
+                kind,
+                if id % 2 == 0 { "10" } else { "11" },
+            ));
+        }
+    }
+    let state = AppState::new(
+        db.clone(),
+        "https://discvoice.example".into(),
+        fake_google().await,
+    )
+    .with_discord(fake_discord(fake.clone()).await)
+    .with_uploads(std::env::temp_dir().join(format!("disc-voice-test-{}", Uuid::new_v4())));
+    disc_api::discord::spawn_worker(&state);
+    let app = router(state.clone(), vec![]);
+    let (owner, owner_id) = register(&app, "Dona").await;
+    let (member, member_id) = register(&app, "Membro").await;
+    let created = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&owner),
+        Some(json!({ "name": "Importados" })),
+    )
+    .await
+    .1;
+    let server_id = created["server"]["id"].as_str().unwrap().to_owned();
+    call(
+        &app,
+        "POST",
+        &format!("/invites/{}/join", created["code"].as_str().unwrap()),
+        Some(&member),
+        None,
+    )
+    .await;
+    let base = format!("/servers/{server_id}/discord");
+
+    let status = call(&app, "GET", "/discord", Some(&member), None).await.1;
+    assert_eq!(
+        (&status["enabled"], &status["account"]),
+        (&json!(true), &Value::Null)
+    );
+
+    // Only the owner connects Discord servers, by installing the bot.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{base}/install"),
+            Some(&member),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "GET", &base, Some(&member), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let install = call(&app, "POST", &format!("{base}/install"), Some(&owner), None)
+        .await
+        .1;
+    let url = install["url"].as_str().unwrap();
+    assert!(
+        url.contains("scope=bot+identify") && url.contains("permissions=66560"),
+        "{url}"
+    );
+    let page = authorize(&app, url, "install:700").await;
+    assert!(page.contains("Tudo certo"), "{page}");
+    // A state works once.
+    assert!(authorize(&app, url, "install:700")
+        .await
+        .contains("expirou"));
+
+    let view = call(&app, "GET", &base, Some(&owner), None).await.1;
+    assert_eq!(view["messageContent"], true);
+    let guild = &view["guilds"][0];
+    assert_eq!(
+        (&guild["id"], &guild["name"], &guild["available"]),
+        (&json!("700"), &json!("Comunidade Discord"), &json!(true))
+    );
+    let channels: Vec<_> = guild["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["id"].clone(),
+                c["readable"].clone(),
+                c["category"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        channels,
+        [
+            (json!("500"), json!(true), json!("Texto")),
+            (json!("501"), json!(false), json!("Texto"))
+        ]
+    );
+
+    // Importing: only text channels of the connected guild, once each.
+    let imports = format!("{base}/imports");
+    for (guild, channel, expected) in [
+        ("701", "500", StatusCode::NOT_FOUND),
+        ("700", "502", StatusCode::BAD_REQUEST),
+        ("700", "../x", StatusCode::BAD_REQUEST),
+    ] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &imports,
+                Some(&owner),
+                Some(json!({ "guildId": guild, "channelId": channel }))
+            )
+            .await
+            .0,
+            expected
+        );
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &imports,
+            Some(&member),
+            Some(json!({ "guildId": "700", "channelId": "500" }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, import) = call(
+        &app,
+        "POST",
+        &imports,
+        Some(&owner),
+        Some(json!({ "guildId": "700", "channelId": "500" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{import}");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &imports,
+            Some(&owner),
+            Some(json!({ "guildId": "700", "channelId": "500" }))
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let hidden = call(
+        &app,
+        "POST",
+        &imports,
+        Some(&owner),
+        Some(json!({ "guildId": "700", "channelId": "501" })),
+    )
+    .await
+    .1;
+    let mirror = import["channelId"].as_str().unwrap().to_owned();
+
+    // The backlog arrives in pages, past a rate limit, once.
+    let view = wait_import(&app, &owner, &server_id, |v| {
+        import_of(v, "500")["status"] == "idle" && import_of(v, "501")["status"] == "error"
+    })
+    .await;
+    let done = import_of(&view, "500");
+    assert_eq!(
+        (&done["phase"], &done["imported"]),
+        (&json!("done"), &json!(249))
+    );
+    // Missing permissions are reported and not retried on their own.
+    assert!(import_of(&view, "501")["error"]
+        .as_str()
+        .unwrap()
+        .contains("Ler histórico"));
+    assert_eq!(
+        view["guilds"][0]["channels"][0]["import"]["channelId"],
+        mirror.as_str()
+    );
+
+    let listed = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/channels"),
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    let channel = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == mirror.as_str())
+        .unwrap();
+    assert_eq!(
+        (&channel["name"], &channel["source"], &channel["readOnly"]),
+        (&json!("geral"), &json!("discord"), &json!(false))
+    );
+    // The unfinished import keeps its channel closed to new messages.
+    assert!(listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == hidden["channelId"]
+            && c["name"] == "secreto"
+            && c["readOnly"] == true));
+    let hidden_messages = format!(
+        "/channels/{}/messages",
+        hidden["channelId"].as_str().unwrap()
+    );
+    let (status, refused) = call(
+        &app,
+        "POST",
+        &hidden_messages,
+        Some(&owner),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "cedo demais" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("sendo importado"));
+    // Its owner can give up on the rest; then it is a regular channel.
+    let finish = format!(
+        "/discord/imports/{}/finish",
+        hidden["channelId"].as_str().unwrap()
+    );
+    assert_eq!(
+        call(&app, "POST", &finish, Some(&member), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let finished = call(&app, "POST", &finish, Some(&owner), None).await.1;
+    assert_eq!(
+        (&finished["phase"], &finished["status"]),
+        (&json!("done"), &json!("idle"))
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &hidden_messages,
+            Some(&owner),
+            Some(json!({ "clientId": Uuid::new_v4(), "content": "agora sim" }))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    // Text and voice channels may share a name, but not two of the same type.
+    let channels_path = format!("/servers/{server_id}/channels");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &channels_path,
+            Some(&owner),
+            Some(json!({ "name": "geral", "type": "voice" }))
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &channels_path,
+            Some(&owner),
+            Some(json!({ "name": "geral", "type": "text" }))
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+
+    // Members read the history in Discord order.
+    let messages = format!("/channels/{mirror}/messages");
+    let latest = call(
+        &app,
+        "GET",
+        &format!("{messages}?limit=100"),
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    let contents: Vec<_> = latest["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["content"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(contents.first().unwrap(), "Mensagem 1150");
+    assert_eq!(contents.last().unwrap(), "Mensagem 1249");
+    assert_eq!(latest["hasMore"], true);
+    let oldest = call(
+        &app,
+        "GET",
+        &format!("{messages}?after=0&limit=10"),
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    let first = &oldest["messages"][0];
+    assert_eq!(
+        (&first["content"], &first["discordId"]),
+        (&json!("Mensagem 1000"), &json!("1000"))
+    );
+    assert_eq!(first["author"]["name"], "Pessoa 10");
+    assert_eq!(first["author"]["discord"], "user10");
+    assert_eq!(first["createdAt"], "2024-05-01T12:16:40Z");
+    let attachment = oldest["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["discordId"] == "1005")
+        .unwrap();
+    assert_eq!(attachment["attachments"][0]["filename"], "mapa.png");
+    assert_eq!(attachment["attachments"][0]["size"], PICTURE.len());
+    assert!(oldest["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|m| m["discordId"] != "1010"));
+    // Mentions by id read as names.
+    let mention = oldest["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["discordId"] == "1003")
+        .unwrap();
+    assert_eq!(mention["content"], "@Pessoa 11 veja #Geral");
+
+    // Media is copied to the API, since Discord's links expire, and served
+    // inline with range support but without running anything.
+    let file = attachment["attachments"][0]["url"].as_str().unwrap();
+    assert!(
+        file.starts_with("/api/files/") && file.ends_with("/mapa.png"),
+        "{file}"
+    );
+    assert!(attachment["attachments"][0].get("unavailable").is_none());
+    let (status, headers, body) = raw(&app, file, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, PICTURE);
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(headers["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("inline"));
+    assert!(headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("sandbox"));
+    let (status, _, body) = raw(&app, file, &[("range", "bytes=0-3")]).await;
+    assert_eq!(
+        (status, body.as_slice()),
+        (StatusCode::PARTIAL_CONTENT, &PICTURE[..4])
+    );
+    assert_eq!(
+        raw(&app, &format!("/api/files/{}/x.png", Uuid::new_v4()), &[])
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The import ran once: later Discord messages are not brought over, and
+    // the channel now takes messages sent in Disc Voice.
+    {
+        let mut stored = fake.messages.lock().unwrap();
+        for id in 1250..1253 {
+            stored.push(discord_message(id, 0, "11"));
+        }
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/discord/imports/{mirror}/retry"),
+            Some(&owner),
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, local) = call(
+        &app,
+        "POST",
+        &messages,
+        Some(&member),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "Agora pelo Disc Voice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{local}");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let view = call(&app, "GET", &base, Some(&owner), None).await.1;
+    assert_eq!(import_of(&view, "500")["imported"], 249);
+    let stored = db
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT count(*) AS n, count(DISTINCT discord_id) AS d FROM messages WHERE channel_id = $1",
+            [Uuid::parse_str(&mirror).unwrap().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.try_get::<i64>("", "n").unwrap(), 250);
+    assert_eq!(stored.try_get::<i64>("", "d").unwrap(), 249);
+    let after = call(
+        &app,
+        "GET",
+        &format!("{messages}?limit=2"),
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(after["messages"][0]["content"], "Mensagem 1249");
+    assert_eq!(after["messages"][1]["content"], "Agora pelo Disc Voice");
+
+    // Imported messages are searchable.
+    let found = call(
+        &app,
+        "GET",
+        "/search?q=Mensagem%201249",
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(found["messages"][0]["channelId"], mirror.as_str());
+    assert_eq!(found["messages"][0]["author"]["name"], "Pessoa 11");
+
+    // Linking a Discord account: imported messages show the Disc Voice user,
+    // and the Discord presence becomes the user's activity.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut owner_ws, _) = socket(&ws_url, &owner).await;
+    let (mut member_ws, _) = socket(&ws_url, &member).await;
+    let link = call(&app, "POST", "/discord/link", Some(&owner), None)
+        .await
+        .1;
+    assert!(link["url"].as_str().unwrap().contains("scope=identify"));
+    let page = authorize(&app, link["url"].as_str().unwrap(), "account:10:ana").await;
+    assert!(page.contains("@ana"), "{page}");
+    assert_eq!(
+        event(&mut owner_ws, "discord.updated").await["serverId"],
+        Value::Null
+    );
+    let status = call(&app, "GET", "/discord", Some(&owner), None).await.1;
+    assert_eq!(status["account"]["username"], "ana");
+    assert_eq!(status["account"]["shareActivity"], true);
+    assert_eq!(status["account"]["presenceSeen"], false);
+    // The same Discord account can't be linked twice.
+    let taken = call(&app, "POST", "/discord/link", Some(&member), None)
+        .await
+        .1;
+    assert!(
+        authorize(&app, taken["url"].as_str().unwrap(), "account:10:ana")
+            .await
+            .contains("outro usuário")
+    );
+    let oldest = call(
+        &app,
+        "GET",
+        &format!("{messages}?after=0&limit=2"),
+        Some(&member),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(oldest["messages"][0]["author"]["id"], owner_id.as_str());
+    assert_eq!(oldest["messages"][1]["author"]["name"], "Pessoa 11");
+
+    disc_api::discord::dispatch(
+        &state,
+        "PRESENCE_UPDATE",
+        &json!({ "user": { "id": "10" }, "guild_id": "700", "status": "online",
+                 "activities": [{ "type": 0, "name": "Minecraft", "details": "Sobrevivência" }] }),
+    )
+    .await;
+    let update = event(&mut member_ws, "activity.updated").await;
+    assert_eq!(update["userId"], owner_id.as_str());
+    assert_eq!(update["activity"]["name"], "Minecraft");
+    assert_eq!(update["activity"]["kind"], "playing");
+    assert_eq!(update["activity"]["source"], "discord");
+    let activities = call(&app, "GET", "/activities", Some(&member), None)
+        .await
+        .1;
+    assert_eq!(activities[owner_id.as_str()]["name"], "Minecraft");
+    assert_eq!(
+        call(&app, "GET", "/discord", Some(&owner), None).await.1["account"]["presenceSeen"],
+        true
+    );
+    // Unlinked Discord users never show up.
+    disc_api::discord::dispatch(
+        &state,
+        "PRESENCE_UPDATE",
+        &json!({ "user": { "id": "11" }, "status": "online", "activities": [{ "type": 0, "name": "Tetris" }] }),
+    )
+    .await;
+    assert_eq!(
+        call(&app, "GET", "/activities", Some(&member), None)
+            .await
+            .1
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Turning sharing off hides it; turning it back on restores it.
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            "/discord/account",
+            Some(&owner),
+            Some(json!({ "shareActivity": false }))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        event(&mut member_ws, "activity.updated").await["activity"],
+        Value::Null
+    );
+    assert_eq!(
+        call(&app, "GET", "/activities", Some(&member), None)
+            .await
+            .1,
+        json!({})
+    );
+    call(
+        &app,
+        "PATCH",
+        "/discord/account",
+        Some(&owner),
+        Some(json!({ "shareActivity": true })),
+    )
+    .await;
+    assert_eq!(
+        event(&mut member_ws, "activity.updated").await["activity"]["name"],
+        "Minecraft"
+    );
+    // Going offline on Discord clears it.
+    disc_api::discord::dispatch(
+        &state,
+        "PRESENCE_UPDATE",
+        &json!({ "user": { "id": "10" }, "status": "offline", "activities": [] }),
+    )
+    .await;
+    assert_eq!(
+        event(&mut member_ws, "activity.updated").await["activity"],
+        Value::Null
+    );
+    assert_eq!(
+        call(&app, "DELETE", "/discord/account", Some(&owner), None)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, "GET", "/discord", Some(&owner), None).await.1["account"],
+        Value::Null
+    );
+
+    // Removing the bot afterwards doesn't affect finished imports.
+    disc_api::discord::dispatch(&state, "GUILD_DELETE", &json!({ "id": "700" })).await;
+    let view = call(&app, "GET", &base, Some(&owner), None).await.1;
+    assert_eq!(import_of(&view, "500")["error"], Value::Null);
+    // Disconnecting the guild keeps the imported channels and messages.
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("{base}/guilds/700"),
+            Some(&owner),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let view = call(&app, "GET", &base, Some(&owner), None).await.1;
+    assert_eq!(
+        (&view["guilds"], &view["imports"]),
+        (&json!([]), &json!([]))
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("{messages}?limit=1"),
+            Some(&member),
+            None
+        )
+        .await
+        .1["messages"][0]["content"],
+        "Agora pelo Disc Voice"
+    );
+
+    owner_ws.close(None).await.unwrap();
+    member_ws.close(None).await.unwrap();
+    live.abort();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM servers WHERE id = $1",
+        [Uuid::parse_str(&server_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    for id in [owner_id, member_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM users WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+}
+
 async fn register(app: &Router, name: &str) -> (String, String) {
     let id = Uuid::new_v4().simple();
     let email = format!("{}-{id}@example.com", name.to_lowercase());

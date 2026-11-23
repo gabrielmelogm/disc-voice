@@ -2,7 +2,6 @@
 use super::*;
 use axum::extract::Query;
 use sea_orm::{DbBackend, FromQueryResult, Statement};
-use std::collections::HashMap;
 
 const MESSAGE_PAGE: i64 = 20;
 const NAME_LIMIT: i64 = 8;
@@ -30,7 +29,8 @@ struct ChannelHit {
 struct MessageRow {
     id: i64,
     channel_id: Uuid,
-    author_id: Uuid,
+    author_id: Option<Uuid>,
+    discord_author: Option<serde_json::Value>,
     content: String,
     created_at: chrono::DateTime<Utc>,
     channel_name: String,
@@ -137,7 +137,7 @@ pub(crate) async fn search(
         Some(query) => {
             MessageRow::find_by_statement(Statement::from_sql_and_values(
                 DbBackend::Postgres,
-                r#"SELECT msg.id, msg.channel_id, msg.author_id, msg.content, msg.created_at,
+                r#"SELECT msg.id, msg.channel_id, msg.author_id, msg.discord_author, msg.content, msg.created_at,
                           c.name AS channel_name, c.server_id, s.name AS server_name
                    FROM messages msg
                    JOIN channels c ON c.id = msg.channel_id
@@ -164,18 +164,17 @@ pub(crate) async fn search(
     let next_cursor = more
         .then(|| rows.last().map(|m| m.id.to_string()))
         .flatten();
-    let authors: HashMap<_, _> = user::Entity::find()
-        .filter(user::Column::Id.is_in(rows.iter().map(|m| m.author_id)))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|u| (u.id, UserView::from(u)))
-        .collect();
+    let authors = messages::Authors::load(
+        &state.db,
+        rows.iter()
+            .map(|m| (m.author_id, m.discord_author.as_ref())),
+    )
+    .await?;
     let messages = rows
         .into_iter()
         .filter_map(|m| {
             Some(MessageHit {
-                author: authors.get(&m.author_id)?.clone(),
+                author: authors.get(m.author_id, m.discord_author.as_ref())?,
                 id: m.id.to_string(),
                 channel_id: m.channel_id,
                 channel_name: m.channel_name,

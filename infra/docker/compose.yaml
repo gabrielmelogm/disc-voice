@@ -33,6 +33,13 @@ services:
       GOOGLE_DESKTOP_CLIENT_SECRET: ${GOOGLE_DESKTOP_CLIENT_SECRET:-}
       GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID:-}
       GOOGLE_WEB_CLIENT_SECRET: ${GOOGLE_WEB_CLIENT_SECRET:-}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      UPLOADS_DIR: /app/data/uploads
+    volumes:
+      # Media copied from Discord; must outlive the container.
+      - api-uploads:/app/data/uploads
     ports:
       - "3001:3001"
     depends_on:
@@ -61,3 +68,4 @@ services:
     restart: unless-stopped
 volumes:
   postgres-data:
+  api-uploads:

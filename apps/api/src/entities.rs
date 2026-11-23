@@ -102,6 +102,8 @@ pub mod channel {
         pub kind: String,
         pub created_by: Uuid,
         pub created_at: DateTimeUtc,
+        /// `local`, or `discord` for a read-only mirror of a Discord channel.
+        pub source: String,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -117,10 +119,100 @@ pub mod message {
         #[sea_orm(primary_key)]
         pub id: i64,
         pub channel_id: Uuid,
-        pub author_id: Uuid,
+        /// Absent on messages imported from Discord.
+        pub author_id: Option<Uuid>,
         pub client_id: Uuid,
         pub content: String,
         pub created_at: DateTimeUtc,
+        pub discord_id: Option<String>,
+        pub discord_author: Option<Json>,
+        pub attachments: Json,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod file {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "files")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub name: String,
+        pub content_type: String,
+        pub size: i64,
+        pub created_at: DateTimeUtc,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod discord_account {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "discord_accounts")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: Uuid,
+        #[sea_orm(unique)]
+        pub discord_id: String,
+        pub username: String,
+        pub display_name: Option<String>,
+        pub avatar_url: Option<String>,
+        pub share_activity: bool,
+        pub linked_at: DateTimeUtc,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod discord_guild {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "discord_guilds")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub server_id: Uuid,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub guild_id: String,
+        pub name: String,
+        pub icon_url: Option<String>,
+        pub linked_by: Uuid,
+        pub linked_at: DateTimeUtc,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod discord_import {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "discord_imports")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub channel_id: Uuid,
+        pub server_id: Uuid,
+        pub guild_id: String,
+        pub discord_channel_id: String,
+        pub discord_channel_name: String,
+        pub phase: String,
+        pub status: String,
+        pub cursor: Option<String>,
+        pub imported: i64,
+        pub error: Option<String>,
+        pub retry_at: Option<DateTimeUtc>,
+        pub created_by: Uuid,
+        pub created_at: DateTimeUtc,
+        pub synced_at: Option<DateTimeUtc>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

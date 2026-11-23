@@ -1,4 +1,6 @@
-use disc_api::{google::GoogleConfig, migration::Migrator, router, AppState};
+use disc_api::{
+    discord::DiscordConfig, google::GoogleConfig, migration::Migrator, router, AppState,
+};
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_migration::MigratorTrait;
 use std::{env, path::PathBuf, time::Duration};
@@ -60,7 +62,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Login com Google desativado: defina GOOGLE_DESKTOP_CLIENT_ID/SECRET e GOOGLE_WEB_CLIENT_ID/SECRET."
         );
     }
-    let app = router(AppState::new(db, web_url, google), origins).fallback_service(
+    let mut state = AppState::new(db, web_url, google)
+        .with_uploads(env::var("UPLOADS_DIR").unwrap_or_else(|_| "data/uploads".into()));
+    match DiscordConfig::from_env() {
+        Some(config) => {
+            // Discord only accepts redirects registered exactly as sent.
+            tracing::info!(
+                redirect = %format!("{}{}", state.web_url, disc_api::discord::CALLBACK_PATH),
+                "Integração com o Discord ativa: cadastre este redirect em OAuth2 > Redirects no Developer Portal"
+            );
+            state = state.with_discord(config);
+            disc_api::discord::spawn(&state);
+        }
+        None => tracing::warn!(
+            "Integração com o Discord desativada: defina DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET e DISCORD_BOT_TOKEN."
+        ),
+    }
+    let app = router(state, origins).fallback_service(
         ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html"))),
     );
     let listener = tokio::net::TcpListener::bind(

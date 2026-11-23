@@ -1,13 +1,20 @@
 import { Headphones, MoreHorizontal, MessageSquareText, Search, Users } from "lucide-react";
 import type { Channel, User, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
-import { ProfileButton } from "./ProfileCard";
+import { activityLabel } from "../lib/activity";
+import { ProfileButton, useActivity } from "./ProfileCard";
 import { Avatar, LiveTag, SoonTag } from "./ui";
+
+/** The person's activity ("Jogando Minecraft") when they share one. */
+function PersonStatus({ userId, fallback }: { userId: string; fallback: string }) {
+  const activity = useActivity(userId);
+  return <small title={activity ? activityLabel(activity) : undefined}>{activity ? activityLabel(activity) : fallback}</small>;
+}
 
 export function ChannelHeader({ channel }: { channel: Channel }) {
   return <header className="channel-header">
     <span className="channel-icon"><MessageSquareText size={20} /></span>
-    <div><h1>{channel.name}</h1><p>Canal de texto</p></div>
+    <div><h1>{channel.name}</h1><p>{channel.readOnly ? "Importando do Discord…" : channel.source === "discord" ? "Canal de texto · importado do Discord" : "Canal de texto"}</p></div>
     {/* Channel options are designed but not implemented yet. */}
     <button className="icon-button" disabled aria-label="Opções do canal (em breve)" title="Opções do canal em breve"><MoreHorizontal size={20} /></button>
     <nav className="channel-tabs" aria-label="Seções da conversa">
@@ -51,8 +58,8 @@ export function ChannelDetails({ user, voiceChannels, participants, voiceState, 
     <section className="detail-card">
       <div className="detail-heading"><h2 className="eyebrow">Pessoas</h2><button className="icon-button small" disabled aria-label="Buscar pessoas (em breve)"><Search size={16} /></button></div>
       <ul className="people-list">
-        <li><Avatar name={user.name} src={user.avatar} status="online" /><div><strong><ProfileButton user={user} /></strong><small>{connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"}</small></div></li>
-        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} src={p.user.avatar} status="online" /><div><strong><ProfileButton user={p.user} /></strong><small>{p.screen ? "Compartilhando a tela" : `Em ${live!.name}`}</small></div></li>)}
+        <li><Avatar name={user.name} src={user.avatar} status="online" /><div><strong><ProfileButton user={user} /></strong><PersonStatus userId={user.id} fallback={connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"} /></div></li>
+        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} src={p.user.avatar} status="online" /><div><strong><ProfileButton user={p.user} /></strong><PersonStatus userId={p.user.id} fallback={p.screen ? "Compartilhando a tela" : `Em ${live!.name}`} /></div></li>)}
       </ul>
       <p className="detail-footnote"><Users size={14} />Lista de membros e presença em breve</p>
     </section>
