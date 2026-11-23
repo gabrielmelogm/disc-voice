@@ -12,7 +12,172 @@ impl MigratorTrait for Migrator {
             Box::new(ProfileAndSearch),
             Box::new(GoogleAuth),
             Box::new(Avatar),
+            Box::new(Discord),
+            Box::new(OneTimeImportAndFiles),
         ]
+    }
+}
+
+struct OneTimeImportAndFiles;
+
+impl MigrationName for OneTimeImportAndFiles {
+    fn name(&self) -> &str {
+        "m20261124_000008_one_time_import_and_files"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for OneTimeImportAndFiles {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A text and a voice channel may share a name (e.g. "geral").
+            ALTER TABLE channels
+                DROP CONSTRAINT channels_server_id_name_key,
+                ADD CONSTRAINT channels_server_id_type_name_key UNIQUE (server_id, type, name);
+            -- Imports run once: after the backlog the channel belongs to Disc Voice.
+            ALTER TABLE discord_imports DROP CONSTRAINT discord_imports_phase_check;
+            UPDATE discord_imports SET phase = 'done', status = 'idle' WHERE phase = 'sync';
+            ALTER TABLE discord_imports ADD CONSTRAINT discord_imports_phase_check
+                CHECK (phase IN ('history', 'done'));
+            -- Files kept by the API (e.g. media copied from Discord).
+            CREATE TABLE files (
+                id uuid PRIMARY KEY,
+                name varchar(255) NOT NULL,
+                content_type varchar(100) NOT NULL,
+                size bigint NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now()
+            );
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            DROP TABLE files;
+            ALTER TABLE discord_imports DROP CONSTRAINT discord_imports_phase_check;
+            UPDATE discord_imports SET phase = 'sync' WHERE phase = 'done';
+            ALTER TABLE discord_imports ADD CONSTRAINT discord_imports_phase_check
+                CHECK (phase IN ('history', 'sync'));
+            ALTER TABLE channels
+                DROP CONSTRAINT channels_server_id_type_name_key,
+                ADD CONSTRAINT channels_server_id_name_key UNIQUE (server_id, name);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+struct Discord;
+
+impl MigrationName for Discord {
+    fn name(&self) -> &str {
+        "m20261123_000007_discord"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Discord {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A Discord account linked to a Disc Voice user (OAuth2 identify).
+            CREATE TABLE discord_accounts (
+                user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                discord_id varchar(24) NOT NULL UNIQUE,
+                username varchar(64) NOT NULL,
+                display_name varchar(64),
+                avatar_url varchar(512),
+                share_activity boolean NOT NULL DEFAULT true,
+                linked_at timestamptz NOT NULL DEFAULT now()
+            );
+            -- A Discord server where the bot was installed for a Disc Voice server.
+            CREATE TABLE discord_guilds (
+                server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                guild_id varchar(24) NOT NULL,
+                name varchar(100) NOT NULL,
+                icon_url varchar(512),
+                linked_by uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                linked_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (server_id, guild_id)
+            );
+            CREATE INDEX discord_guilds_guild ON discord_guilds(guild_id);
+            -- A Discord text channel mirrored into a read-only Disc Voice channel.
+            -- `history` walks the backlog oldest first; `sync` then follows new messages.
+            CREATE TABLE discord_imports (
+                channel_id uuid PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+                server_id uuid NOT NULL,
+                guild_id varchar(24) NOT NULL,
+                discord_channel_id varchar(24) NOT NULL,
+                discord_channel_name varchar(100) NOT NULL,
+                phase varchar(8) NOT NULL DEFAULT 'history' CHECK (phase IN ('history', 'sync')),
+                status varchar(8) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'idle', 'error')),
+                cursor varchar(24),
+                imported bigint NOT NULL DEFAULT 0,
+                error text,
+                retry_at timestamptz,
+                created_by uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                synced_at timestamptz,
+                UNIQUE (server_id, discord_channel_id),
+                FOREIGN KEY (server_id, guild_id) REFERENCES discord_guilds(server_id, guild_id) ON DELETE CASCADE
+            );
+            CREATE INDEX discord_imports_work ON discord_imports(status, created_at);
+            CREATE INDEX discord_imports_source ON discord_imports(discord_channel_id);
+            ALTER TABLE channels ADD COLUMN source varchar(8) NOT NULL DEFAULT 'local'
+                CHECK (source IN ('local', 'discord'));
+            -- Imported messages keep the Discord author instead of a local one,
+            -- may have no text (attachments only) and are unique per channel.
+            ALTER TABLE messages
+                ALTER COLUMN author_id DROP NOT NULL,
+                ADD COLUMN discord_id varchar(24),
+                ADD COLUMN discord_author jsonb,
+                ADD COLUMN attachments jsonb NOT NULL DEFAULT '[]',
+                DROP CONSTRAINT messages_content_check,
+                ADD CONSTRAINT messages_content_check CHECK (
+                    length(content) <= 4000
+                    AND (discord_id IS NOT NULL OR length(trim(content)) >= 1)),
+                ADD CONSTRAINT messages_author_check CHECK (
+                    author_id IS NOT NULL OR discord_author IS NOT NULL);
+            CREATE UNIQUE INDEX messages_discord ON messages(channel_id, discord_id)
+                WHERE discord_id IS NOT NULL;
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            DELETE FROM messages WHERE discord_id IS NOT NULL;
+            DROP INDEX messages_discord;
+            ALTER TABLE messages
+                DROP CONSTRAINT messages_author_check,
+                DROP CONSTRAINT messages_content_check,
+                ADD CONSTRAINT messages_content_check CHECK (length(trim(content)) BETWEEN 1 AND 4000),
+                DROP COLUMN attachments,
+                DROP COLUMN discord_author,
+                DROP COLUMN discord_id,
+                ALTER COLUMN author_id SET NOT NULL;
+            ALTER TABLE channels DROP COLUMN source;
+            DROP TABLE discord_imports, discord_guilds, discord_accounts;
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

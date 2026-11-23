@@ -43,12 +43,14 @@ pub(crate) struct Hub {
     clients: Mutex<HashMap<Uuid, Client>>,
     events: broadcast::Sender<Event>,
     capacity: usize,
+    activities: Mutex<HashMap<Uuid, crate::activity::Activity>>,
 }
 
 impl Hub {
     pub(crate) fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
+            activities: Mutex::new(HashMap::new()),
             events: broadcast::channel(512).0,
             capacity: std::env::var("VOICE_CHANNEL_CAPACITY")
                 .ok()
@@ -103,6 +105,45 @@ impl Hub {
     pub(crate) fn publish_server(&self, server: Uuid, payload: Value) {
         let clients = self.clients.lock().unwrap();
         self.emit(Self::audience(&clients, server), payload, false);
+    }
+
+    /// Sends to every live connection of these accounts.
+    pub(crate) fn publish_users(&self, users: &std::collections::HashSet<Uuid>, payload: Value) {
+        let clients = self.clients.lock().unwrap();
+        let recipients = clients
+            .iter()
+            .filter(|(_, c)| users.contains(&c.user.id))
+            .map(|(id, _)| *id)
+            .collect();
+        self.emit(recipients, payload, false);
+    }
+
+    /// Stores a user's activity; returns whether it changed.
+    pub(crate) fn set_activity(
+        &self,
+        user: Uuid,
+        activity: Option<crate::activity::Activity>,
+    ) -> bool {
+        let mut activities = self.activities.lock().unwrap();
+        if activities.get(&user) == activity.as_ref() {
+            return false;
+        }
+        match activity {
+            Some(activity) => activities.insert(user, activity),
+            None => activities.remove(&user),
+        };
+        true
+    }
+
+    pub(crate) fn activities(
+        &self,
+        users: &std::collections::HashSet<Uuid>,
+    ) -> HashMap<Uuid, crate::activity::Activity> {
+        let activities = self.activities.lock().unwrap();
+        users
+            .iter()
+            .filter_map(|id| Some((*id, activities.get(id)?.clone())))
+            .collect()
     }
 
     /// Refreshes the profile kept by the user's live connections and tells
@@ -503,6 +544,7 @@ mod tests {
                     bio: String::new(),
                     banner: "brand".into(),
                     avatar: None,
+                    discord: None,
                 },
                 session: id.to_string(),
                 watching: None,
@@ -520,6 +562,7 @@ mod tests {
             kind: "voice".into(),
             created_by: Uuid::new_v4(),
             created_at: Utc::now(),
+            source: "local".into(),
         }
     }
 

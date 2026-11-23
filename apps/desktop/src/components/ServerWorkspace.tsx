@@ -3,6 +3,7 @@ import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react
 import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
+import { useActivities } from "../hooks/useActivities";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
 import { useVoice } from "../hooks/useVoice";
@@ -10,6 +11,7 @@ import { AppBar } from "./AppBar";
 import { ChannelDetails, ChannelHeader } from "./ChannelDetails";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar } from "./DirectMessages";
+import { DiscordImportDialog } from "./DiscordImportDialog";
 import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
 import { SearchDialog, type SearchPick } from "./SearchDialog";
 import { ServerDialog, type DialogMode } from "./ServerDialog";
@@ -44,6 +46,8 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   // Channel to open once another server's channel list arrives (e.g. returning to a call).
   const pendingChannel = useRef<string | null>(null);
   const realtime = useRealtime(selected);
+  const activities = useActivities(realtime.client, realtime.revision);
+  const [discordOpen, setDiscordOpen] = useState(false);
   const { voice, state: voiceState } = useVoice(realtime.client);
   const [participants, setParticipants] = useState<Record<string, VoiceParticipant[]>>({});
   // Latest profile of each user seen in a profile update, for the profile cards.
@@ -63,6 +67,11 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   useEffect(() => realtime.client.onEvent(event => {
     if (event.type === "channel.created" && event.channel.serverId === selected) {
       setChannels(current => current.some(c => c.id === event.channel.id) ? current : [...current, event.channel]);
+    }
+    // An imported channel opens for messages when its import is done.
+    if (event.type === "discord.import" && event.serverId === selected) {
+      const readOnly = event.import.phase === "history";
+      setChannels(current => current.map(c => c.id === event.import.channelId && !!c.readOnly !== readOnly ? { ...c, readOnly } : c));
     }
     if (event.type === "server.snapshot" && event.serverId === selected) {
       setParticipants(event.channels);
@@ -116,7 +125,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     window.addEventListener("keydown", open);
     return () => window.removeEventListener("keydown", open);
   }, []);
-  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); }, [selected]);
+  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); setDiscordOpen(false); }, [selected]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -229,11 +238,12 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const viewingCall = view === "server" && channel?.type === "voice";
   const showDetails = view === "server" && channel?.type === "text";
 
-  return <ProfileCardProvider profiles={visibleProfiles}><div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
+  return <ProfileCardProvider profiles={visibleProfiles} activities={activities}><div className={`app-shell workspace-shell ${showDetails ? "with-details" : ""}`}>
     {view === "dms" ? <DirectMessagesSidebar /> : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId}
       participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
       onSelect={openChannel} onJoin={joinVoice} onCreate={type => setDialog({ kind: "channel", server, channelType: type })}
-      onInvite={() => setDialog({ kind: "invite", server })} onReload={() => setChannelReload(n => n + 1)} /> : <aside className="sidebar">
+      onInvite={() => setDialog({ kind: "invite", server })} onReload={() => setChannelReload(n => n + 1)}
+      onDiscord={server.ownerId === user.id ? () => setDiscordOpen(true) : undefined} /> : <aside className="sidebar">
       <div className="sidebar-title"><h2>Seu espaço</h2></div>
       <p className="sidebar-status">{loading ? "Carregando…" : "Crie um servidor ou entre pelo link de um amigo."}</p>
     </aside>}
@@ -275,8 +285,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     {showDetails && <ChannelDetails user={user} voiceChannels={voiceChannels} participants={participants} voiceState={voiceState} onJoin={joinVoice} />}
 
     {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
-      leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} />}
+      leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} realtime={realtime.client} />}
     {search}
+    {discordOpen && server && <DiscordImportDialog server={server} realtime={realtime.client} onClose={() => setDiscordOpen(false)}
+      onOpenChannel={id => { setDiscordOpen(false); goToChannel(server.id, id); }} />}
     {dialog && !loading && <ServerDialog mode={dialog} onClose={() => setDialog(null)} onServer={acceptServer} onChannel={next => {
       if (next.serverId === selected) {
         setChannels(current => current.some(c => c.id === next.id) ? current : [...current, next]); setChannelId(next.id);

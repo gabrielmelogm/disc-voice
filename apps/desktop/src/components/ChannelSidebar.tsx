@@ -1,9 +1,9 @@
-import { MessageSquareText, Plus, RefreshCw, UserPlus, Volume2 } from "lucide-react";
+import { History, Import, MessageSquareText, Plus, RefreshCw, UserPlus, Volume2 } from "lucide-react";
 import type { Channel, Server, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
 import { Avatar, LiveTag } from "./ui";
 
-export function ChannelSidebar({ server, channels, channelId, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload }: {
+export function ChannelSidebar({ server, channels, channelId, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord }: {
   server: Server;
   channels: Channel[];
   channelId: string | null;
@@ -16,6 +16,8 @@ export function ChannelSidebar({ server, channels, channelId, participants, voic
   onCreate: (type: Channel["type"]) => void;
   onInvite: () => void;
   onReload: () => void;
+  /** Opens the Discord import; only for the server owner. */
+  onDiscord?: () => void;
 }) {
   const text = channels.filter(item => item.type === "text");
   const voice = channels.filter(item => item.type === "voice");
@@ -24,14 +26,16 @@ export function ChannelSidebar({ server, channels, channelId, participants, voic
   return <aside className="sidebar" aria-label={`Canais de ${server.name}`}>
     <div className="sidebar-title"><h2 title={server.name}>{server.name}</h2></div>
     <button className="button soft full" onClick={onInvite}><UserPlus size={16} />Convidar pessoas</button>
+    {onDiscord && <button className="button secondary small full" onClick={onDiscord}><Import size={16} />Importar do Discord</button>}
     {loading && <p className="sidebar-status" role="status">Carregando canais…</p>}
     {error && <div className="sidebar-status"><p role="alert">{error}</p><button className="link-button" onClick={onReload}><RefreshCw size={13} />Tentar novamente</button></div>}
     {!loading && !error && channels.length === 0 && <p className="sidebar-status">Crie o primeiro canal.</p>}
 
     <div className="section-heading"><span>Conversas</span><button className="icon-button small" aria-label="Criar canal de texto" title="Criar canal de texto" disabled={loading} onClick={() => onCreate("text")}><Plus size={17} /></button></div>
     <nav className="channel-list" aria-label="Canais de texto">
-      {text.map(item => <button key={item.id} className={`channel-item ${channelId === item.id ? "selected" : ""}`} aria-pressed={channelId === item.id} onClick={() => onSelect(item)}>
-        <MessageSquareText size={18} /><span>{item.name}</span>
+      {text.map(item => <button key={item.id} className={`channel-item ${channelId === item.id ? "selected" : ""}`} aria-pressed={channelId === item.id} onClick={() => onSelect(item)}
+        title={item.readOnly ? "Importando do Discord…" : undefined}>
+        {item.readOnly ? <History size={18} aria-label="Importando do Discord" /> : <MessageSquareText size={18} />}<span>{item.name}</span>
       </button>)}
     </nav>
 

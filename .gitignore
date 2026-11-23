@@ -3,6 +3,8 @@ dist/
 target/
 coverage/
 apps/desktop/src-tauri/gen/
+# Files stored by a local API (UPLOADS_DIR).
+/data/
 *.log
 .DS_Store
 .env

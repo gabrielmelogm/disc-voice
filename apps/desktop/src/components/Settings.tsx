@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Download, IdCard, KeyRound, LogOut, Mic, Palette, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
-import type { BannerColor, User } from "@disc-voice/shared";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
+import type { BannerColor, DiscordStatus, User } from "@disc-voice/shared";
 import { DeviceSettings } from "../DeviceSettings";
 import { api, message } from "../lib/api";
 import { maskEmail } from "../lib/display";
+import { openExternal } from "../lib/external";
+import type { Realtime } from "../lib/realtime";
 import { requestDesktopPermission, useNotificationPrefs } from "../lib/notifications";
 import { useTraySupported, useWindowPrefs } from "../lib/tray";
 import {
@@ -13,11 +15,12 @@ import {
 import { BANNER_COLORS, bannerColor, ProfileSummary } from "./ProfileCard";
 import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
 
-export type SettingsPage = "overview" | "voice" | "profile" | "themes";
+export type SettingsPage = "overview" | "voice" | "profile" | "connections" | "themes";
 
 const pages: { id: SettingsPage; label: string; icon: LucideIcon; keywords: string }[] = [
   { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações janela bandeja segundo plano fechar excluir" },
   { id: "profile", label: "Perfil", icon: IdCard, keywords: "nome pronomes avatar banner sobre mim" },
+  { id: "connections", label: "Conexões", icon: Link2, keywords: "discord conta vincular atividade jogo jogando música presença privacidade" },
   { id: "voice", label: "Voz e vídeo", icon: Mic, keywords: "microfone saída áudio câmera webcam tela compartilhar" },
   { id: "themes", label: "Temas", icon: Palette, keywords: "cores claro escuro sistema importar aparência" },
 ];
@@ -31,7 +34,7 @@ const appearanceOptions: { value: Appearance; label: string }[] = [
 const normalize = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("pt-BR");
 
 /** User settings, in a floating dialog over the app. */
-export function Settings({ user, page, onPage, onClose, onLogout, leaving, error, inCall, callDevices, onUserChange }: {
+export function Settings({ user, page, onPage, onClose, onLogout, leaving, error, inCall, callDevices, onUserChange, realtime }: {
   user: User;
   page: SettingsPage;
   onPage: (page: SettingsPage) => void;
@@ -42,6 +45,8 @@ export function Settings({ user, page, onPage, onClose, onLogout, leaving, error
   inCall: boolean;
   callDevices: ReactNode;
   onUserChange: (user: User) => void;
+  /** Live updates, e.g. when a Discord account finishes linking. */
+  realtime?: Realtime;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const main = useRef<HTMLElement>(null);
@@ -88,10 +93,12 @@ export function Settings({ user, page, onPage, onClose, onLogout, leaving, error
           <header className="settings-header">
             <h1>{title}</h1>
             {page === "themes" && <p className="lede">Escolha como o Disc Voice aparece. O tema muda só as cores; fontes e tamanhos continuam os mesmos.</p>}
+            {page === "connections" && <p className="lede">Vincule outras contas para trazer o que você já faz nelas para o Disc Voice.</p>}
           </header>
           {page === "overview" && <Overview user={user} onEditProfile={() => onPage("profile")} onThemes={() => onPage("themes")} />}
           {page === "voice" && <DeviceSettings inCall={inCall} callDevices={callDevices} userName={user.name} />}
           {page === "profile" && <Profile key={user.id} user={user} onUserChange={onUserChange} />}
+          {page === "connections" && <Connections realtime={realtime} />}
           {page === "themes" && <Themes />}
         </div>
       </main>
@@ -240,6 +247,75 @@ function Profile({ user, onUserChange }: { user: User; onUserChange: (user: User
       </div>
     </aside>
   </div>;
+}
+
+/** Why the Discord activity is (or isn't) showing up. */
+export function presenceHelp(status: DiscordStatus) {
+  const account = status.account;
+  if (!account?.shareActivity) return "Sua atividade do Discord não aparece para ninguém aqui.";
+  if (!status.presence) return "O bot do Disc Voice não está recebendo presenças do Discord agora, então sua atividade não aparece.";
+  if (!account.presenceSeen) {
+    return "Ainda não vimos sua atividade. O Discord só compartilha o que você está fazendo com bots de servidores em comum: entre em um servidor do Discord que tenha o bot do Disc Voice.";
+  }
+  return "Sincronizando: quando você joga ou ouve música, quem está nos seus servidores vê isso no seu perfil.";
+}
+
+function Connections({ realtime }: { realtime?: Realtime }) {
+  const [status, setStatus] = useState<DiscordStatus | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+
+  const load = useCallback(() => api.discord()
+    .then(result => { setStatus(result); setError(""); if (result.account) setWaiting(false); })
+    .catch(cause => setError(message(cause))), []);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => realtime?.onEvent(event => {
+    if (event.type === "discord.updated" && !event.serverId) void load();
+  }), [realtime, load]);
+  // Back from the browser after authorizing.
+  useEffect(() => {
+    if (!waiting) return;
+    const refresh = () => void load();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [waiting, load]);
+
+  async function act(action: () => Promise<unknown>) {
+    setBusy(true); setError("");
+    try { await action(); await load(); }
+    catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  }
+
+  const account = status?.account;
+  return <section className="connection-card" aria-labelledby="discord-connection-title">
+    <div className="section-row">
+      <h2 id="discord-connection-title" className="settings-section-title">Discord</h2>
+      {account && <span className="status-chip">Conectada</span>}
+    </div>
+    {!status && !error && <p className="muted" role="status">Carregando…</p>}
+    {status && !status.enabled && <p className="muted">A integração com o Discord não está configurada neste servidor do Disc Voice.</p>}
+    {status?.enabled && !account && <>
+      <p className="field-help">Mostre aqui o que você está jogando, ouvindo ou assistindo no Discord. Só lemos seu nome de usuário; nunca suas mensagens ou servidores.</p>
+      {waiting && <p className="notice" role="status">Conclua a autorização no navegador e volte para cá.</p>}
+      <div className="button-row"><button className="button primary" disabled={busy} onClick={() => void act(async () => { await openExternal((await api.linkDiscord()).url); setWaiting(true); })}><ExternalLink size={16} />Conectar conta do Discord</button></div>
+    </>}
+    {account && status && <>
+      <div className="connection-identity">
+        <Avatar name={account.displayName || account.username} src={account.avatar} size="lg" />
+        <div><strong>{account.displayName || account.username}</strong><span>@{account.username}</span></div>
+        <button className="button secondary small" disabled={busy} onClick={() => void act(() => api.unlinkDiscord())}>Desconectar</button>
+      </div>
+      <div className="switch-list">
+        <Switch id="discord-activity" checked={account.shareActivity} disabled={busy} onChange={share => void act(() => api.updateDiscord(share))}
+          label="Mostrar minha atividade do Discord" description="Quem está nos seus servidores vê o jogo, a música ou o vídeo do seu status do Discord." />
+      </div>
+      <p className="field-help" role="status">{presenceHelp(status)}</p>
+    </>}
+    {error && <p className="inline-error" role="alert">{error}</p>}
+  </section>;
 }
 
 const builtInThemes: { id: Appearance; name: string; by: string }[] = [

@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { Channel, ChatMessage, User } from "@disc-voice/shared";
-import { MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
+import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
+import { Attachments, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
 import { ProfileButton } from "./ProfileCard";
 import { Avatar } from "./ui";
 
@@ -42,7 +43,16 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
     setPending(current => current.filter(item => !ids.has(item.clientId)));
   };
 
+  const [viewing, setViewing] = useState<Media | null>(null);
+  // Imported from Discord: messages arrive in batches as the import advances.
+  const importedCount = useRef<number | null>(null);
   useEffect(() => realtime.onEvent(event => {
+    if (event.type === "discord.import" && event.import.channelId === channel.id && event.import.imported !== importedCount.current) {
+      importedCount.current = event.import.imported;
+      // Still empty: load the latest page instead of replaying everything.
+      if (cursor.current === "0") cursor.current = null;
+      setRetry(n => n + 1);
+    }
     if (event.type === "message.created" && event.message.channelId === channel.id) accept([event.message]);
     // Existing messages show the author's current name.
     if (event.type === "user.updated") {
@@ -137,6 +147,8 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
   }
 
   const welcome = !messages.length && !loading && !hasMore;
+  const imported = channel.source === "discord";
+  const importing = imported && !!channel.readOnly;
   return <section className="text-chat" aria-label={`Chat de texto ${channel.name}`}>
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
@@ -145,7 +157,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
     }}>
       {hasMore && <button className="button secondary history-button" disabled={older} onClick={() => void loadOlder()}>{older ? "Carregando…" : "Carregar mensagens anteriores"}</button>}
       {loading && <p className="chat-status" role="status">Sincronizando mensagens…</p>}
-      {welcome && <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>}
+      {welcome && (importing
+        ? <div className="chat-welcome"><span className="welcome-icon"><History size={28} /></span><h2>#{channel.name} vem do Discord</h2><p>As mensagens aparecem aqui conforme a importação avança.</p></div>
+        : <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>)}
       {messages.map((item, index) => {
         const previous = messages[index - 1];
         const newDay = !previous || new Date(previous.createdAt).toDateString() !== new Date(item.createdAt).toDateString();
@@ -156,8 +170,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
           <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
             {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} /></ProfileButton>}
             <div className="message-body">
-              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
-              <p>{item.content}</p>
+              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong>{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
+              {item.content ? <MessageText text={item.content} /> : !item.attachments?.length && <p className="muted"><em>Mensagem sem texto</em></p>}
+              {item.content && imageLinks(item.content).map(url => <ImageThumb key={url} url={url} name={url.split("/").pop() || "imagem"} onView={setViewing} />)}
+              {!!item.attachments?.length && <Attachments files={item.attachments} onView={setViewing} />}
             </div>
           </article>
         </Fragment>;
@@ -165,12 +181,13 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
       {pending.map(item => <article className="chat-message pending-message" key={item.clientId}>
         <Avatar name={self?.name || "Você"} src={self?.avatar} />
         <div className="message-body">
-          <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div><p>{item.content}</p>
+          <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div><MessageText text={item.content} />
           {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}
         </div>
       </article>)}
     </div>
-    <form className="composer" onSubmit={submit}>
+    {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
+    {importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
       <label className="sr-only" htmlFor="message-content">Mensagem em #{channel.name}</label>
       <textarea id="message-content" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
         onChange={event => setContent(event.target.value)}
@@ -186,6 +203,6 @@ export function TextChannel({ channel, realtime, revision, self, focusId }: { ch
         <span className="composer-hint">Enter para enviar · Shift+Enter para nova linha</span>
         <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
       </div>
-    </form>
+    </form>}
   </section>;
 }

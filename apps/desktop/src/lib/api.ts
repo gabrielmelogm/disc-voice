@@ -1,4 +1,7 @@
-import type { AuthSession, Channel, ChatMessage, GoogleConfig, GoogleLogin, Invite, MessagePage, ProfileUpdate, SearchResults, Server, User } from "@disc-voice/shared";
+import type {
+  Activity, AuthSession, Channel, ChatMessage, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite, MessagePage,
+  ProfileUpdate, SearchResults, Server, User,
+} from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
@@ -63,7 +66,7 @@ export function parseInvite(value: string): string {
 }
 
 async function request<T>(path: string, options: {
-  method?: "POST" | "PATCH"; body?: unknown; signal?: AbortSignal; public?: boolean;
+  method?: "POST" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal; public?: boolean;
 } = {}): Promise<T> {
   const token = options.public ? null : sessionToken.get();
   let response: Response;
@@ -113,7 +116,24 @@ export const api = {
   sendMessage: (channelId: string, clientId: string, content: string) =>
     request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: { clientId, content } }),
   voiceConfig: () => request<{ iceServers: RTCIceServer[] }>("/voice/config"),
+  activities: (signal?: AbortSignal) => request<Record<string, Activity>>("/activities", { signal }),
+  discord: (signal?: AbortSignal) => request<DiscordStatus>("/discord", { signal }),
+  linkDiscord: () => request<{ url: string }>("/discord/link", { method: "POST" }),
+  updateDiscord: (shareActivity: boolean) => request<void>("/discord/account", { method: "PATCH", body: { shareActivity } }),
+  unlinkDiscord: () => request<void>("/discord/account", { method: "DELETE" }),
+  serverDiscord: (serverId: string, signal?: AbortSignal) => request<DiscordServer>(`/servers/${serverId}/discord`, { signal }),
+  installDiscord: (serverId: string) => request<{ url: string }>(`/servers/${serverId}/discord/install`, { method: "POST" }),
+  unlinkGuild: (serverId: string, guildId: string) => request<void>(`/servers/${serverId}/discord/guilds/${encodeURIComponent(guildId)}`, { method: "DELETE" }),
+  importDiscord: (serverId: string, guildId: string, channelId: string) =>
+    request<DiscordImport>(`/servers/${serverId}/discord/imports`, { method: "POST", body: { guildId, channelId } }),
+  retryDiscord: (channelId: string) => request<DiscordImport>(`/discord/imports/${channelId}/retry`, { method: "POST" }),
+  finishDiscord: (channelId: string) => request<DiscordImport>(`/discord/imports/${channelId}/finish`, { method: "POST" }),
 };
+
+/** Files kept by the API come as `/api/files/...`; other URLs are absolute. */
+export function mediaUrl(url: string) {
+  return url.startsWith("/api/") ? new URL(`${baseUrl}${url.slice(4)}`, window.location.href).href : url;
+}
 
 export function message(error: unknown) {
   return error instanceof Error ? error.message : "Não foi possível concluir a operação.";

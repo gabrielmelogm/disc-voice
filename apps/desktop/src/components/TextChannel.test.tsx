@@ -50,7 +50,7 @@ describe("text chat", () => {
     await screen.findByText("Perdida");
     expect(history.mock.calls[1][1]).toEqual({ after: "1" });
     expect(screen.getAllByText("Ao vivo")).toHaveLength(1);
-    expect([...screen.getByRole("log").querySelectorAll("article p")].map(p => p.textContent)).toEqual(["Primeira", "Perdida", "Ao vivo"]);
+    expect([...screen.getByRole("log").querySelectorAll("article .message-text")].map(p => p.textContent)).toEqual(["Primeira", "Perdida", "Ao vivo"]);
   });
 
   it("shows the current author name after a profile update", async () => {
