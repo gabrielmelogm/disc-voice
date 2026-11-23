@@ -241,9 +241,10 @@ export interface Invite {
 
 export interface Channel {
   id: string;
-  serverId: string;
+  /** Null for direct message conversations (`type: "dm"`). */
+  serverId: string | null;
   name: string;
-  type: "text" | "voice";
+  type: "text" | "voice" | "dm";
   /** `discord` for channels imported from Discord. Absent from older servers. */
   source?: "local" | "discord";
   /** Still importing its Discord history: nobody can send messages yet. */
@@ -265,6 +266,26 @@ export interface ChatMessage {
 export interface MessagePage {
   messages: ChatMessage[];
   hasMore: boolean;
+}
+
+/** A private conversation between the user and one other person. */
+export interface DirectConversation {
+  channel: Channel;
+  /** The other person. */
+  user: User;
+  /** Newest message, or null while the conversation is empty. */
+  lastMessageId: string | null;
+}
+
+/** How far the user has read a text channel or conversation. */
+export interface ReadState {
+  channelId: string;
+  /** Null for direct message conversations. */
+  serverId: string | null;
+  /** Last message read, as a message id; "0" when nothing was read. */
+  lastReadId: string;
+  /** Messages from other people after it, capped at 100. */
+  unread: number;
 }
 
 export interface VoiceParticipant {
@@ -307,7 +328,13 @@ export type RealtimeEvent =
   | { type: "activity.updated"; userId: string; activity: Activity | null }
   /** The user's Discord account or a server's Discord connections changed. */
   | { type: "discord.updated"; serverId: string | null }
-  | { type: "discord.import"; serverId: string; import: DiscordImport };
+  | { type: "discord.import"; serverId: string; import: DiscordImport }
+  /** Someone is typing; repeated every few seconds while they keep typing. */
+  | { type: "typing"; channelId: string; user: User }
+  /** The user read a channel, possibly on another device. */
+  | { type: "read.updated"; channelId: string; lastReadId: string }
+  /** A conversation with the user was started. */
+  | { type: "dm.created"; conversation: DirectConversation };
 
 export type RealtimeCommand =
   | { type: "ping" }
@@ -315,4 +342,5 @@ export type RealtimeCommand =
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
   | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean }
-  | { type: "voice.signal"; peerId: string; data: SignalPayload };
+  | { type: "voice.signal"; peerId: string; data: SignalPayload }
+  | { type: "typing.start"; channelId: string };

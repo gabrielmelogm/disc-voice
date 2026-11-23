@@ -29,6 +29,11 @@ export function Badge({ count, label }: { count: number; label?: string }) {
   return <span className="count-badge" aria-label={label}>{count > 99 ? "99+" : count}</span>;
 }
 
+/** Spoken form of an unread count, matching the badge's "99+" cap. */
+export function unreadLabel(count: number) {
+  return count === 1 ? "1 mensagem não lida" : `${count > 99 ? "Mais de 99" : count} mensagens não lidas`;
+}
+
 export function LiveTag() {
   return <span className="live-tag"><span className="live-dot" />AO VIVO</span>;
 }

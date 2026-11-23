@@ -25,7 +25,22 @@ struct Client {
     session: String,
     watching: Option<Uuid>,
     voice: Option<Voice>,
+    /// Channels this connection was allowed to type in, and who sees it.
+    typing: HashMap<Uuid, Scope>,
 }
+
+/// Who can see activity in a channel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Scope {
+    /// The server's audience (everyone watching it or in one of its calls).
+    Server(Uuid),
+    /// The other person of a direct conversation.
+    Direct(Uuid),
+}
+
+/// A person typing is announced at most this often per channel; clients
+/// hide the indicator when the announcements stop.
+const TYPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone)]
 struct Voice {
@@ -44,6 +59,8 @@ pub(crate) struct Hub {
     events: broadcast::Sender<Event>,
     capacity: usize,
     activities: Mutex<HashMap<Uuid, crate::activity::Activity>>,
+    /// Last typing announcement relayed per (user, channel).
+    typing: Mutex<HashMap<(Uuid, Uuid), Instant>>,
 }
 
 impl Hub {
@@ -51,6 +68,7 @@ impl Hub {
         Self {
             clients: Mutex::new(HashMap::new()),
             activities: Mutex::new(HashMap::new()),
+            typing: Mutex::new(HashMap::new()),
             events: broadcast::channel(512).0,
             capacity: std::env::var("VOICE_CHANNEL_CAPACITY")
                 .ok()
@@ -259,7 +277,7 @@ impl Hub {
         }
         let voice = Voice {
             channel: channel.id,
-            server: channel.server_id,
+            server: server_of(&channel)?,
             muted,
             deafened,
             screen: false,
@@ -298,6 +316,58 @@ impl Hub {
             let voice = voice.clone();
             self.changed(&clients, &voice);
         }
+    }
+
+    /// Where a connection may already type in a channel (checked before).
+    fn typing_scope(&self, id: Uuid, channel: Uuid) -> Option<Scope> {
+        let clients = self.clients.lock().unwrap();
+        clients.get(&id)?.typing.get(&channel).copied()
+    }
+
+    fn allow_typing(&self, id: Uuid, channel: Uuid, scope: Scope) {
+        if let Some(client) = self.clients.lock().unwrap().get_mut(&id) {
+            client.typing.insert(channel, scope);
+        }
+    }
+
+    /// Tells who can see the channel that this connection's user is typing,
+    /// except the user's own connections. Returns false when throttled.
+    fn typing(&self, id: Uuid, channel: Uuid, scope: Scope) -> bool {
+        let clients = self.clients.lock().unwrap();
+        let Some(user) = clients.get(&id).map(|c| c.user.clone()) else {
+            return false;
+        };
+        {
+            let mut typing = self.typing.lock().unwrap();
+            let now = Instant::now();
+            if typing
+                .get(&(user.id, channel))
+                .is_some_and(|last| now.duration_since(*last) < TYPING_INTERVAL)
+            {
+                return false;
+            }
+            if typing.len() > 1024 {
+                typing.retain(|_, last| now.duration_since(*last) < TYPING_INTERVAL);
+            }
+            typing.insert((user.id, channel), now);
+        }
+        let recipients = match scope {
+            Scope::Server(server) => Self::audience(&clients, server),
+            Scope::Direct(other) => clients
+                .iter()
+                .filter(|(_, c)| c.user.id == other)
+                .map(|(id, _)| *id)
+                .collect(),
+        }
+        .into_iter()
+        .filter(|peer| clients.get(peer).is_some_and(|c| c.user.id != user.id))
+        .collect();
+        self.emit(
+            recipients,
+            json!({ "type": "typing", "channelId": channel, "user": user }),
+            false,
+        );
+        true
     }
 
     fn signal(&self, id: Uuid, target: Uuid, data: Value) -> ApiResult<()> {
@@ -342,6 +412,8 @@ enum Command {
     },
     #[serde(rename = "voice.signal", rename_all = "camelCase")]
     Signal { peer_id: Uuid, data: Value },
+    #[serde(rename = "typing.start", rename_all = "camelCase")]
+    Typing { channel_id: Uuid },
 }
 
 /// Tells every online member of the server, whatever they have open, that someone
@@ -351,12 +423,12 @@ async fn announce_arrival(
     user: &UserView,
     channel: &channel::Model,
 ) -> ApiResult<()> {
-    let server = server::Entity::find_by_id(channel.server_id)
+    let server = server::Entity::find_by_id(server_of(channel)?)
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Servidor não encontrado.".into()))?;
     let members: std::collections::HashSet<Uuid> = member::Entity::find()
-        .filter(member::Column::ServerId.eq(channel.server_id))
+        .filter(member::Column::ServerId.eq(server.id))
         .all(&state.db)
         .await?
         .into_iter()
@@ -405,6 +477,26 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             camera,
         } => state.realtime.update(id, muted, deafened, screen, camera),
         Command::Signal { peer_id, data } => state.realtime.signal(id, peer_id, data)?,
+        Command::Typing { channel_id } => {
+            // Access is checked once per connection and channel: typing is chatty.
+            let scope = match state.realtime.typing_scope(id, channel_id) {
+                Some(scope) => scope,
+                None => {
+                    let channel = require_channel(&state.db, channel_id, user.id, "text").await?;
+                    let scope = match channel.server_id {
+                        Some(server) => Scope::Server(server),
+                        None => Scope::Direct(
+                            crate::dms::require_participant(&state.db, channel.id, user.id)
+                                .await?
+                                .other(user.id),
+                        ),
+                    };
+                    state.realtime.allow_typing(id, channel_id, scope);
+                    scope
+                }
+            };
+            state.realtime.typing(id, channel_id, scope);
+        }
     }
     Ok(())
 }
@@ -476,6 +568,7 @@ async fn connected(state: AppState, mut socket: WebSocket) {
             session: hash.clone(),
             watching: None,
             voice: None,
+            typing: HashMap::new(),
         },
     );
     let (mut sender, mut receiver) = socket.split();
@@ -587,6 +680,7 @@ mod tests {
                 session: id.to_string(),
                 watching: None,
                 voice: None,
+                typing: HashMap::new(),
             },
         );
         id
@@ -595,7 +689,7 @@ mod tests {
     fn room(server: Uuid) -> channel::Model {
         channel::Model {
             id: Uuid::new_v4(),
-            server_id: server,
+            server_id: Some(server),
             name: "voz".into(),
             kind: "voice".into(),
             created_by: Uuid::new_v4(),
@@ -641,6 +735,45 @@ mod tests {
             Hub::participants(&hub.clients.lock().unwrap(), target.id).len(),
             1
         );
+    }
+
+    fn recipients(events: &mut broadcast::Receiver<Event>) -> Vec<Uuid> {
+        let mut found = events.try_recv().expect("an event").recipients;
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn typing_reaches_others_and_is_throttled_per_user_and_channel() {
+        let hub = Hub::new();
+        let mut events = hub.events.subscribe();
+        let server = Uuid::new_v4();
+        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let desktop = client(&hub, me);
+        let laptop = client(&hub, me);
+        let watcher = client(&hub, other);
+        let elsewhere = client(&hub, Uuid::new_v4());
+        hub.watch(desktop, Some(server));
+        hub.watch(laptop, Some(server));
+        hub.watch(watcher, Some(server));
+        hub.watch(elsewhere, Some(Uuid::new_v4()));
+        while events.try_recv().is_ok() {}
+
+        let channel = Uuid::new_v4();
+        assert!(hub.typing(desktop, channel, Scope::Server(server)));
+        // Neither of the typist's own connections hears it; other servers neither.
+        assert_eq!(recipients(&mut events), vec![watcher]);
+        // Another device of the same person is throttled too.
+        assert!(!hub.typing(laptop, channel, Scope::Server(server)));
+        assert!(events.try_recv().is_err());
+        // Throttling is per channel.
+        assert!(hub.typing(desktop, Uuid::new_v4(), Scope::Server(server)));
+        let _ = events.try_recv();
+
+        // A conversation reaches only the other person, wherever they are.
+        let dm = Uuid::new_v4();
+        assert!(hub.typing(desktop, dm, Scope::Direct(other)));
+        assert_eq!(recipients(&mut events), vec![watcher]);
     }
 
     #[test]

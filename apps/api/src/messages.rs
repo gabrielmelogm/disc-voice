@@ -222,11 +222,13 @@ pub(crate) async fn send(
 ) -> ApiResult<Json<MessageView>> {
     let channel = require_channel(&state.db, id, user.id, "text").await?;
     // New messages would land among the history still being imported.
-    if channel.source == "discord"
-        && crate::discord::importing(&state.db, channel.server_id)
+    let importing = match channel.server_id {
+        Some(server) if channel.source == "discord" => crate::discord::importing(&state.db, server)
             .await?
-            .contains(&id)
-    {
+            .contains(&id),
+        _ => false,
+    };
+    if importing {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "Este canal ainda está sendo importado do Discord. Você poderá enviar mensagens quando a importação terminar.".into(),
@@ -268,12 +270,14 @@ pub(crate) async fn send(
     };
     tx.commit().await?;
     let view = MessageView::new(row, user);
-    state.realtime.publish_server(
-        channel.server_id,
+    dms::publish(
+        &state,
+        &channel,
         serde_json::json!({
             "type": "message.created", "message": view
         }),
-    );
+    )
+    .await?;
     Ok(Json(view))
 }
 

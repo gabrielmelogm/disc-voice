@@ -96,7 +96,8 @@ pub mod channel {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
-        pub server_id: Uuid,
+        /// Absent on direct message conversations (`kind == "dm"`).
+        pub server_id: Option<Uuid>,
         pub name: String,
         #[sea_orm(column_name = "type")]
         pub kind: String,
@@ -104,6 +105,33 @@ pub mod channel {
         pub created_at: DateTimeUtc,
         /// `local`, or `discord` for a read-only mirror of a Discord channel.
         pub source: String,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod dm_channel {
+    use sea_orm::entity::prelude::*;
+
+    /// The two people of a direct message conversation, with `user_a < user_b`.
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "dm_channels")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub channel_id: Uuid,
+        pub user_a: Uuid,
+        pub user_b: Uuid,
+    }
+    impl Model {
+        /// The person on the other side of the conversation.
+        pub fn other(&self, user: Uuid) -> Uuid {
+            if self.user_a == user {
+                self.user_b
+            } else {
+                self.user_a
+            }
+        }
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

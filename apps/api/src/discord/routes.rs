@@ -401,7 +401,7 @@ pub(crate) async fn create_import(
     let tx = state.db.begin().await?;
     let channel = channel::ActiveModel {
         id: Set(Uuid::new_v4()),
-        server_id: Set(id),
+        server_id: Set(Some(id)),
         name: Set(name),
         kind: Set("text".into()),
         created_by: Set(user.id),

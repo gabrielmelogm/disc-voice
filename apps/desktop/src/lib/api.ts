@@ -1,6 +1,6 @@
 import type {
-  Activity, AuthSession, Channel, ChatMessage, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite, MessagePage,
-  ProfileUpdate, SearchResults, Server, User,
+  Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite,
+  MessagePage, ProfileUpdate, ReadState, SearchResults, Server, User,
 } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
@@ -115,6 +115,11 @@ export const api = {
     request<MessagePage>(`/channels/${channelId}/messages?${new URLSearchParams(cursor)}`, { signal }),
   sendMessage: (channelId: string, clientId: string, content: string) =>
     request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: { clientId, content } }),
+  reads: (signal?: AbortSignal) => request<ReadState[]>("/reads", { signal }),
+  markRead: (channelId: string, messageId: string) =>
+    request<{ channelId: string; lastReadId: string }>(`/channels/${channelId}/read`, { method: "POST", body: { messageId } }),
+  dms: (signal?: AbortSignal) => request<DirectConversation[]>("/dms", { signal }),
+  openDm: (userId: string) => request<DirectConversation>("/dms", { method: "POST", body: { userId } }),
   voiceConfig: () => request<{ iceServers: RTCIceServer[] }>("/voice/config"),
   activities: (signal?: AbortSignal) => request<Record<string, Activity>>("/activities", { signal }),
   discord: (signal?: AbortSignal) => request<DiscordStatus>("/discord", { signal }),

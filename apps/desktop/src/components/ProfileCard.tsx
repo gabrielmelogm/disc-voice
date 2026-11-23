@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Gamepad2 } from "lucide-react";
+import { Gamepad2, MessageCircle } from "lucide-react";
 import type { Activity, BannerColor, User } from "@disc-voice/shared";
 import { activityDetail, activityLabel } from "../lib/activity";
 import { Avatar } from "./ui";
@@ -62,21 +62,28 @@ export const useProfileCard = () => useContext(ProfileContext);
  * Hosts the profile card. `profiles` holds the latest known version of each
  * user, so a card opened from an old message still shows the current profile.
  */
-export function ProfileCardProvider({ profiles, activities = {}, children }: {
+export function ProfileCardProvider({ profiles, activities = {}, selfId, onMessage, children }: {
   profiles: Record<string, User>;
   /** Current activity of each user, by id. */
   activities?: Record<string, Activity>;
+  /** The signed-in user, who cannot message themselves. */
+  selfId?: string;
+  /** Opens a direct conversation with someone. */
+  onMessage?: (user: User) => void;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState<{ user: User; anchor: HTMLElement } | null>(null);
   const close = useCallback(() => setOpen(null), []);
+  const user = open && (profiles[open.user.id] || open.user);
+  const canMessage = !!onMessage && !!user && user.id !== selfId && !user.discord;
   return <ActivityContext.Provider value={activities}><ProfileContext.Provider value={(user, anchor) => setOpen({ user, anchor })}>
     {children}
-    {open && <ProfilePopover user={profiles[open.user.id] || open.user} anchor={open.anchor} onClose={close} />}
+    {open && user && <ProfilePopover user={user} anchor={open.anchor} onClose={close}
+      onMessage={canMessage ? () => { close(); onMessage(user); } : undefined} />}
   </ProfileContext.Provider></ActivityContext.Provider>;
 }
 
-function ProfilePopover({ user, anchor, onClose }: { user: User; anchor: HTMLElement; onClose: () => void }) {
+function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anchor: HTMLElement; onClose: () => void; onMessage?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
 
@@ -109,6 +116,7 @@ function ProfilePopover({ user, anchor, onClose }: { user: User; anchor: HTMLEle
   return <div ref={ref} className="profile-preview profile-card" role="dialog" aria-label={`Perfil de ${user.name}`} tabIndex={-1}
     style={position ? { left: position.left, top: position.top } : { visibility: "hidden" }}>
     <ProfileSummary user={user} />
+    {onMessage && <button type="button" className="button primary small full" onClick={onMessage}><MessageCircle size={16} />Enviar mensagem</button>}
   </div>;
 }
 
