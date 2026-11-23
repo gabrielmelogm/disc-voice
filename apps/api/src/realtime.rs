@@ -230,7 +230,7 @@ impl Hub {
         channel: channel::Model,
         muted: bool,
         deafened: bool,
-    ) -> ApiResult<()> {
+    ) -> ApiResult<bool> {
         let mut clients = self.clients.lock().unwrap();
         let user = clients.get(&id).ok_or_else(ApiError::unauthorized)?.user.id;
         let others = clients
@@ -248,6 +248,8 @@ impl Hub {
             .filter(|(_, c)| c.user.id == user)
             .filter_map(|(peer, c)| c.voice.take().map(|voice| (*peer, voice)))
             .collect();
+        // Moving to another device in the same room is not a new arrival.
+        let arrived = !old.iter().any(|(_, voice)| voice.channel == channel.id);
         for (peer, voice) in old {
             self.direct(
                 peer,
@@ -272,7 +274,7 @@ impl Hub {
             }),
         );
         self.changed(&clients, &voice);
-        Ok(())
+        Ok(arrived)
     }
 
     fn leave(&self, id: Uuid) {
@@ -342,6 +344,34 @@ enum Command {
     Signal { peer_id: Uuid, data: Value },
 }
 
+/// Tells every online member of the server, whatever they have open, that someone
+/// entered one of its voice rooms.
+async fn announce_arrival(
+    state: &AppState,
+    user: &UserView,
+    channel: &channel::Model,
+) -> ApiResult<()> {
+    let server = server::Entity::find_by_id(channel.server_id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Servidor não encontrado.".into()))?;
+    let members: std::collections::HashSet<Uuid> = member::Entity::find()
+        .filter(member::Column::ServerId.eq(channel.server_id))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|m| m.user_id)
+        .collect();
+    state.realtime.publish_users(
+        &members,
+        json!({
+            "type": "voice.member.joined", "serverId": server.id, "serverName": server.name,
+            "channelId": channel.id, "channelName": channel.name, "user": user
+        }),
+    );
+    Ok(())
+}
+
 async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) -> ApiResult<()> {
     match command {
         Command::Ping => state.realtime.direct(id, json!({ "type": "pong" })),
@@ -357,7 +387,15 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             deafened,
         } => {
             let channel = require_channel(&state.db, channel_id, user.id, "voice").await?;
-            state.realtime.join(id, channel, muted, deafened)?;
+            if state.realtime.join(id, channel.clone(), muted, deafened)? {
+                // The arrival is only a notification: a failure here must not undo the join.
+                if let Err(error) = announce_arrival(state, user, &channel).await {
+                    eprintln!(
+                        "Não foi possível avisar a entrada na sala de voz: {}",
+                        error.1
+                    );
+                }
+            }
         }
         Command::Leave => state.realtime.leave(id),
         Command::VoiceState {
@@ -603,6 +641,25 @@ mod tests {
             Hub::participants(&hub.clients.lock().unwrap(), target.id).len(),
             1
         );
+    }
+
+    #[test]
+    fn only_new_arrivals_count_as_joins() {
+        let hub = Hub::new();
+        let server = Uuid::new_v4();
+        let first_room = room(server);
+        let second_room = room(server);
+        let user = Uuid::new_v4();
+        let desktop = client(&hub, user);
+        assert_eq!(
+            hub.join(desktop, first_room.clone(), false, false).ok(),
+            Some(true)
+        );
+        // Same account, same room, another connection: not someone new.
+        let laptop = client(&hub, user);
+        assert_eq!(hub.join(laptop, first_room, false, false).ok(), Some(false));
+        // Moving to another room is an arrival there.
+        assert_eq!(hub.join(laptop, second_room, false, false).ok(), Some(true));
     }
 
     #[test]

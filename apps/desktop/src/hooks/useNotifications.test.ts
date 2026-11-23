@@ -24,13 +24,17 @@ const call: Channel = { id: "voice-1", serverId: "server-1", name: "Sala", type:
 const chat = (author: User, channelId = text.id): ChatMessage => ({
   id: "m1", channelId, clientId: "c1", author, content: "Olá pessoal", createdAt: "2026-11-18T10:00:00Z",
 });
-const peer = (peerId: string, user: User, muted = false): VoiceParticipant =>
-  ({ peerId, user, muted, deafened: false, screen: false } as VoiceParticipant);
+const peer = (peerId: string, user: User): VoiceParticipant =>
+  ({ peerId, user, muted: false, deafened: false, screen: false } as VoiceParticipant);
 
-function setup({ viewing = text.id as string | null, inCall = false, deafened = false } = {}) {
+const arrival = (who: User, where: Partial<{ serverId: string; serverName: string; channelId: string; channelName: string }> = {}): RealtimeEvent => ({
+  type: "voice.member.joined", serverId: call.serverId, serverName: "Meu servidor", channelId: call.id, channelName: call.name, user: who, ...where,
+});
+
+function setup({ viewing = text.id as string | null, inCall = false } = {}) {
   let listener: (event: RealtimeEvent) => void = () => {};
   const realtime = { onEvent: (fn: typeof listener) => { listener = fn; return () => {}; } } as unknown as Realtime;
-  const voiceState = { channel: inCall ? call : null, peerId: inCall ? "p-me" : "", deafened };
+  const voiceState = { channel: inCall ? call : null };
   renderHook(() => useNotifications({ realtime, user: me, voiceState, viewingChannelId: viewing, channels: [text, other, call] }));
   return (event: RealtimeEvent) => act(() => listener(event));
 }
@@ -80,47 +84,53 @@ describe("useNotifications", () => {
     expect(lib.playNotificationSound).not.toHaveBeenCalled();
   });
 
-  it("alerts when someone joins our call, not for those already there", () => {
-    const emit = setup({ inCall: true });
-    emit({ type: "voice.joined", channelId: call.id, peerId: "p-me", participants: [peer("p-me", me), peer("p-1", friend)] });
-    expect(lib.playNotificationSound).not.toHaveBeenCalled();
-    const newcomer: User = { id: "new", email: "novo@example.com", name: "Novo" };
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-me", me), peer("p-1", friend), peer("p-2", newcomer)] });
-    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores state changes of people already in the call", () => {
-    const emit = setup({ inCall: true });
-    emit({ type: "voice.joined", channelId: call.id, peerId: "p-me", participants: [peer("p-me", me), peer("p-1", friend)] });
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-me", me), peer("p-1", friend, true)] });
-    expect(lib.playNotificationSound).not.toHaveBeenCalled();
-  });
-
-  it("ignores other voice channels and calls we are not in", () => {
+  it("alerts when someone enters a voice room while we are not in a call, in any server", () => {
     const emit = setup();
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-1", friend)] });
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-1", friend), peer("p-2", friend)] });
-    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    emit(arrival(friend));
+    emit(arrival(friend, { serverId: "server-2", serverName: "Outro", channelId: "voice-9", channelName: "Jogos" }));
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(2);
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
   });
 
-  it("stays quiet while deafened and when the preference is off", () => {
-    const emit = setup({ inCall: true, deafened: true });
-    emit({ type: "voice.joined", channelId: call.id, peerId: "p-me", participants: [peer("p-me", me)] });
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-me", me), peer("p-1", friend)] });
-    expect(lib.playNotificationSound).not.toHaveBeenCalled();
-
-    lib.prefs = { ...lib.prefs, voiceJoin: false };
-    const again = setup({ inCall: true });
-    again({ type: "voice.joined", channelId: call.id, peerId: "p-me", participants: [peer("p-me", me)] });
-    again({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-me", me), peer("p-1", friend)] });
-    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+  it("shows an OS notification for an arrival in the background", () => {
+    focus(false);
+    const emit = setup();
+    emit(arrival(friend));
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo entrou em #Sala", "Meu servidor", "Amigo");
   });
 
-  it("shows an OS notification for a join in the background", () => {
+  it("stays quiet while we are in a call, in our room or any other", () => {
     focus(false);
     const emit = setup({ inCall: true });
-    emit({ type: "voice.joined", channelId: call.id, peerId: "p-me", participants: [peer("p-me", me)] });
-    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-me", me), peer("p-1", friend)] });
-    expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo entrou em #Sala", "Sala de voz", "Amigo");
+    emit(arrival(friend));
+    emit(arrival(friend, { channelId: "voice-2", channelName: "Outra" }));
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet for our own arrival (e.g. from another device)", () => {
+    const emit = setup();
+    emit(arrival(me));
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+  });
+
+  it("respects the voice join and desktop preferences", () => {
+    focus(false);
+    lib.prefs = { ...lib.prefs, voiceJoin: false };
+    setup()(arrival(friend));
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+
+    lib.prefs = { ...lib.prefs, voiceJoin: true, desktop: false };
+    setup()(arrival(friend));
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+  });
+
+  it("ignores participant updates of rooms", () => {
+    const emit = setup();
+    emit({ type: "voice.participants", serverId: call.serverId, channelId: call.id, participants: [peer("p-1", friend)] });
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
   });
 });

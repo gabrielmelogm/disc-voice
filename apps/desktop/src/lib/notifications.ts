@@ -8,7 +8,7 @@ export interface NotificationPrefs {
   desktop: boolean;
   /** Sound when a message arrives. */
   messageSounds: boolean;
-  /** Sound when someone joins the voice channel you are in. */
+  /** Alert when someone enters a voice channel of your servers while you are not in a call. */
   voiceJoin: boolean;
 }
 
