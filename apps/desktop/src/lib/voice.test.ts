@@ -20,6 +20,9 @@ vi.mock("./screenTrack", () => ({
   }),
 }));
 
+const sounds = vi.hoisted(() => ({ playMicSound: vi.fn(), playScreenSound: vi.fn(), playLeaveSound: vi.fn() }));
+vi.mock("./notifications", () => sounds);
+
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
 const participant = { peerId: "self", user: { id: "user-1", email: "amigo@example.com", name: "Amigo" }, muted: false, deafened: false, screen: false };
 
@@ -112,6 +115,51 @@ describe("voice lifecycle", () => {
     expect(second.track.stop).toHaveBeenCalledOnce();
   });
 
+  it("plays the mic cue when muting or unmuting in a call, not before joining", async () => {
+    const media = stream();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue(media.media),
+      enumerateDevices: vi.fn().mockResolvedValue([]), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    sounds.playMicSound.mockClear();
+    const { voice, event } = setup();
+    voice.toggleMute();
+    voice.toggleMute();
+    expect(sounds.playMicSound).not.toHaveBeenCalled();
+    await voice.join(channel);
+    event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [participant] });
+    voice.toggleMute();
+    voice.toggleMute();
+    expect(sounds.playMicSound).toHaveBeenCalledTimes(2);
+    voice.toggleDeafen();
+    expect(sounds.playMicSound).toHaveBeenCalledTimes(2);
+    voice.dispose();
+  });
+
+  it("plays the leave cue only when the user hangs up a call", async () => {
+    const media = stream();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue(media.media),
+      enumerateDevices: vi.fn().mockResolvedValue([]), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    sounds.playLeaveSound.mockClear();
+    const { voice, event, send } = setup();
+    voice.hangUp();
+    expect(sounds.playLeaveSound).not.toHaveBeenCalled();
+    await voice.join(channel);
+    event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [participant] });
+    // Replaced by another device: the app leaves on its own, silently.
+    event({ type: "voice.left", channelId: channel.id, reason: "replaced" });
+    expect(sounds.playLeaveSound).not.toHaveBeenCalled();
+    await voice.join(channel);
+    event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [participant] });
+    voice.hangUp();
+    expect(sounds.playLeaveSound).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.leave" });
+    expect(voice.getSnapshot()).toMatchObject({ status: "idle", channel: null });
+    voice.dispose();
+  });
+
   it("reports microphone permission errors without joining the server room", async () => {
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
       getUserMedia: vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError")),
@@ -202,8 +250,33 @@ describe("screen sharing in a call", () => {
     call.event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [
       participant, { ...participant, peerId: "remote" },
     ] });
+    sounds.playScreenSound.mockClear();
     return { ...call, start, stop };
   }
+
+  it("plays the share cue when sharing starts and stops, not for the picker or leaving", async () => {
+    const { voice, start } = await inCall();
+    await voice.startScreen();
+    expect(sounds.playScreenSound).toHaveBeenCalledTimes(1);
+    voice.stopScreen();
+    expect(sounds.playScreenSound).toHaveBeenCalledTimes(2);
+
+    start.mockResolvedValueOnce(null);
+    await voice.startScreen();
+    let answer!: (value: typeof info) => void;
+    start.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+    const starting = voice.startScreen();
+    voice.stopScreen();
+    answer(info);
+    await starting;
+    expect(sounds.playScreenSound).toHaveBeenCalledTimes(2);
+
+    await voice.startScreen();
+    expect(sounds.playScreenSound).toHaveBeenCalledTimes(3);
+    voice.leave();
+    expect(sounds.playScreenSound).toHaveBeenCalledTimes(3);
+    voice.dispose();
+  });
 
   it("sends the screen to every peer, including later ones, and stops it", async () => {
     const { voice, send, event, start, stop } = await inCall();

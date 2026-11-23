@@ -302,6 +302,8 @@ export type RealtimeEvent =
   | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }
   | { type: "voice.left"; channelId: string; reason: "left" | "replaced" }
   | { type: "voice.signal"; channelId: string; peerId: string; data: SignalPayload }
+  /** Someone entered a voice room of one of the user's servers (sent to every online member). */
+  | { type: "voice.member.joined"; serverId: string; serverName: string; channelId: string; channelName: string; user: User }
   | { type: "activity.updated"; userId: string; activity: Activity | null }
   /** The user's Discord account or a server's Discord connections changed. */
   | { type: "discord.updated"; serverId: string | null }

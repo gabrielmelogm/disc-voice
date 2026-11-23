@@ -59,6 +59,38 @@ describe("notifications", () => {
     now.mockRestore();
   });
 
+  it("plays the call connect cue on its own, not throttled by the notification sound", async () => {
+    const play = vi.fn(() => Promise.resolve());
+    const Audio = vi.fn(function (this: Record<string, unknown>, src: string) { Object.assign(this, { src, play, currentTime: 0 }); });
+    vi.stubGlobal("Audio", Audio);
+    const { playNotificationSound, playVoiceConnectSound } = await load();
+    playNotificationSound();
+    playVoiceConnectSound();
+    expect(Audio).toHaveBeenCalledWith("/songs/user-voicecall-connect.mp3");
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers every mute, screen share and leave click with its cue, with no throttle", async () => {
+    const play = vi.fn(() => Promise.resolve());
+    const Audio = vi.fn(function (this: Record<string, unknown>, src: string) { Object.assign(this, { src, play, currentTime: 0 }); });
+    vi.stubGlobal("Audio", Audio);
+    vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const { playMicSound, playScreenSound } = await load();
+    playMicSound();
+    playMicSound();
+    expect(Audio).toHaveBeenCalledWith("/songs/mic-control-notification.mp3");
+    expect(Audio).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(2);
+    playScreenSound();
+    playScreenSound();
+    expect(Audio).toHaveBeenCalledWith("/songs/share-media-voicecall-notification.mp3");
+    expect(play).toHaveBeenCalledTimes(4);
+    const { playLeaveSound } = await import("./notifications");
+    playLeaveSound();
+    expect(Audio).toHaveBeenCalledWith("/songs/notification-beep.mp3");
+    vi.mocked(Date.now).mockRestore();
+  });
+
   it("only sends OS notifications inside the desktop app, through the native command", async () => {
     const { showDesktopNotification } = await load();
     await showDesktopNotification("Amigo", "Oi");

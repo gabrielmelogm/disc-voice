@@ -145,7 +145,7 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
           if (desktop) void requestDesktopPermission();
         }} label="Notificações na área de trabalho" description="Avisos de mensagens e entradas na sala quando o app está em segundo plano" />
         <Switch id="message-sounds" checked={notifications.messageSounds} onChange={messageSounds => setNotifications({ messageSounds })} label="Sons de mensagem" description="Toca um som curto quando chega mensagem" />
-        <Switch id="voice-join" checked={notifications.voiceJoin} onChange={voiceJoin => setNotifications({ voiceJoin })} label="Avisar quando alguém entra na sala de voz" description="Só para as salas em que você estiver" />
+        <Switch id="voice-join" checked={notifications.voiceJoin} onChange={voiceJoin => setNotifications({ voiceJoin })} label="Avisar quando alguém entra na sala de voz" description="Fora de chamada, em qualquer servidor seu; em chamada, só um som quando alguém se conecta à sua" />
       </div>
     </section>
 

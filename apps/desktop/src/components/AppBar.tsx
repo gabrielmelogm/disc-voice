@@ -124,7 +124,7 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
             <button role="menuitem" onClick={pick(onVoiceSettings)}><span className="menu-icon"><Settings2 size={16} /></span>Dispositivos de voz</button>
           </div>}
         </div>
-        <button className="bar-button danger wide" aria-label="Sair da chamada" title="Sair da chamada" onClick={voice.leave}><PhoneOff size={20} /></button>
+        <button className="bar-button danger wide" aria-label="Sair da chamada" title="Sair da chamada" onClick={voice.hangUp}><PhoneOff size={20} /></button>
       </div>
     </>}
 

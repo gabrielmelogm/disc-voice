@@ -693,6 +693,8 @@ async fn accounts_invites_channels_and_authorization() {
     });
     let (mut owner_ws, owner_peer) = socket(&url, token).await;
     let (mut guest_ws, guest_peer) = socket(&url, guest_token).await;
+    // Another device of the owner, with no server open: it still hears about arrivals.
+    let (mut owner_idle, _) = socket(&url, token).await;
     emit(
         &mut owner_ws,
         json!({ "type": "server.watch", "serverId": server_id }),
@@ -742,6 +744,16 @@ async fn accounts_invites_channels_and_authorization() {
             .len(),
         2
     );
+    // The owner's own arrival comes first (the page skips its own).
+    let own = event(&mut owner_idle, "voice.member.joined").await;
+    assert_ne!(own["user"]["id"], guest["user"]["id"]);
+    let arrival = event(&mut owner_idle, "voice.member.joined").await;
+    assert_eq!(arrival["user"]["id"], guest["user"]["id"]);
+    assert_eq!(arrival["serverId"], server_id);
+    assert_eq!(arrival["channelId"], voice["id"]);
+    assert_eq!(arrival["channelName"], voice["name"]);
+    assert!(arrival["serverName"].is_string());
+    owner_idle.close(None).await.unwrap();
     emit(&mut owner_ws, json!({ "type": "voice.signal", "peerId": guest_peer, "data": { "description": { "type": "offer", "sdp": "test" } } })).await;
     assert_eq!(
         event(&mut guest_ws, "voice.signal").await["peerId"],

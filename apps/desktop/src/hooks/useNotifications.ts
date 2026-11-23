@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
-import type { Channel, RealtimeEvent, User, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, RealtimeEvent, User } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
 import type { VoiceState } from "../lib/voice";
-import { notificationPrefs, playNotificationSound, showDesktopNotification } from "../lib/notifications";
+import { notificationPrefs, playNotificationSound, playVoiceConnectSound, showDesktopNotification } from "../lib/notifications";
 
 const PREVIEW_LENGTH = 100;
 
@@ -17,23 +17,19 @@ function focused() {
 
 /**
  * Plays the notification sound (and shows an OS notification in the background) when
- * someone else posts a message or joins the voice channel we are in.
+ * someone else posts a message, or enters a voice room of any of our servers while we
+ * are not in a call. In a call, someone connecting to ours plays a cue with no notification.
  */
 export function useNotifications({ realtime, user, voiceState, viewingChannelId, channels }: {
   realtime: Realtime;
   user: User;
-  voiceState: Pick<VoiceState, "channel" | "peerId" | "deafened">;
+  voiceState: Pick<VoiceState, "channel" | "deafened">;
   /** Text channel on screen, if any: its messages need no alert while the window has focus. */
   viewingChannelId: string | null;
   channels: Channel[];
 }) {
   const latest = useRef({ user, voiceState, viewingChannelId, channels });
   latest.current = { user, voiceState, viewingChannelId, channels };
-  // Peers already in our call; null until the first participant list for it arrives.
-  const known = useRef<Set<string> | null>(null);
-  const callId = voiceState.channel?.id ?? null;
-
-  useEffect(() => { known.current = null; }, [callId]);
 
   useEffect(() => realtime.onEvent((event: RealtimeEvent) => {
     const { user, voiceState, viewingChannelId, channels } = latest.current;
@@ -52,23 +48,18 @@ export function useNotifications({ realtime, user, voiceState, viewingChannelId,
       return;
     }
 
-    const call = voiceState.channel;
-    if (!call || !("channelId" in event) || event.channelId !== call.id) return;
-    if (event.type === "voice.joined") {
-      known.current = new Set(event.participants.map(p => p.peerId));
-      return;
-    }
-    if (event.type !== "voice.participants") return;
-    const previous = known.current;
-    known.current = new Set(event.participants.map(p => p.peerId));
-    if (!previous) return;
-    const arrived = event.participants.filter((p: VoiceParticipant) =>
-      !previous.has(p.peerId) && p.peerId !== voiceState.peerId && p.user.id !== user.id);
-    if (!arrived.length || !prefs.voiceJoin) return;
-    if (!voiceState.deafened) playNotificationSound();
-    if (!focused() && prefs.desktop) {
-      const names = arrived.map(p => p.user.name).join(", ");
-      void showDesktopNotification(`${names} ${arrived.length > 1 ? "entraram" : "entrou"} em #${call.name}`, "Sala de voz", arrived[0].user.name);
+    if (event.type === "voice.member.joined") {
+      if (event.user.id === user.id || !prefs.voiceJoin) return;
+      const call = voiceState.channel;
+      if (call) {
+        // In a call: only a cue for who connects to ours, no OS notification; other rooms would only interrupt.
+        if (event.channelId === call.id && !voiceState.deafened) playVoiceConnectSound();
+        return;
+      }
+      playNotificationSound();
+      if (!focused() && prefs.desktop) {
+        void showDesktopNotification(`${event.user.name} entrou em #${event.channelName}`, event.serverName, event.user.name);
+      }
     }
   }), [realtime]);
 }
