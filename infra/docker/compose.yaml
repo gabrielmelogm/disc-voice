@@ -46,6 +46,19 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+  website:
+    build:
+      context: ../..
+      dockerfile: infra/docker/website.Dockerfile
+      args:
+        NEXT_PUBLIC_DOWNLOAD_WINDOWS: ${NEXT_PUBLIC_DOWNLOAD_WINDOWS:-}
+        NEXT_PUBLIC_DOWNLOAD_MAC: ${NEXT_PUBLIC_DOWNLOAD_MAC:-}
+        NEXT_PUBLIC_DOWNLOAD_LINUX: ${NEXT_PUBLIC_DOWNLOAD_LINUX:-}
+    # Opt-in: docker compose --profile website up -d website
+    profiles: ["website"]
+    ports:
+      - "${WEBSITE_PORT:-3000}:3000"
+    restart: unless-stopped
   turn:
     image: coturn/coturn:4.6.3
     profiles: ["voice"]

@@ -11,6 +11,8 @@
     "services:down": "docker compose down",
     "dev": "npm run tauri:dev --workspace @disc-voice/desktop",
     "dev:web": "npm run dev --workspace @disc-voice/desktop",
+    "dev:site": "npm run dev --workspace @disc-voice/website",
+    "build:site": "npm run build --workspace @disc-voice/website",
     "build": "npm run build --workspace @disc-voice/desktop",
     "build:windows": "npm run tauri:build --workspace @disc-voice/desktop",
     "build:linux": "npm run tauri:build:linux --workspace @disc-voice/desktop",
