@@ -88,6 +88,12 @@ pub fn run() {
             discord_rpc::manage(app);
             #[cfg(windows)]
             tray::manage(app)?;
+            // On Windows the frontend draws its own title bar to match the app theme.
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_decorations(false)?;
+                window.set_shadow(true)?;
+            }
             #[cfg(target_os = "linux")]
             crate::linux::enable_media(app)?;
             Ok(())
