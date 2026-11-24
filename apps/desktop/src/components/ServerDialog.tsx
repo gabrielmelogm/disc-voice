@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Copy, LinkIcon, MessageSquareText, Plus, Search, Volume2, X } from "lucide-react";
-import type { Channel, Invite, Server } from "@disc-voice/shared";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, LinkIcon, MessageSquareText, PenLine, Plus, Search, Volume2, X } from "lucide-react";
+import type { Channel, DiscordStatus, Invite, Server } from "@disc-voice/shared";
 import { api, message, parseInvite } from "../lib/api";
-import { Avatar, SoonTag, Switch } from "./ui";
+import { openExternal } from "../lib/external";
+import type { Realtime } from "../lib/realtime";
+import { DiscordGuildPicker } from "./DiscordGuildPicker";
+import { Avatar, DiscordMark, SoonTag, Switch } from "./ui";
 
 export type DialogMode =
   | { kind: "create" }
@@ -10,11 +13,17 @@ export type DialogMode =
   | { kind: "invite"; server: Server }
   | { kind: "channel"; server: Server; channelType?: Channel["type"] };
 
-export function ServerDialog({ mode, onClose, onServer, onChannel }: {
+/** Creating a server: choosing how, naming it, or importing it from Discord. */
+type CreateStep = "choose" | "name" | "discord";
+
+export function ServerDialog({ mode, onClose, onServer, onChannel, onOpenServer, realtime }: {
   mode: DialogMode;
   onClose: () => void;
   onServer: (server: Server) => void;
   onChannel: (channel: Channel) => void;
+  /** Opens one of the user's servers (e.g. one imported earlier). */
+  onOpenServer?: (serverId: string) => void;
+  realtime?: Realtime;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [value, setValue] = useState(mode.kind === "join" ? mode.code || "" : "");
@@ -23,12 +32,36 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [channelType, setChannelType] = useState<Channel["type"]>(mode.kind === "channel" ? mode.channelType || "text" : "text");
+  const [step, setStep] = useState<CreateStep>("choose");
+  const [discord, setDiscord] = useState<DiscordStatus | null>(null);
+  const [linking, setLinking] = useState(false);
 
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
     return () => dialog?.close();
   }, []);
+
+  const loadDiscord = useCallback(() => api.discord().then(setDiscord).catch(() => setDiscord(null)), []);
+  useEffect(() => { if (mode.kind === "create") void loadDiscord(); }, [mode.kind, loadDiscord]);
+  // Back from linking the account in the browser.
+  useEffect(() => {
+    if (!linking) return;
+    const refresh = () => void loadDiscord();
+    window.addEventListener("focus", refresh);
+    const stop = realtime?.onEvent(event => { if (event.type === "discord.updated" && !event.serverId) void loadDiscord(); });
+    return () => { window.removeEventListener("focus", refresh); stop?.(); };
+  }, [linking, realtime, loadDiscord]);
+
+  async function linkDiscord() {
+    setError("");
+    try {
+      await openExternal((await api.linkDiscord()).url);
+      setLinking(true);
+    } catch (cause) {
+      setError(message(cause));
+    }
+  }
 
   useEffect(() => {
     if (!(mode.kind === "join" && mode.code)) return;
@@ -84,8 +117,11 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
   }
 
   const sharing = !!invite && (mode.kind === "create" || mode.kind === "invite");
+  const importing = mode.kind === "create" && step === "discord";
+  const choosing = mode.kind === "create" && step === "choose" && !sharing;
+  const account = discord?.account;
   const title = {
-    create: sharing ? "Convide seus amigos" : "Crie seu servidor",
+    create: sharing ? "Convide seus amigos" : importing ? "Importar do Discord" : "Crie seu servidor",
     join: "Entrar em um servidor",
     invite: `Convidar pessoas para ${mode.kind === "invite" ? mode.server.name : ""}`,
     channel: "Criar canal",
@@ -118,8 +154,36 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
         <small>O link não expira e não tem limite de usos. Quem receber pode abrir no navegador ou colar em “Entrar com convite”.</small>
       </div>
       <button className="button secondary full" onClick={onClose}>Concluir</button>
-    </div> : mode.kind === "invite" ? null : <form onSubmit={submit} className="stack-form">
-      <p className="lede">{mode.kind === "create" ? "Um lugar para sua comunidade. Você só precisa de um nome." : mode.kind === "channel" ? `Um novo assunto para ${mode.server.name}.` : "Cole o link que você recebeu de um amigo."}</p>
+    </div> : mode.kind === "invite" ? null : choosing ? <div className="stack-form">
+      <p className="lede">Um lugar para sua comunidade. Comece do zero ou traga um servidor que você já tem no Discord.</p>
+      <div className="create-choices">
+        <button type="button" className="create-choice" onClick={() => setStep("name")}>
+          <span className="create-choice-icon"><PenLine size={20} /></span>
+          <span><strong>Criar do zero</strong><small>Você só precisa de um nome.</small></span>
+          <ChevronRight size={18} />
+        </button>
+        {discord?.enabled !== false && <button type="button" className="create-choice" onClick={() => setStep("discord")}>
+          <span className="create-choice-icon discord"><DiscordMark size={20} /></span>
+          <span><strong>Importar do Discord</strong><small>Nome, ícone e canais de um servidor que você gerencia.</small></span>
+          <ChevronRight size={18} />
+        </button>}
+      </div>
+    </div> : importing ? <div className="stack-form">
+      <button type="button" className="link-button subtle" onClick={() => setStep("choose")}><ArrowLeft size={16} />Voltar</button>
+      {!discord && <p className="muted" role="status">Carregando…</p>}
+      {discord && !account && <>
+        <p className="lede">Conecte sua conta do Discord para ver os servidores que você gerencia.</p>
+        {linking && <p className="notice" role="status">Conclua a autorização no navegador e volte para cá.</p>}
+        <button type="button" className="button primary full large discord-button" onClick={() => void linkDiscord()}><ExternalLink size={16} />Conectar conta do Discord</button>
+      </>}
+      {account && account.canListGuilds === false && <>
+        <p className="lede">Sua conta do Discord foi conectada antes da importação de servidores existir. Reconecte para dar acesso à lista dos seus servidores.</p>
+        <button type="button" className="button primary full large discord-button" onClick={() => void linkDiscord()}><ExternalLink size={16} />Reconectar o Discord</button>
+      </>}
+      {account && account.canListGuilds !== false && <DiscordGuildPicker realtime={realtime} onServer={onServer} onOpen={id => { onOpenServer?.(id); onClose(); }} />}
+    </div> : <form onSubmit={submit} className="stack-form">
+      {mode.kind === "create" && <button type="button" className="link-button subtle" onClick={() => setStep("choose")}><ArrowLeft size={16} />Voltar</button>}
+      <p className="lede">{mode.kind === "create" ? "Dê um nome ao seu servidor para começar." : mode.kind === "channel" ? `Um novo assunto para ${mode.server.name}.` : "Cole o link que você recebeu de um amigo."}</p>
       {mode.kind === "channel" && <fieldset className="channel-type"><legend className="field-label">Tipo de canal</legend>
         <label className={channelType === "text" ? "checked" : ""}><input type="radio" name="channel-type" value="text" checked={channelType === "text"} disabled={busy} onChange={() => setChannelType("text")} /><MessageSquareText size={18} />Texto</label>
         <label className={channelType === "voice" ? "checked" : ""}><input type="radio" name="channel-type" value="voice" checked={channelType === "voice"} disabled={busy} onChange={() => setChannelType("voice")} /><Volume2 size={18} />Voz</label>
@@ -131,7 +195,7 @@ export function ServerDialog({ mode, onClose, onServer, onChannel }: {
           value={value} onChange={e => { setValue(e.target.value); if (mode.kind === "join") setInvite(null); }} />
         {mode.kind === "channel" && <small>Letras, números, hífens e sublinhados. O nome será salvo em minúsculas.</small>}
       </div>
-      {mode.kind === "join" && invite && <div className="invite-preview"><Avatar name={invite.server.name} size="lg" square /><div><small>Você foi convidado para</small><strong>{invite.server.name}</strong></div></div>}
+      {mode.kind === "join" && invite && <div className="invite-preview"><Avatar name={invite.server.name} src={invite.server.icon} size="lg" square /><div><small>Você foi convidado para</small><strong>{invite.server.name}</strong></div></div>}
       <button className="button primary full large" disabled={busy || !value.trim()}>{mode.kind === "join" ? null : <Plus size={16} />}{busy ? "Aguarde…" : mode.kind === "create" ? "Criar servidor" : mode.kind === "channel" ? "Criar canal" : invite ? "Aceitar convite" : "Ver convite"}</button>
     </form>}
     {error && <p className="inline-error" role="alert">{error}</p>}

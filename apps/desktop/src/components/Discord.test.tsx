@@ -238,7 +238,7 @@ describe("Discord connection settings", () => {
     expect(await screen.findByText("@ana")).toBeVisible();
     expect(screen.getByText(/servidores em comum/)).toBeVisible();
     await user.click(screen.getByRole("switch", { name: /Mostrar minha atividade do Discord/ }));
-    expect(update).toHaveBeenCalledWith(false);
+    expect(update).toHaveBeenCalledWith({ shareActivity: false });
     await waitFor(() => expect(load.mock.calls.length).toBeGreaterThanOrEqual(3));
   });
 

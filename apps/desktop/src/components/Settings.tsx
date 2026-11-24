@@ -301,7 +301,7 @@ function Connections({ realtime }: { realtime?: Realtime }) {
     {!status && !error && <p className="muted" role="status">Carregando…</p>}
     {status && !status.enabled && <p className="muted">A integração com o Discord não está configurada neste servidor do Disc Voice.</p>}
     {status?.enabled && !account && <>
-      <p className="field-help">Mostre aqui o que você está jogando, ouvindo ou assistindo no Discord. Só lemos seu nome de usuário; nunca suas mensagens ou servidores.</p>
+      <p className="field-help">Mostre aqui o que você está jogando, ouvindo ou assistindo no Discord. Lemos seu nome de usuário e a lista dos seus servidores, para você poder importá-los; nunca suas mensagens.</p>
       {waiting && <p className="notice" role="status">Conclua a autorização no navegador e volte para cá.</p>}
       <div className="button-row"><button className="button primary" disabled={busy} onClick={() => void act(async () => { await openExternal((await api.linkDiscord()).url); setWaiting(true); })}><ExternalLink size={16} />Conectar conta do Discord</button></div>
     </>}
@@ -312,8 +312,10 @@ function Connections({ realtime }: { realtime?: Realtime }) {
         <button className="button secondary small" disabled={busy} onClick={() => void act(() => api.unlinkDiscord())}>Desconectar</button>
       </div>
       <div className="switch-list">
-        <Switch id="discord-activity" checked={account.shareActivity} disabled={busy} onChange={share => void act(() => api.updateDiscord(share))}
+        <Switch id="discord-activity" checked={account.shareActivity} disabled={busy} onChange={share => void act(() => api.updateDiscord({ shareActivity: share }))}
           label="Mostrar minha atividade do Discord" description="Quem está nos seus servidores vê o jogo, a música ou o vídeo do seu status do Discord." />
+        <Switch id="discord-avatar" checked={!!account.useAvatar} disabled={busy} onChange={useAvatar => void act(() => api.updateDiscord({ useAvatar }))}
+          label="Usar minha foto do Discord" description="Sua foto de perfil do Discord vira a sua foto no Disc Voice." />
       </div>
       <p className="field-help" role="status">{presenceHelp(status)}</p>
     </>}

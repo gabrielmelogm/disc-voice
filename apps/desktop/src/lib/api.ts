@@ -1,5 +1,6 @@
 import type {
-  Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite,
+  Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
+  GoogleConfig, GoogleLogin, Invite,
   Friends, MemberRole, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
 
@@ -99,6 +100,10 @@ async function request<T>(path: string, options: {
 export const api = {
   googleConfig: () => request<GoogleConfig>("/auth/google/config", { public: true }),
   googleLogin: (input: GoogleLogin) => request<AuthSession>("/auth/google", { method: "POST", body: input, public: true }),
+  discordAuthConfig: () => request<{ enabled: boolean }>("/auth/discord/config", { public: true }),
+  discordAuthStart: (input: { platform: "desktop" | "web"; port?: number; state?: string }) =>
+    request<{ url: string }>("/auth/discord/start", { method: "POST", body: input, public: true }),
+  discordLogin: (ticket: string) => request<AuthSession>("/auth/discord", { method: "POST", body: { ticket }, public: true }),
   me: (signal?: AbortSignal) => request<User>("/me", { signal }),
   updateProfile: (changes: ProfileUpdate) => request<User>("/me", { method: "PATCH", body: changes }),
   search: (q: string, before?: string, signal?: AbortSignal) =>
@@ -135,7 +140,11 @@ export const api = {
   activities: (signal?: AbortSignal) => request<Record<string, Activity>>("/activities", { signal }),
   discord: (signal?: AbortSignal) => request<DiscordStatus>("/discord", { signal }),
   linkDiscord: () => request<{ url: string }>("/discord/link", { method: "POST" }),
-  updateDiscord: (shareActivity: boolean) => request<void>("/discord/account", { method: "PATCH", body: { shareActivity } }),
+  updateDiscord: (changes: { shareActivity?: boolean; useAvatar?: boolean }) => request<void>("/discord/account", { method: "PATCH", body: changes }),
+  /** The answer, after signing in with Discord, about what the integration may use. */
+  discordConsent: (choices: { useAvatar: boolean; shareActivity: boolean }) => request<void>("/discord/consent", { method: "POST", body: choices }),
+  discordGuilds: (signal?: AbortSignal) => request<DiscordGuildOption[]>("/discord/guilds", { signal }),
+  importDiscordGuild: (guildId: string) => request<DiscordGuildImport>(`/discord/guilds/${encodeURIComponent(guildId)}/import`, { method: "POST" }),
   unlinkDiscord: () => request<void>("/discord/account", { method: "DELETE" }),
   serverDiscord: (serverId: string, signal?: AbortSignal) => request<DiscordServer>(`/servers/${serverId}/discord`, { signal }),
   installDiscord: (serverId: string) => request<{ url: string }>(`/servers/${serverId}/discord/install`, { method: "POST" }),

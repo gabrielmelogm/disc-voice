@@ -782,6 +782,7 @@ mod tests {
                     bio: String::new(),
                     banner: "brand".into(),
                     avatar: None,
+                    avatar_source: None,
                     discord: None,
                 },
                 session: id.to_string(),

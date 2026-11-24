@@ -103,7 +103,7 @@ export function DiscordImportDialog({ server, realtime, onClose, onOpenChannel }
 
   return <dialog ref={ref} className="action-dialog discord-dialog" aria-labelledby="discord-title" onCancel={event => { event.preventDefault(); onClose(); }}>
     <div className="dialog-heading"><h2 id="discord-title">Importar do Discord</h2><button type="button" className="icon-button" aria-label="Fechar" onClick={onClose}><X size={20} /></button></div>
-    <p className="lede">Instale o bot do Disc Voice em um servidor do Discord e escolha os canais de texto. O histórico de cada um vira um canal em <strong>{server.name}</strong>, com as imagens e vídeos. Depois disso, a conversa continua só no Disc Voice.</p>
+    <p className="lede">Instale o bot do Disc Voice em um servidor do Discord e escolha os canais de texto. O histórico de cada um vai para o canal de mesmo nome em <strong>{server.name}</strong> se ele ainda estiver vazio, ou para um canal novo, com as imagens e vídeos. Depois disso, a conversa continua só no Disc Voice.</p>
 
     {view?.messageContent === false && <div className="notice warning" role="note"><AlertTriangle size={18} /><p><strong>O bot está sem acesso ao conteúdo das mensagens.</strong>Ative o “Message Content Intent” no Discord Developer Portal; sem ele as mensagens chegam sem texto.</p></div>}
     {waiting && <p className="notice" role="status">Conclua a instalação no navegador. Esta janela atualiza sozinha quando você voltar.</p>}
@@ -126,7 +126,8 @@ export function DiscordImportDialog({ server, realtime, onClose, onOpenChannel }
           const item = channel.import;
           const state = item && importStatus(item);
           return <li key={channel.id}>
-            <div className="discord-channel-name"><Hash size={16} aria-hidden="true" /><span>{channel.name}</span>{channel.category && <small>{channel.category}</small>}</div>
+            <div className="discord-channel-name"><Hash size={16} aria-hidden="true" /><span>{channel.name}</span>{channel.category && <small>{channel.category}</small>}
+              {!item && channel.readable && channel.target && <small>vai para #{channel.target}</small>}</div>
             {item && state ? <>
               <small className={`import-status ${state.tone}`} role={state.tone === "error" ? "alert" : undefined}>{state.text}</small>
               <div className="button-row">

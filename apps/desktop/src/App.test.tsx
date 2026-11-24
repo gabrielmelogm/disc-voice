@@ -33,6 +33,10 @@ const googleLogin = () => ({
   platform: "web",
 });
 
+/** Requests that try to sign in (the login screen also asks which options exist). */
+const signInCalls = (fetch: ReturnType<typeof mockApi>) =>
+  fetch.mock.calls.map(([url]) => String(url)).filter(url => !url.endsWith("/auth/discord/config"));
+
 beforeEach(() => {
   vi.stubGlobal("WebSocket", class {
     static OPEN = 1;
@@ -96,6 +100,7 @@ describe("accounts and communities", () => {
     expect(sessionStorage.getItem("discvoice.google")).toBeNull();
     expect(sessionToken.get()).toBe("session-token");
     let dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /Criar do zero/ }));
     await user.type(within(dialog).getByLabelText("Nome do servidor"), "Amigos");
     await user.click(within(dialog).getByRole("button", { name: "Criar servidor" }));
     expect(await within(dialog).findByLabelText("Link de convite")).toHaveValue(invite.url);
@@ -156,7 +161,7 @@ describe("accounts and communities", () => {
     expect(await screen.findByText("O login com Google foi cancelado.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Continuar com Google" })).toBeEnabled();
     expect(window.location.pathname).toBe("/");
-    expect(fetch).not.toHaveBeenCalled();
+    expect(signInCalls(fetch)).toEqual([]);
   });
 
   it("rejects a redirect whose state does not match", async () => {
@@ -164,8 +169,74 @@ describe("accounts and communities", () => {
     returnFromGoogle("code=google-code&state=forged");
     render(<App />);
     expect(await screen.findByText(/Resposta de login inválida/)).toBeVisible();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(signInCalls(fetch)).toEqual([]);
     expect(sessionToken.get()).toBeNull();
+  });
+
+  it("offers Discord first and Google second, or Google alone without the integration", async () => {
+    mockApi(path => {
+      if (path.endsWith("/auth/discord/config")) return { body: { enabled: true } };
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const first = render(<App />);
+    const buttons = screen.getAllByRole("button", { name: /Continuar com/ }).map(b => b.textContent);
+    expect(buttons).toEqual(["Continuar com Discord", "Continuar com Google"]);
+    first.unmount();
+    vi.restoreAllMocks();
+    mockApi(path => {
+      if (path.endsWith("/auth/discord/config")) return { body: { enabled: false } };
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Continuar com Discord" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Continuar com Google" })).toBeVisible();
+  });
+
+  it("signs in with Discord, asks about the profile and imports a Discord server", async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem("discvoice.discord", "discord-flow-state");
+    window.history.replaceState(null, "", "/auth/discord/callback?state=discord-flow-state&ticket=the-ticket");
+    const imported = { id: "server-9", name: "Comunidade", ownerId: account.id, icon: "https://cdn.discordapp.com/icons/700/abc.png" };
+    const consent = vi.fn();
+    const discordAccount = { id: "31", username: "bia", displayName: "Bia", avatar: null, shareActivity: false, presenceSeen: false, consentPending: true, canListGuilds: true };
+    let servers: unknown[] = [];
+    mockApi((path, init) => {
+      if (path.endsWith("/auth/discord/config")) return { body: { enabled: true } };
+      if (path.endsWith("/auth/discord")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ ticket: "the-ticket" });
+        return { body: { user: account, token: "session-token", discordConsent: true } };
+      }
+      if (path.endsWith("/discord")) return { body: { enabled: true, presence: true, account: discordAccount, clientId: null } };
+      if (path.endsWith("/discord/consent")) { consent(JSON.parse(String(init?.body))); return { status: 204 }; }
+      if (path.endsWith("/me") && init?.method === "PATCH") {
+        const changes = JSON.parse(String(init.body));
+        consent(changes);
+        return { body: { ...account, ...changes } };
+      }
+      if (path.endsWith("/discord/guilds")) return { body: [{ id: "700", name: "Comunidade", icon: imported.icon, botInstalled: true, importedServerId: null }] };
+      if (path.endsWith("/discord/guilds/700/import")) {
+        servers = [imported];
+        return { status: 201, body: { server: { code, url: invite.url, server: imported }, installUrl: null, channels: 3, warning: null } };
+      }
+      if (path.endsWith("/servers")) return { body: servers };
+      if (path.endsWith("/channels")) return { body: [] };
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<App />);
+    expect(screen.getByRole("status")).toHaveTextContent("Entrando com Discord…");
+    const dialog = await screen.findByRole("dialog", { name: "Integrar seu perfil do Discord" });
+    expect(window.location.pathname).toBe("/");
+    expect(sessionToken.get()).toBe("session-token");
+    await user.click(within(dialog).getByRole("switch", { name: /Mostrar minha atividade/ }));
+    // Discord doesn't share the "About me": the user pastes it.
+    await user.type(within(dialog).getByLabelText("Sobre mim"), "Jogo à noite");
+    await user.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    expect(consent.mock.calls).toEqual([[{ bio: "Jogo à noite" }], [{ useAvatar: true, shareActivity: false }]]);
+    expect(await within(dialog).findByRole("heading", { name: "Importar servidores do Discord?" })).toBeVisible();
+    await user.click(await within(dialog).findByRole("button", { name: "Importar Comunidade" }));
+    expect(await within(dialog).findByText("Importado com 3 canais.")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Abrir" }));
+    expect(await screen.findByRole("heading", { name: "Bem-vindo a Comunidade" })).toBeVisible();
   });
 
   it("keeps the session after the app is closed, carrying over the old sessionStorage one", async () => {

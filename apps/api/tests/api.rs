@@ -902,7 +902,8 @@ async fn accounts_invites_channels_and_authorization() {
 
 /// A fake Discord API: one guild (700) with a readable channel (500) holding
 /// `messages`, a hidden one (501) and a voice channel (502). OAuth codes are
-/// `install:<guild>` or `account:<id>:<username>`.
+/// `install:<guild>`, `account:<id>:<username>` or
+/// `login:<id>:<username>:<email>:<verified>`.
 #[derive(Clone, Default)]
 struct FakeDiscord {
     messages: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
@@ -970,15 +971,30 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
         )
     };
     let token = post(|Form(form): Form<HashMap<String, String>>| async move {
-        if form["client_id"] != "discord-client"
-            || form["client_secret"] != "discord-secret"
-            || form["redirect_uri"] != CALLBACK
-            || form["grant_type"] != "authorization_code"
-        {
-            return (
+        let invalid = || {
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "invalid_grant" })),
-            );
+            )
+        };
+        if form["client_id"] != "discord-client" || form["client_secret"] != "discord-secret" {
+            return invalid();
+        }
+        // A refresh token is `refresh|<access token>`.
+        if form["grant_type"] == "refresh_token" {
+            return match form["refresh_token"].strip_prefix("refresh|") {
+                Some(access) => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "access_token": access, "token_type": "Bearer",
+                        "refresh_token": form["refresh_token"], "expires_in": 604800,
+                    })),
+                ),
+                None => invalid(),
+            };
+        }
+        if form["redirect_uri"] != CALLBACK || form["grant_type"] != "authorization_code" {
+            return invalid();
         }
         let code = &form["code"];
         let guild = code
@@ -986,7 +1002,10 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             .map(|id| json!({ "id": id, "name": "Comunidade Discord", "icon": "abc" }));
         (
             StatusCode::OK,
-            Json(json!({ "access_token": code, "token_type": "Bearer", "guild": guild })),
+            Json(json!({
+                "access_token": code, "token_type": "Bearer", "guild": guild,
+                "refresh_token": format!("refresh|{code}"), "expires_in": 604800,
+            })),
         )
     });
     let me = get(move |headers: HeaderMap| async move {
@@ -1000,6 +1019,19 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
+        if let Some(parts) = auth
+            .strip_prefix("Bearer login:")
+            .map(|s| s.split(':').collect::<Vec<_>>())
+            .filter(|p| p.len() == 4)
+        {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "id": parts[0], "username": parts[1], "global_name": "Bia Discord",
+                    "avatar": "face", "email": parts[2], "verified": parts[3] == "true",
+                })),
+            );
+        }
         match auth
             .strip_prefix("Bearer account:")
             .map(|s| s.split(':').collect::<Vec<_>>())
@@ -1012,6 +1044,31 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             ),
             _ => forbidden(),
         }
+    });
+    // The bot is in guild 700. Users own 700, manage 800 and are only a
+    // member of 900.
+    let my_guilds = get(move |headers: HeaderMap| async move {
+        if bot(&headers) {
+            return (
+                StatusCode::OK,
+                Json(json!([{ "id": "700", "name": "Comunidade Discord" }])),
+            );
+        }
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if !auth.starts_with("Bearer login:") && !auth.starts_with("Bearer account:") {
+            return forbidden();
+        }
+        (
+            StatusCode::OK,
+            Json(json!([
+                { "id": "700", "name": "Comunidade Discord", "icon": "abc", "owner": true, "permissions": "0" },
+                { "id": "800", "name": "Outro Servidor", "icon": null, "owner": false, "permissions": (1u64 << 5).to_string() },
+                { "id": "900", "name": "Só Membro", "icon": null, "owner": false, "permissions": (1u64 << 10).to_string() },
+            ])),
+        )
     });
     let app_info = get(move |headers: HeaderMap| async move {
         if !bot(&headers) {
@@ -1048,14 +1105,16 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             if !bot(&headers) {
                 return forbidden();
             }
+            // Guild 800 has the same channels, with ids prefixed by 8.
+            let p = if id == "800" { "8" } else { "" };
             (
                 StatusCode::OK,
                 Json(json!([
-                    { "id": "502", "type": 2, "name": "Voz", "position": 0, "guild_id": id },
-                    { "id": "501", "type": 0, "name": "secreto", "parent_id": "400", "position": 1, "guild_id": id,
+                    { "id": format!("{p}502"), "type": 2, "name": "Voz", "position": 0, "guild_id": id },
+                    { "id": format!("{p}501"), "type": 0, "name": "secreto", "parent_id": format!("{p}400"), "position": 1, "guild_id": id,
                       "permission_overwrites": [{ "id": id, "type": 0, "allow": "0", "deny": (1u64 << 10).to_string() }] },
-                    { "id": "500", "type": 0, "name": "Geral", "parent_id": "400", "position": 0, "guild_id": id, "permission_overwrites": [] },
-                    { "id": "400", "type": 4, "name": "Texto", "position": 0, "guild_id": id },
+                    { "id": format!("{p}500"), "type": 0, "name": "Geral", "parent_id": format!("{p}400"), "position": 0, "guild_id": id, "permission_overwrites": [] },
+                    { "id": format!("{p}400"), "type": 4, "name": "Texto", "position": 0, "guild_id": id },
                 ])),
             )
         },
@@ -1065,11 +1124,15 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             if !bot(&headers) {
                 return forbidden();
             }
-            let kind = if id == "502" { 2 } else { 0 };
+            let (guild, local) = match id.strip_prefix('8').filter(|rest| rest.len() == 3) {
+                Some(rest) => ("800", rest),
+                None => ("700", id.as_str()),
+            };
+            let kind = if local == "502" { 2 } else { 0 };
             (
                 StatusCode::OK,
                 Json(
-                    json!({ "id": id, "type": kind, "guild_id": "700", "name": if id == "500" { "Geral" } else { "secreto" } }),
+                    json!({ "id": id, "type": kind, "guild_id": guild, "name": if local == "500" { "Geral" } else { "secreto" } }),
                 ),
             )
         },
@@ -1142,6 +1205,7 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
             Router::new()
                 .route("/oauth2/token", token)
                 .route("/users/@me", me)
+                .route("/users/@me/guilds", my_guilds)
                 .route("/applications/@me", app_info)
                 .route("/applications/{id}/rpc", app_rpc)
                 .route("/guilds/{id}", guild)
@@ -1886,6 +1950,488 @@ async fn discord_import_and_activity() {
     .await
     .unwrap();
     for id in [owner_id, member_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM users WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+}
+
+const LOGIN_STATE: &str = "desktop-state-0123456789";
+
+/// Signs in with Discord from the desktop app: starts the flow, follows
+/// Discord's redirect with `code` and returns where the browser is sent.
+async fn discord_redirect(app: &Router, code: &str) -> reqwest::Url {
+    let (status, start) = call(
+        app,
+        "POST",
+        "/auth/discord/start",
+        None,
+        Some(json!({ "platform": "desktop", "port": 53124, "state": LOGIN_STATE })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{start}");
+    let url = reqwest::Url::parse(start["url"].as_str().unwrap()).unwrap();
+    let params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(params["scope"], "identify email guilds");
+    assert_eq!(params["redirect_uri"], CALLBACK);
+    let (status, headers, _) = raw(
+        app,
+        &format!(
+            "/api/discord/callback?code={code}&state={}",
+            params["state"]
+        ),
+        &[],
+    )
+    .await;
+    assert!(status.is_redirection(), "{status}");
+    reqwest::Url::parse(headers["location"].to_str().unwrap()).unwrap()
+}
+
+async fn discord_login(app: &Router, code: &str) -> (StatusCode, Value) {
+    let location = discord_redirect(app, code).await;
+    assert_eq!(
+        location.origin().ascii_serialization(),
+        "http://127.0.0.1:53124"
+    );
+    let params: HashMap<_, _> = location.query_pairs().into_owned().collect();
+    assert_eq!(params["state"], LOGIN_STATE);
+    let Some(ticket) = params.get("ticket") else {
+        return (StatusCode::BAD_REQUEST, json!({ "error": params["error"] }));
+    };
+    let result = call(
+        app,
+        "POST",
+        "/auth/discord",
+        None,
+        Some(json!({ "ticket": ticket })),
+    )
+    .await;
+    // A ticket signs in once.
+    assert_eq!(
+        call(
+            app,
+            "POST",
+            "/auth/discord",
+            None,
+            Some(json!({ "ticket": ticket }))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    result
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn discord_login_consent_and_guild_import() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let state = AppState::new(
+        db.clone(),
+        "https://discvoice.example".into(),
+        fake_google().await,
+    )
+    .with_discord(fake_discord(FakeDiscord::default()).await);
+    let app = router(state, vec![]);
+    let suffix = Uuid::new_v4().as_u128() % 1_000_000_000;
+    let (bia_discord, cai_discord) = (format!("31{suffix}"), format!("32{suffix}"));
+    let bia_email = format!("bia-{suffix}@example.com");
+
+    assert_eq!(
+        call(&app, "GET", "/auth/discord/config", None, None)
+            .await
+            .1,
+        json!({ "enabled": true })
+    );
+    // The desktop must say where it waits, on a non-privileged port.
+    for body in [
+        json!({ "platform": "desktop" }),
+        json!({ "platform": "desktop", "port": 80, "state": LOGIN_STATE }),
+        json!({ "platform": "desktop", "port": 53124, "state": "x" }),
+    ] {
+        assert_eq!(
+            call(&app, "POST", "/auth/discord/start", None, Some(body))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // An unverified Discord e-mail can't sign in.
+    let (status, body) =
+        discord_login(&app, &format!("login:{bia_discord}:bia:{bia_email}:false")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("e-mail"), "{body}");
+
+    // The first sign-in creates the account, linked to Discord, without its
+    // photo or activity until the user answers.
+    let code = format!("login:{bia_discord}:bia:{bia_email}:true");
+    let (status, first) = discord_login(&app, &code).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["discordConsent"], true);
+    assert_eq!(first["user"]["name"], "Bia Discord");
+    assert_eq!(first["user"]["avatar"], Value::Null);
+    let bia = first["token"].as_str().unwrap().to_owned();
+    let bia_id = first["user"]["id"].as_str().unwrap().to_owned();
+    let status = call(&app, "GET", "/discord", Some(&bia), None).await.1;
+    assert_eq!(status["account"]["username"], "bia");
+    assert_eq!(status["account"]["shareActivity"], false);
+    assert_eq!(status["account"]["consentPending"], true);
+    assert_eq!(status["account"]["canListGuilds"], true);
+
+    // Signing in again finds the same account, still waiting for the answer.
+    let (_, again) = discord_login(&app, &code).await;
+    assert_eq!(again["user"]["id"], bia_id.as_str());
+    assert_eq!(again["discordConsent"], true);
+
+    // Yes to the photo and the activity.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/discord/consent",
+            Some(&bia),
+            Some(json!({ "useAvatar": true, "shareActivity": true }))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let me = call(&app, "GET", "/me", Some(&bia), None).await.1;
+    assert_eq!(
+        me["avatar"],
+        format!("https://cdn.discordapp.com/avatars/{bia_discord}/face.png?size=128")
+    );
+    assert_eq!(me["avatarSource"], "discord");
+    let status = call(&app, "GET", "/discord", Some(&bia), None).await.1;
+    assert_eq!(
+        (
+            &status["account"]["consentPending"],
+            &status["account"]["shareActivity"],
+            &status["account"]["useAvatar"]
+        ),
+        (&json!(false), &json!(true), &json!(true))
+    );
+    assert_eq!(discord_login(&app, &code).await.1["discordConsent"], false);
+
+    // A Google sign-in with the same e-mail joins the account and keeps the
+    // Discord photo.
+    let (status, google_body) = google_desktop(
+        &app,
+        &google_code(&format!("sub-{suffix}"), &bia_email, "Bia Google", true),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{google_body}");
+    assert_eq!(google_body["user"]["id"], bia_id.as_str());
+    assert_eq!(google_body["user"]["avatarSource"], "discord");
+    // The photo setting can be turned off from the settings.
+    call(
+        &app,
+        "PATCH",
+        "/discord/account",
+        Some(&bia),
+        Some(json!({ "useAvatar": false })),
+    )
+    .await;
+    let me = call(&app, "GET", "/me", Some(&bia), None).await.1;
+    assert_eq!(
+        (&me["avatar"], &me["avatarSource"]),
+        (&Value::Null, &Value::Null)
+    );
+
+    // A Google account signs in with Discord through its verified e-mail.
+    let (google_token, google_id) = register(&app, "Cai").await;
+    let cai_email = call(&app, "GET", "/me", Some(&google_token), None).await.1["email"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, cai) =
+        discord_login(&app, &format!("login:{cai_discord}:cai:{cai_email}:true")).await;
+    assert_eq!(status, StatusCode::OK, "{cai}");
+    assert_eq!(cai["user"]["id"], google_id.as_str());
+    let cai = cai["token"].as_str().unwrap().to_owned();
+    // ...but an e-mail already tied to another Discord account is refused.
+    let (status, taken) =
+        discord_login(&app, &format!("login:33{suffix}:outra:{bia_email}:true")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        taken["error"].as_str().unwrap().contains("outra conta"),
+        "{taken}"
+    );
+
+    // Only the Discord servers the user manages are offered.
+    let guilds = call(&app, "GET", "/discord/guilds", Some(&bia), None)
+        .await
+        .1;
+    let listed: Vec<_> = guilds
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| {
+            (
+                g["id"].clone(),
+                g["botInstalled"].clone(),
+                g["importedServerId"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (json!("700"), json!(true), Value::Null),
+            (json!("800"), json!(false), Value::Null)
+        ]
+    );
+    assert_eq!(
+        guilds[0]["icon"],
+        "https://cdn.discordapp.com/icons/700/abc.png?size=128"
+    );
+    assert_eq!(
+        call(&app, "POST", "/discord/guilds/900/import", Some(&bia), None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // With the bot already there, the server comes with its channels, in
+    // Discord's order (voice outside categories first).
+    let (status, imported) =
+        call(&app, "POST", "/discord/guilds/700/import", Some(&bia), None).await;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    assert_eq!(imported["installUrl"], Value::Null);
+    assert_eq!(imported["channels"], 3);
+    let server = &imported["server"]["server"];
+    assert_eq!(server["name"], "Comunidade Discord");
+    assert_eq!(
+        server["icon"],
+        "https://cdn.discordapp.com/icons/700/abc.png?size=128"
+    );
+    let server_id = server["id"].as_str().unwrap().to_owned();
+    let channels = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/channels"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    let names: Vec<_> = channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            format!(
+                "{}:{}",
+                c["type"].as_str().unwrap(),
+                c["name"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(names, ["voice:voz", "text:geral", "text:secreto"]);
+    // The Discord server is connected: history can be imported channel by channel.
+    let view = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/discord"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(view["guilds"][0]["id"], "700");
+    assert_eq!(
+        call(&app, "POST", "/discord/guilds/700/import", Some(&bia), None)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(&app, "GET", "/discord/guilds", Some(&bia), None)
+            .await
+            .1[0]["importedServerId"],
+        server_id.as_str()
+    );
+
+    // An expired token is refreshed.
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "UPDATE discord_accounts SET token_expires_at = now() - interval '1 hour' WHERE user_id = $1",
+        [Uuid::parse_str(&bia_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        call(&app, "GET", "/discord/guilds", Some(&bia), None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+
+    // Without the bot, the server is created right away and the bot is
+    // installed in that Discord server, which then brings the channels.
+    let (status, pending) =
+        call(&app, "POST", "/discord/guilds/800/import", Some(&cai), None).await;
+    assert_eq!(status, StatusCode::CREATED, "{pending}");
+    let other_id = pending["server"]["server"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(pending["server"]["server"]["icon"], Value::Null);
+    let install = pending["installUrl"].as_str().unwrap();
+    assert!(
+        install.contains("guild_id=800") && install.contains("disable_guild_select=true"),
+        "{install}"
+    );
+    // The bot must land in that same Discord server.
+    assert!(authorize(&app, install, "install:801")
+        .await
+        .contains("outro servidor"));
+    let (_, retry) = call(&app, "POST", "/discord/guilds/800/import", Some(&cai), None).await;
+    let retry_id = retry["server"]["server"]["id"].as_str().unwrap().to_owned();
+    let page = authorize(&app, retry["installUrl"].as_str().unwrap(), "install:800").await;
+    assert!(page.contains("importado com 3 canais"), "{page}");
+    let channels = call(
+        &app,
+        "GET",
+        &format!("/servers/{retry_id}/channels"),
+        Some(&cai),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(channels.as_array().unwrap().len(), 3);
+
+    // Importing a channel's history goes into the empty channel of the same
+    // name the server import created...
+    let geral = |channels: &Value| {
+        channels
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "geral" && c["type"] == "text")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let bia_channels = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/channels"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    let bia_geral = geral(&bia_channels);
+    let view = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/discord"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(view["guilds"][0]["channels"][0]["target"], "geral");
+    let (status, history) = call(
+        &app,
+        "POST",
+        &format!("/servers/{server_id}/discord/imports"),
+        Some(&bia),
+        Some(json!({ "guildId": "700", "channelId": "500" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{history}");
+    assert_eq!(history["channelId"], bia_geral.as_str());
+    let after = call(
+        &app,
+        "GET",
+        &format!("/servers/{server_id}/channels"),
+        Some(&bia),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(after.as_array().unwrap().len(), 3);
+    let matched = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == bia_geral.as_str())
+        .unwrap();
+    assert_eq!(
+        (&matched["source"], &matched["readOnly"]),
+        (&json!("discord"), &json!(true))
+    );
+    // It is locked while the history comes in.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/channels/{bia_geral}/messages"),
+            Some(&bia),
+            Some(json!({ "clientId": Uuid::new_v4(), "content": "oi" }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // ...but not into one that already has messages: those would come first.
+    let cai_geral = geral(&channels);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/channels/{cai_geral}/messages"),
+        Some(&cai),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "Já conversamos aqui" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, history) = call(
+        &app,
+        "POST",
+        &format!("/servers/{retry_id}/discord/imports"),
+        Some(&cai),
+        Some(json!({ "guildId": "800", "channelId": "8500" })),
+    )
+    .await;
+    assert_ne!(history["channelId"], cai_geral.as_str());
+    let names: Vec<_> = call(
+        &app,
+        "GET",
+        &format!("/servers/{retry_id}/channels"),
+        Some(&cai),
+        None,
+    )
+    .await
+    .1
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|c| c["name"].as_str().unwrap().to_owned())
+    .collect();
+    assert!(names.contains(&"geral-discord".to_owned()), "{names:?}");
+
+    for id in [server_id, other_id, retry_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM servers WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+    for id in [bia_id, google_id] {
         db.execute(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "DELETE FROM users WHERE id = $1",

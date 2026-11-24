@@ -40,7 +40,7 @@ export function InvitePage({ code, user, onJoined, onDismiss, onSwitchAccount }:
     <section className="invite-card" aria-labelledby="invite-title">
       {loading ? <p role="status" className="invite-loading"><LoaderCircle size={20} className="spin" />Buscando convite…</p> : invite ? <>
         <p className="invite-from">Você recebeu um convite para entrar em</p>
-        <Avatar name={invite.server.name} size="xl" square />
+        <Avatar name={invite.server.name} src={invite.server.icon} size="xl" square />
         <h1 id="invite-title">{invite.server.name}</h1>
         <button className="button primary full large" disabled={joining} onClick={() => void accept()}>{joining && <LoaderCircle size={17} className="spin" />}{joining ? "Entrando…" : "Aceitar convite"}</button>
         {error && <p className="inline-error" role="alert">{error}</p>}
