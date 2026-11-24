@@ -8,20 +8,14 @@ on:
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/api.yml
-  pull_request:
-    paths:
-      - apps/api/**
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/api.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   postgres:
