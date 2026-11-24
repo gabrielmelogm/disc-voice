@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, ChatMessage, RealtimeEvent, User, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, ChatMessage, ChosenStatus, RealtimeEvent, User, VoiceParticipant } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
 import { useNotifications } from "./useNotifications";
 
@@ -33,11 +33,17 @@ const arrival = (who: User, where: Partial<{ serverId: string; serverName: strin
   type: "voice.member.joined", serverId: call.serverId, serverName: "Meu servidor", channelId: call.id, channelName: call.name, user: who, ...where,
 });
 
-function setup({ viewing = text.id as string | null, inCall = false, deafened = false } = {}) {
+const dm = "dm-1";
+/** A message in a channel of a server that is not on screen, named by the API. */
+const elsewhere = (author: User): RealtimeEvent => ({
+  type: "message.created", message: chat(author, "text-9"), serverId: "server-2", serverName: "Outro", channelName: "geral",
+});
+
+function setup({ viewing = text.id as string | null, inCall = false, deafened = false, status = "online" as ChosenStatus } = {}) {
   let listener: (event: RealtimeEvent) => void = () => {};
   const realtime = { onEvent: (fn: typeof listener) => { listener = fn; return () => {}; } } as unknown as Realtime;
   const voiceState = { channel: inCall ? call : null, deafened };
-  renderHook(() => useNotifications({ realtime, user: me, voiceState, viewingChannelId: viewing, channels: [text, other, call] }));
+  renderHook(() => useNotifications({ realtime, user: me, status, voiceState, viewingChannelId: viewing, channels: [text, other, call] }));
   return (event: RealtimeEvent) => act(() => listener(event));
 }
 
@@ -77,6 +83,44 @@ describe("useNotifications", () => {
     emit({ type: "message.created", message: chat(friend) });
     expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
     expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo em #geral", "Olá pessoal", "Amigo");
+  });
+
+  it("notifies direct messages in the background, titled with the sender only", () => {
+    focus(false);
+    setup()({ type: "message.created", message: chat(friend, dm) });
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo", "Olá pessoal", "Amigo");
+  });
+
+  it("stays quiet for the conversation on screen, but sounds for another one", () => {
+    setup({ viewing: dm })({ type: "message.created", message: chat(friend, dm) });
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    setup({ viewing: dm })({ type: "message.created", message: chat(friend, "dm-2") });
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+  });
+
+  it("notifies channel messages of servers not on screen, named with channel and server", () => {
+    focus(false);
+    setup()(elsewhere(friend));
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(lib.showDesktopNotification).toHaveBeenCalledWith("Amigo em #geral (Outro)", "Olá pessoal", "Amigo");
+  });
+
+  it("silences messages and room arrivals in do not disturb, but keeps the cue for our call", () => {
+    focus(false);
+    setup({ status: "dnd" })({ type: "message.created", message: chat(friend, dm) });
+    setup({ status: "dnd" })(elsewhere(friend));
+    setup({ status: "dnd" })(arrival(friend));
+    expect(lib.playNotificationSound).not.toHaveBeenCalled();
+    expect(lib.showDesktopNotification).not.toHaveBeenCalled();
+    setup({ status: "dnd", inCall: true })(arrival(friend));
+    expect(lib.playVoiceConnectSound).toHaveBeenCalledTimes(1);
+  });
+
+  it("still notifies while idle", () => {
+    setup({ status: "idle", viewing: null })({ type: "message.created", message: chat(friend) });
+    expect(lib.playNotificationSound).toHaveBeenCalledTimes(1);
   });
 
   it("respects the message sound preference", () => {

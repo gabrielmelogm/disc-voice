@@ -270,15 +270,48 @@ pub(crate) async fn send(
     };
     tx.commit().await?;
     let view = MessageView::new(row, user);
-    dms::publish(
-        &state,
-        &channel,
-        serde_json::json!({
-            "type": "message.created", "message": view
-        }),
-    )
-    .await?;
+    match channel.server_id {
+        // Every online member hears about it, whatever server they have open,
+        // with the names a notification needs.
+        Some(server) => publish_to_members(&state, server, &channel, &view).await?,
+        None => {
+            dms::publish(
+                &state,
+                &channel,
+                serde_json::json!({ "type": "message.created", "message": view }),
+            )
+            .await?
+        }
+    }
     Ok(Json(view))
+}
+
+async fn publish_to_members(
+    state: &AppState,
+    server: Uuid,
+    channel: &channel::Model,
+    view: &MessageView,
+) -> ApiResult<()> {
+    let server_name = server::Entity::find_by_id(server)
+        .one(&state.db)
+        .await?
+        .map(|s| s.name)
+        .unwrap_or_default();
+    let members: std::collections::HashSet<Uuid> = member::Entity::find()
+        .filter(member::Column::ServerId.eq(server))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|m| m.user_id)
+        .collect();
+    state.realtime.publish_users(
+        &members,
+        serde_json::json!({
+            "type": "message.created", "message": view,
+            "serverId": server, "serverName": server_name, "channelName": channel.name
+        }),
+    );
+    Ok(())
 }
 
 /// Serializes commits within a channel: history cursors must never skip a
