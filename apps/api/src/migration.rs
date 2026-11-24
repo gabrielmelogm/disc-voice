@@ -16,7 +16,41 @@ impl MigratorTrait for Migrator {
             Box::new(OneTimeImportAndFiles),
             Box::new(DmsAndReadState),
             Box::new(Friendships),
+            Box::new(MemberRoles),
         ]
+    }
+}
+
+struct MemberRoles;
+
+impl MigrationName for MemberRoles {
+    fn name(&self) -> &str {
+        "m20261127_000011_member_roles"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for MemberRoles {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- The owner is servers.owner_id; other members are moderators or members.
+            ALTER TABLE members ADD COLUMN role varchar(16) NOT NULL DEFAULT 'member'
+                CHECK (role IN ('member', 'moderator'));
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE members DROP COLUMN role;")
+            .await?;
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@ import { Check, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "luc
 import type { Friendship, User } from "@disc-voice/shared";
 import type { FriendsState } from "../hooks/useFriends";
 import { api, message } from "../lib/api";
+import { isOnline, STATUS_LABELS } from "../lib/presence";
 import { Avatar, Badge } from "./ui";
 
 type Tab = "online" | "all" | "pending" | "add";
@@ -35,7 +36,7 @@ export function FriendsPage({ friends, selfId, onMessage }: {
     finally { setBusy(null); }
   }
 
-  const online = friends.friends.filter(f => f.status === "online");
+  const online = friends.friends.filter(f => isOnline(f.status));
   const shown = tab === "online" ? online : friends.friends;
   const pending = friends.incoming.length + friends.outgoing.length;
   const tabs: { id: Tab; label: string; count?: number }[] = [
@@ -72,7 +73,7 @@ export function FriendsPage({ friends, selfId, onMessage }: {
         <ul className="friend-list" aria-label="Amigos">
           {shown.map(({ user, status }) => <li key={user.id} className="friend-row">
             <Avatar name={user.name} src={user.avatar} status={status} />
-            <div><strong>{user.name}</strong><small>{status === "online" ? "Online" : "Offline"}</small></div>
+            <div><strong>{user.name}</strong><small>{STATUS_LABELS[status]}</small></div>
             {confirming === user.id ? <span className="friend-actions">
               <span className="muted">Remover {user.name}?</span>
               <button className="button danger small" disabled={!!busy} onClick={() => void run(user.id, () => friends.remove(user.id))}>Remover</button>

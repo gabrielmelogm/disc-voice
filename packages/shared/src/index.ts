@@ -286,7 +286,22 @@ export interface MessagePreview {
   createdAt: string;
 }
 
-export type PresenceStatus = "online" | "offline";
+/** `offline` without the app open; otherwise the status the person chose. */
+export type PresenceStatus = "online" | "idle" | "dnd" | "offline";
+
+/** A status the user can choose for themselves. */
+export type ChosenStatus = Exclude<PresenceStatus, "offline">;
+
+/** `owner` is the server's creator; the owner names moderators. */
+export type MemberRole = "owner" | "moderator" | "member";
+
+/** Someone in a server, with their role and presence. */
+export interface ServerMember {
+  user: User;
+  role: MemberRole;
+  status: PresenceStatus;
+  joinedAt: string;
+}
 
 export interface Friend {
   user: User;
@@ -318,7 +333,7 @@ export interface UserProfile {
   /** Servers both people are in. */
   mutualServers: Server[];
   friendship: Friendship;
-  /** Shared only between friends. */
+  /** Shared between friends and people in a mutual server. */
   status: PresenceStatus | null;
 }
 
@@ -382,8 +397,12 @@ export type RealtimeEvent =
   | { type: "dm.created"; conversation: DirectConversation }
   /** A friend request was sent, answered or removed: reload the friends list. */
   | { type: "friends.changed" }
-  /** A friend opened or closed the app. */
-  | { type: "presence.updated"; userId: string; status: PresenceStatus };
+  /** A friend or someone in a shared server opened or closed the app, or changed status. */
+  | { type: "presence.updated"; userId: string; status: PresenceStatus }
+  /** Someone joined a server the user has open. */
+  | { type: "member.joined"; serverId: string; member: ServerMember }
+  /** A member's role changed in a server the user has open. */
+  | { type: "member.updated"; serverId: string; member: ServerMember };
 
 export type RealtimeCommand =
   | { type: "ping" }
@@ -392,4 +411,5 @@ export type RealtimeCommand =
   | { type: "voice.leave" }
   | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean }
   | { type: "voice.signal"; peerId: string; data: SignalPayload }
-  | { type: "typing.start"; channelId: string };
+  | { type: "typing.start"; channelId: string }
+  | { type: "presence.set"; status: ChosenStatus };

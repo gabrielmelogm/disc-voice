@@ -2,6 +2,7 @@
 //! (online or not) that friends share with each other.
 
 use super::*;
+use crate::presence::Status;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use std::collections::HashSet;
 
@@ -9,8 +10,9 @@ use std::collections::HashSet;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FriendView {
     user: UserView,
-    /// `online` while the friend has the app open somewhere, else `offline`.
-    status: &'static str,
+    /// `offline` unless the friend has the app open somewhere; then the
+    /// status they chose (`online`, `idle` or `dnd`).
+    status: Status,
     /// When the friendship started.
     since: chrono::DateTime<Utc>,
 }
@@ -95,21 +97,6 @@ pub(crate) async fn friend_ids(db: &impl ConnectionTrait, user: Uuid) -> ApiResu
         .collect()
 }
 
-/// Tells a user's friends that they came online or went offline.
-pub(crate) async fn announce_presence(state: &AppState, user: Uuid, online: bool) -> ApiResult<()> {
-    let friends = friend_ids(&state.db, user).await?;
-    if !friends.is_empty() {
-        state.realtime.publish_users(
-            &friends,
-            serde_json::json!({
-                "type": "presence.updated", "userId": user,
-                "status": if online { "online" } else { "offline" }
-            }),
-        );
-    }
-    Ok(())
-}
-
 /// Both people reload their friends list.
 fn changed(state: &AppState, a: Uuid, b: Uuid) {
     state.realtime.publish_users(
@@ -157,7 +144,9 @@ pub(crate) async fn list(
             .map(|u| (u.id, UserView::from(u)))
             .collect()
     };
-    let online = state.realtime.online(&found.iter().map(|f| f.0).collect());
+    let presences = state
+        .realtime
+        .presences(&found.iter().map(|f| f.0).collect());
     let mut view = FriendsView {
         friends: Vec::new(),
         incoming: Vec::new(),
@@ -169,11 +158,7 @@ pub(crate) async fn list(
         };
         if status == "accepted" {
             view.friends.push(FriendView {
-                status: if online.contains(&other) {
-                    "online"
-                } else {
-                    "offline"
-                },
+                status: presences.get(&other).copied().unwrap_or(Status::Offline),
                 user: person,
                 since: accepted_at.unwrap_or(created_at),
             });
@@ -293,15 +278,11 @@ async fn accept_pending(
 /// New friends learn whether the other is online right away.
 fn announce_both(state: &AppState, a: Uuid, b: Uuid) {
     for (user, friend) in [(a, b), (b, a)] {
-        let online = state
-            .realtime
-            .online(&HashSet::from([user]))
-            .contains(&user);
         state.realtime.publish_users(
             &HashSet::from([friend]),
             serde_json::json!({
                 "type": "presence.updated", "userId": user,
-                "status": if online { "online" } else { "offline" }
+                "status": state.realtime.presence(user)
             }),
         );
     }
@@ -360,8 +341,8 @@ pub(crate) struct ProfileView {
     mutual_servers: Vec<ServerView>,
     /// `none`, `outgoing`, `incoming` or `friends`, from the viewer's side.
     friendship: &'static str,
-    /// Presence, shared only between friends; null otherwise.
-    status: Option<&'static str>,
+    /// Presence, shared with friends and people in a mutual server; null otherwise.
+    status: Option<Status>,
 }
 
 /// Someone's profile as the user sees it. Only people the user is connected
@@ -413,17 +394,10 @@ pub(crate) async fn profile(
     if !visible {
         return Err(missing());
     }
-    let status = (friendship == Relation::Friends || other == user.id).then(|| {
-        if state
-            .realtime
-            .online(&HashSet::from([other]))
-            .contains(&other)
-        {
-            "online"
-        } else {
-            "offline"
-        }
-    });
+    // Members of a server see each other's presence in its people list.
+    let status =
+        (friendship == Relation::Friends || other == user.id || !mutual_servers.is_empty())
+            .then(|| state.realtime.presence(other));
     Ok(Json(ProfileView {
         member_since: person.created_at,
         user: person.into(),

@@ -6,12 +6,15 @@ import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tr
 import { useActivities } from "../hooks/useActivities";
 import { useDirectMessages } from "../hooks/useDirectMessages";
 import { useFriends } from "../hooks/useFriends";
+import { useMembers } from "../hooks/useMembers";
+import { usePresenceStatus } from "../hooks/usePresenceStatus";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
 import { useUnread } from "../hooks/useUnread";
 import { useVoice } from "../hooks/useVoice";
 import { AppBar } from "./AppBar";
-import { ChannelDetails, ChannelHeader } from "./ChannelDetails";
+import { ChannelDetails, ChannelHeader, roomPresence, voiceOccupants } from "./ChannelDetails";
+import { MembersDialog } from "./Members";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
 import { FriendsPage, friendshipWith } from "./Friends";
@@ -58,7 +61,11 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [profiles, setProfiles] = useState<Record<string, User>>({});
   const dms = useDirectMessages(realtime.client, realtime.revision);
   const friends = useFriends(realtime.client, realtime.revision);
+  const members = useMembers(realtime.client, realtime.revision, selected);
+  const myStatus = usePresenceStatus(realtime.client, realtime.revision);
+  const [membersOpen, setMembersOpen] = useState(false);
   const presence = Object.fromEntries(friends.friends.map(f => [f.user.id, f.status]));
+  const roles = Object.fromEntries(members.members.map(m => [m.user.id, m.role]));
   // The open conversation; none shows the friends page.
   const [dmId, setDmId] = useState<string | null>(null);
   const [newDm, setNewDm] = useState(false);
@@ -138,7 +145,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     window.addEventListener("keydown", open);
     return () => window.removeEventListener("keydown", open);
   }, []);
-  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); setDiscordOpen(false); }, [selected]);
+  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); setDiscordOpen(false); setMembersOpen(false); }, [selected]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -289,8 +296,8 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         : <FriendsPage friends={friends} selfId={user.id} onMessage={messagePerson} />) : loading ? <div className="empty-state" role="status"><RefreshCw size={30} className="spin" /><h1>Carregando seus servidores…</h1></div> : server ? (
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
-        : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
-          focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
+        : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} memberCount={members.members.length} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
+          roles={roles} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
@@ -308,7 +315,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
 
       <div className="bar-dock">
         <CallStatus voice={voice} state={voiceState} serverName={servers.find(s => s.id === voiceState.channel?.serverId)?.name} onOpen={goToVoice} />
-        <AppBar user={user} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
+        <AppBar user={user} status={myStatus.status} chosenStatus={myStatus.chosen} onStatus={myStatus.choose} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
           canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
@@ -316,7 +323,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       </div>
     </div>
 
-    {showDetails && <ChannelDetails user={user} voiceChannels={voiceChannels} participants={participants} voiceState={voiceState} onJoin={joinVoice} />}
+    {showDetails && <ChannelDetails user={user} selfStatus={myStatus.status} members={members} voiceChannels={voiceChannels} participants={participants}
+      voiceState={voiceState} onJoin={joinVoice} onShowMembers={() => setMembersOpen(true)} />}
+    {membersOpen && server && <MembersDialog server={server} self={user} selfStatus={myStatus.status} members={members.members}
+      rooms={roomPresence(voiceChannels, voiceOccupants(participants, voiceState))} onClose={() => setMembersOpen(false)} />}
     {showProfile && conversation && <DirectProfilePanel key={conversation.user.id} user={visibleProfiles[conversation.user.id] || conversation.user}
       friendship={friendshipWith(friends, conversation.user.id)} status={presence[conversation.user.id]}
       onAddFriend={() => friendshipWith(friends, conversation.user.id) === "incoming" ? friends.accept(conversation.user.id) : friends.add(conversation.user.id)} />}

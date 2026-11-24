@@ -1,6 +1,6 @@
 import type {
   Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordImport, DiscordServer, DiscordStatus, GoogleConfig, GoogleLogin, Invite,
-  Friends, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, User, UserProfile,
+  Friends, MemberRole, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
@@ -109,6 +109,10 @@ export const api = {
   invite: (serverId: string) => request<Invite>(`/servers/${serverId}/invite`),
   previewInvite: (code: string) => request<Invite>(`/invites/${encodeURIComponent(code)}`),
   join: (code: string) => request<Server>(`/invites/${encodeURIComponent(code)}/join`, { method: "POST" }),
+  members: (serverId: string, signal?: AbortSignal) => request<ServerMember[]>(`/servers/${serverId}/members`, { signal }),
+  /** Owner only: makes someone a moderator, or a member again. */
+  setRole: (serverId: string, userId: string, role: Exclude<MemberRole, "owner">) =>
+    request<ServerMember>(`/servers/${serverId}/members/${userId}`, { method: "PATCH", body: { role } }),
   channels: (serverId: string, signal?: AbortSignal) => request<Channel[]>(`/servers/${serverId}/channels`, { signal }),
   createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
   messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>

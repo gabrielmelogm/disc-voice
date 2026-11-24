@@ -1,20 +1,15 @@
-import { Headphones, MoreHorizontal, MessageSquareText, Search, Users } from "lucide-react";
-import type { Channel, User, VoiceParticipant } from "@disc-voice/shared";
+import { Headphones, MoreHorizontal, MessageSquareText } from "lucide-react";
+import type { Channel, ChosenStatus, ServerMember, User, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
-import { activityLabel } from "../lib/activity";
-import { ProfileButton, useActivity } from "./ProfileCard";
+import { peopleCount } from "../lib/presence";
+import { PeoplePanel, type RoomPresence } from "./Members";
 import { Avatar, LiveTag, SoonTag } from "./ui";
 
-/** The person's activity ("Jogando Minecraft") when they share one. */
-function PersonStatus({ userId, fallback }: { userId: string; fallback: string }) {
-  const activity = useActivity(userId);
-  return <small title={activity ? activityLabel(activity) : undefined}>{activity ? activityLabel(activity) : fallback}</small>;
-}
-
-export function ChannelHeader({ channel }: { channel: Channel }) {
+export function ChannelHeader({ channel, memberCount }: { channel: Channel; memberCount?: number }) {
+  const kind = channel.readOnly ? "Importando do Discord…" : channel.source === "discord" ? "Canal de texto · importado do Discord" : "Canal de texto";
   return <header className="channel-header">
     <span className="channel-icon"><MessageSquareText size={20} /></span>
-    <div><h1>{channel.name}</h1><p>{channel.readOnly ? "Importando do Discord…" : channel.source === "discord" ? "Canal de texto · importado do Discord" : "Canal de texto"}</p></div>
+    <div><h1>{channel.name}</h1><p>{kind}{!!memberCount && ` · ${peopleCount(memberCount)}`}</p></div>
     {/* Channel options are designed but not implemented yet. */}
     <button className="icon-button" disabled aria-label="Opções do canal (em breve)" title="Opções do canal em breve"><MoreHorizontal size={20} /></button>
     <nav className="channel-tabs" aria-label="Seções da conversa">
@@ -26,16 +21,36 @@ export function ChannelHeader({ channel }: { channel: Channel }) {
   </header>;
 }
 
+/** The people in each voice room, with ours from the call itself (it is newer). */
+export function voiceOccupants(participants: Record<string, VoiceParticipant[]>, voiceState: VoiceState) {
+  const connectedId = voiceState.channel && voiceState.status !== "error" ? voiceState.channel.id : null;
+  return (channel: Channel) => connectedId === channel.id ? voiceState.participants : participants[channel.id] || [];
+}
+
+/** Which voice room each person is in, and whether they share their screen. */
+export function roomPresence(voiceChannels: Channel[], occupants: (channel: Channel) => VoiceParticipant[]): RoomPresence {
+  const rooms: RoomPresence = {};
+  for (const channel of voiceChannels) {
+    for (const p of occupants(channel)) {
+      rooms[p.user.id] = { channel, screen: p.screen || !!rooms[p.user.id]?.screen };
+    }
+  }
+  return rooms;
+}
+
 /** Right-hand panel of a text channel. */
-export function ChannelDetails({ user, voiceChannels, participants, voiceState, onJoin }: {
+export function ChannelDetails({ user, selfStatus, members, voiceChannels, participants, voiceState, onJoin, onShowMembers }: {
   user: User;
+  selfStatus: ChosenStatus;
+  members: { members: ServerMember[]; loading: boolean; error: string; retry: () => void };
   voiceChannels: Channel[];
   participants: Record<string, VoiceParticipant[]>;
   voiceState: VoiceState;
   onJoin: (channel: Channel) => void;
+  onShowMembers: () => void;
 }) {
   const connectedId = voiceState.channel && voiceState.status !== "error" ? voiceState.channel.id : null;
-  const occupants = (channel: Channel) => connectedId === channel.id ? voiceState.participants : participants[channel.id] || [];
+  const occupants = voiceOccupants(participants, voiceState);
   const live = voiceChannels.find(channel => occupants(channel).length > 0);
   const people = live ? occupants(live) : [];
   const sharer = people.find(p => p.screen);
@@ -55,13 +70,7 @@ export function ChannelDetails({ user, voiceChannels, participants, voiceState, 
       <p className="muted">Em breve você poderá descrever o assunto do canal e fixar a pauta aqui.</p>
     </section>
 
-    <section className="detail-card">
-      <div className="detail-heading"><h2 className="eyebrow">Pessoas</h2><button className="icon-button small" disabled aria-label="Buscar pessoas (em breve)"><Search size={16} /></button></div>
-      <ul className="people-list">
-        <li><Avatar name={user.name} src={user.avatar} status="online" /><div><strong><ProfileButton user={user} /></strong><PersonStatus userId={user.id} fallback={connectedId && voiceState.channel ? `Em ${voiceState.channel.name}` : "Você"} /></div></li>
-        {people.filter(p => p.user.id !== user.id).map(p => <li key={p.peerId}><Avatar name={p.user.name} src={p.user.avatar} status="online" /><div><strong><ProfileButton user={p.user} /></strong><PersonStatus userId={p.user.id} fallback={p.screen ? "Compartilhando a tela" : `Em ${live!.name}`} /></div></li>)}
-      </ul>
-      <p className="detail-footnote"><Users size={14} />Lista de membros e presença em breve</p>
-    </section>
+    <PeoplePanel self={user} selfStatus={selfStatus} members={members.members} loading={members.loading} error={members.error}
+      rooms={roomPresence(voiceChannels, occupants)} onRetry={members.retry} onShowAll={onShowMembers} />
   </aside>;
 }

@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import type { Channel, ChatMessage, User } from "@disc-voice/shared";
+import type { Channel, ChatMessage, MemberRole, User } from "@disc-voice/shared";
 import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
 import { Attachments, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
+import { RoleBadge } from "./Members";
 import { ProfileButton } from "./ProfileCard";
 import { Avatar } from "./ui";
 
@@ -28,10 +29,11 @@ function focused() {
  * `onRead`: called with the newest message while the user can see it (window
  * focused and the list scrolled to the bottom).
  * `peer`: the other person, when the channel is a direct conversation.
+ * `roles`: server roles by user id, shown as a badge next to the author.
  */
-export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer }: {
+export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles }: {
   channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string;
-  onRead?: (messageId: string) => void; peer?: User;
+  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -223,7 +225,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
           <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
             {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} /></ProfileButton>}
             <div className="message-body">
-              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong>{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
+              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><RoleBadge role={roles?.[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
               {item.content ? <MessageText text={item.content} /> : !item.attachments?.length && <p className="muted"><em>Mensagem sem texto</em></p>}
               {item.content && imageLinks(item.content).map(url => <ImageThumb key={url} url={url} name={url.split("/").pop() || "imagem"} onView={setViewing} />)}
               {!!item.attachments?.length && <Attachments files={item.attachments} onView={setViewing} />}
