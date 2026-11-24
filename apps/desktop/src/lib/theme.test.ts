@@ -26,6 +26,18 @@ describe("custom themes", () => {
     expect(resolved["danger"]).toBe(BASE_THEMES.dark.danger);
   });
 
+  it("builds a template with every color that imports as is", async () => {
+    const { parseTheme, themeTemplate, THEME_TOKENS, BASE_THEMES } = await load();
+    for (const base of ["light", "dark"] as const) {
+      const template = themeTemplate(base);
+      expect(Object.keys(template.colors)).toEqual(THEME_TOKENS);
+      expect(template.colors).toEqual(BASE_THEMES[base]);
+      const theme = parseTheme(JSON.stringify(template));
+      expect(theme).toMatchObject({ base, adjusted: [] });
+      expect(Object.keys(theme.colors)).toHaveLength(THEME_TOKENS.length);
+    }
+  });
+
   it("rejects invalid files with a clear message", async () => {
     const { parseTheme } = await load();
     const valid = { name: "Tema", base: "light", colors: {} };

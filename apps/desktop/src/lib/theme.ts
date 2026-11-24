@@ -67,6 +67,17 @@ export const THEME_EXAMPLE = {
   },
 };
 
+/** A theme file with every color token, ready to be edited. */
+export function themeTemplate(base: ThemeBase = "dark") {
+  const colors = BASE_THEMES[base];
+  return {
+    name: "Meu tema",
+    author: "Seu nome",
+    base,
+    colors: Object.fromEntries(THEME_TOKENS.map(token => [token, colors[token]])) as ThemeColors,
+  };
+}
+
 // ---------- Contrast (WCAG 2.x) ----------
 
 function rgb(hex: string): [number, number, number] {
