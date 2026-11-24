@@ -340,9 +340,7 @@ fn asset_url(app: Option<&str>, key: &str) -> Option<String> {
         };
     }
     let (app, key) = (app?, snowflake(key)?);
-    Some(format!(
-        "{CDN_URL}/app-assets/{app}/{key}.png?size=160"
-    ))
+    Some(format!("{CDN_URL}/app-assets/{app}/{key}.png?size=160"))
 }
 
 #[cfg(test)]

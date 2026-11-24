@@ -87,11 +87,7 @@ fn snowflake(value: &str) -> bool {
 
 /// Discord accepts 2 to 128 characters in each text field.
 fn field(text: &str) -> Option<String> {
-    let text: String = text
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(128)
-        .collect();
+    let text: String = text.chars().filter(|c| !c.is_control()).take(128).collect();
     let text = text.trim();
     (text.chars().count() >= 2).then(|| text.to_owned())
 }
@@ -156,7 +152,10 @@ impl Connection {
         let answer = read_answer(&mut self.pipe)?;
         if answer["evt"] == "ERROR" {
             // Discord refused this activity; the connection still works.
-            eprintln!("O Discord recusou a Rich Presence: {}", answer["data"]["message"]);
+            eprintln!(
+                "O Discord recusou a Rich Presence: {}",
+                answer["data"]["message"]
+            );
         }
         Ok(())
     }
@@ -226,7 +225,10 @@ fn read_frame(pipe: &mut impl Read) -> io::Result<(u32, Value)> {
     let op = u32::from_le_bytes(header[..4].try_into().unwrap());
     let len = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
     if len > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "quadro grande demais"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "quadro grande demais",
+        ));
     }
     let mut body = vec![0u8; len];
     pipe.read_exact(&mut body)?;
@@ -243,7 +245,10 @@ fn read_answer<P: Read + Write + ?Sized>(pipe: &mut Box<P>) -> io::Result<Value>
             (2, payload) => {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionAborted,
-                    payload["message"].as_str().unwrap_or("fechado pelo Discord").to_owned(),
+                    payload["message"]
+                        .as_str()
+                        .unwrap_or("fechado pelo Discord")
+                        .to_owned(),
                 ))
             }
             // Ping → pong.
@@ -282,7 +287,10 @@ fn worker(receiver: mpsc::Receiver<Option<Desired>>) {
         if fresh {
             continue;
         }
-        if connection.as_ref().is_some_and(|c| c.client_id != want.client_id) {
+        if connection
+            .as_ref()
+            .is_some_and(|c| c.client_id != want.client_id)
+        {
             connection = None;
         }
         if connection.is_none() {
@@ -363,14 +371,23 @@ mod tests {
         let frame = encode(1, &json!({ "a": 1 }));
         assert_eq!(&frame[..4], &1u32.to_le_bytes());
         assert_eq!(&frame[4..8], &7u32.to_le_bytes());
-        assert_eq!(read_frame(&mut frame.as_slice()).unwrap(), (1, json!({ "a": 1 })));
+        assert_eq!(
+            read_frame(&mut frame.as_slice()).unwrap(),
+            (1, json!({ "a": 1 }))
+        );
 
         let mut input = encode(3, &json!({ "p": 1 }));
         input.extend(encode(1, &json!({ "evt": "READY" })));
-        let mut pipe = Box::new(Fake { input: input.into(), output: Vec::new() });
+        let mut pipe = Box::new(Fake {
+            input: input.into(),
+            output: Vec::new(),
+        });
         assert_eq!(read_answer(&mut pipe).unwrap()["evt"], "READY");
         // The ping was answered with a pong carrying the same payload.
-        assert_eq!(read_frame(&mut pipe.output.as_slice()).unwrap(), (4, json!({ "p": 1 })));
+        assert_eq!(
+            read_frame(&mut pipe.output.as_slice()).unwrap(),
+            (4, json!({ "p": 1 }))
+        );
 
         let mut closed = Box::new(Fake {
             input: encode(2, &json!({ "message": "Invalid Client ID" })).into(),
