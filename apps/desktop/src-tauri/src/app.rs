@@ -1,6 +1,6 @@
 #[cfg(windows)]
 use crate::tray;
-use crate::{call, camera, notify, screen};
+use crate::{call, camera, discord_rpc, notify, screen};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
 
@@ -85,6 +85,7 @@ pub fn run() {
             screen::manage(app).map_err(std::io::Error::other)?;
             call::manage(app).map_err(std::io::Error::other)?;
             notify::manage(app);
+            discord_rpc::manage(app);
             #[cfg(windows)]
             tray::manage(app)?;
             #[cfg(target_os = "linux")]
@@ -105,6 +106,7 @@ pub fn run() {
                 camera::shutdown(window);
                 screen::shutdown(window);
                 call::shutdown(window);
+                discord_rpc::shutdown(window);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -137,6 +139,7 @@ pub fn run() {
             call::native::call_camera_stop,
             call::native::call_video_frame,
             notify::show_notification,
+            discord_rpc::discord_presence,
             tray_supported,
             save_theme_template,
             #[cfg(windows)]

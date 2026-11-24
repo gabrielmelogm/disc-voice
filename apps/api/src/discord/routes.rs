@@ -75,6 +75,8 @@ pub(crate) struct StatusView {
     /// The bot is receiving Discord presences right now.
     presence: bool,
     account: Option<AccountView>,
+    /// Discord application the desktop app shows its Rich Presence with.
+    client_id: Option<String>,
 }
 
 pub(crate) async fn status(
@@ -86,6 +88,7 @@ pub(crate) async fn status(
             enabled: false,
             presence: false,
             account: None,
+            client_id: None,
         }));
     };
     let account = discord_account::Entity::find_by_id(user.id)
@@ -104,6 +107,7 @@ pub(crate) async fn status(
         enabled: true,
         presence,
         account,
+        client_id: Some(discord.client_id().to_owned()),
     }))
 }
 

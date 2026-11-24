@@ -1133,6 +1133,9 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
         },
     );
     let attachment = get(|| async { ([("content-type", "image/png")], PICTURE) });
+    let app_rpc = get(|Path(id): Path<String>| async move {
+        Json(json!({ "id": id, "name": "Minecraft", "icon": "iconhash" }))
+    });
     tokio::spawn(async move {
         axum::serve(
             listener,
@@ -1140,6 +1143,7 @@ async fn fake_discord(fake: FakeDiscord) -> disc_api::discord::DiscordConfig {
                 .route("/oauth2/token", token)
                 .route("/users/@me", me)
                 .route("/applications/@me", app_info)
+                .route("/applications/{id}/rpc", app_rpc)
                 .route("/guilds/{id}", guild)
                 .route("/guilds/{id}/members/{member}", member)
                 .route("/guilds/{id}/channels", channels)
@@ -1708,6 +1712,7 @@ async fn discord_import_and_activity() {
     assert_eq!(status["account"]["username"], "ana");
     assert_eq!(status["account"]["shareActivity"], true);
     assert_eq!(status["account"]["presenceSeen"], false);
+    assert_eq!(status["clientId"], "discord-client");
     // The same Discord account can't be linked twice.
     let taken = call(&app, "POST", "/discord/link", Some(&member), None)
         .await
@@ -1748,6 +1753,18 @@ async fn discord_import_and_activity() {
     assert_eq!(
         call(&app, "GET", "/discord", Some(&owner), None).await.1["account"]["presenceSeen"],
         true
+    );
+    // A detected game without its own images shows the app icon.
+    disc_api::discord::dispatch(
+        &state,
+        "PRESENCE_UPDATE",
+        &json!({ "user": { "id": "10" }, "status": "online",
+                 "activities": [{ "type": 0, "name": "Minecraft", "details": "Sobrevivência", "application_id": "321" }] }),
+    )
+    .await;
+    assert_eq!(
+        event(&mut member_ws, "activity.updated").await["activity"]["image"],
+        "https://cdn.discordapp.com/app-icons/321/iconhash.png?size=160"
     );
     // Unlinked Discord users never show up.
     disc_api::discord::dispatch(

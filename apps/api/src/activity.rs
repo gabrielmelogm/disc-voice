@@ -15,6 +15,10 @@ pub(crate) struct Activity {
     pub details: Option<String>,
     pub state: Option<String>,
     pub started_at: Option<chrono::DateTime<Utc>>,
+    /// Thumbnail URL (album cover, game art or app icon).
+    pub image: Option<String>,
+    /// Tooltip of the thumbnail, e.g. the album name.
+    pub image_text: Option<String>,
     /// Where it came from, e.g. `discord`.
     pub source: &'static str,
 }

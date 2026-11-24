@@ -5,7 +5,7 @@
 //!
 //! Imports read history over REST once, so the gateway never subscribes to
 //! messages (no GUILD_MESSAGES or MESSAGE_CONTENT intent).
-use super::{forget_presences, presence, short_text, Discord};
+use super::{forget_presences, presence, short_text, snowflake, Discord, CDN_URL};
 use crate::{activity::Activity, entities::discord_import, AppState};
 use futures_util::{SinkExt, StreamExt};
 use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter};
@@ -204,13 +204,15 @@ pub async fn dispatch(state: &AppState, event: &str, data: &Value) {
         "GUILD_CREATE" => {
             for item in data["presences"].as_array().into_iter().flatten() {
                 if let Some(id) = item["user"]["id"].as_str() {
-                    presence(state, &discord, id, activity(item)).await;
+                    let activity = resolve(&discord, id, item).await;
+                    presence(state, &discord, id, activity).await;
                 }
             }
         }
         "PRESENCE_UPDATE" => {
             if let Some(id) = data["user"]["id"].as_str() {
-                presence(state, &discord, id, activity(data)).await;
+                let activity = resolve(&discord, id, data).await;
+                presence(state, &discord, id, activity).await;
             }
         }
         // The bot left or was removed (not a temporary outage).
@@ -244,9 +246,28 @@ pub async fn dispatch(state: &AppState, event: &str, data: &Value) {
     }
 }
 
+/// The activity of a presence, with the app icon as the thumbnail when the
+/// activity has no image of its own (e.g. a game Discord detected). Icons are
+/// only looked up for linked accounts, whose activity is published.
+async fn resolve(discord: &Discord, discord_id: &str, presence: &Value) -> Option<Activity> {
+    let (item, mut activity) = chosen(presence, &discord.config.client_id)?;
+    if activity.image.is_none() && discord.is_linked(discord_id) {
+        if let Some(app) = item["application_id"].as_str().and_then(snowflake) {
+            activity.image = discord.app_icon(app).await;
+        }
+    }
+    Some(activity)
+}
+
 /// The activity shown for a Discord presence: the first game, stream, music
-/// or show, ignoring custom statuses. Offline users have none.
-pub(super) fn activity(presence: &Value) -> Option<Activity> {
+/// or show, ignoring custom statuses and Disc Voice's own Rich Presence
+/// (`own_app`). Offline users have none.
+#[cfg(test)]
+pub(super) fn activity(presence: &Value, own_app: &str) -> Option<Activity> {
+    chosen(presence, own_app).map(|(_, activity)| activity)
+}
+
+fn chosen<'a>(presence: &'a Value, own_app: &str) -> Option<(&'a Value, Activity)> {
     if matches!(presence["status"].as_str(), Some("offline" | "invisible")) {
         return None;
     }
@@ -259,17 +280,67 @@ pub(super) fn activity(presence: &Value) -> Option<Activity> {
             5 => "competing",
             _ => return None,
         };
-        Some(Activity {
-            kind,
-            name: short_text(&item["name"], 128)?,
-            details: short_text(&item["details"], 128),
-            state: short_text(&item["state"], 128),
-            started_at: item["timestamps"]["start"]
-                .as_i64()
-                .and_then(chrono::DateTime::from_timestamp_millis),
-            source: "discord",
-        })
+        let app = item["application_id"].as_str().and_then(snowflake);
+        if app.is_some_and(|app| app == own_app) {
+            return None;
+        }
+        let assets = &item["assets"];
+        let (image, image_text) = [("large_image", "large_text"), ("small_image", "small_text")]
+            .into_iter()
+            .find_map(|(image, text)| {
+                let url = asset_url(app, assets[image].as_str()?)?;
+                Some((Some(url), short_text(&assets[text], 128)))
+            })
+            .unwrap_or_default();
+        Some((
+            item,
+            Activity {
+                kind,
+                name: short_text(&item["name"], 128)?,
+                details: short_text(&item["details"], 128),
+                state: short_text(&item["state"], 128),
+                started_at: item["timestamps"]["start"]
+                    .as_i64()
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+                image,
+                image_text,
+                source: "discord",
+            },
+        ))
     })
+}
+
+/// URL of an activity asset, following Discord's image key formats.
+/// Unknown or unsafe keys have none.
+fn asset_url(app: Option<&str>, key: &str) -> Option<String> {
+    let safe = |value: &str, extra: &[char]| {
+        !value.is_empty()
+            && value.len() <= 512
+            && !value.contains("..")
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c) || extra.contains(&c))
+    };
+    if let Some(path) = key.strip_prefix("mp:") {
+        return safe(path, &['/', '%', '=', '&', '~', '+'])
+            .then(|| format!("https://media.discordapp.net/{path}"));
+    }
+    if let Some((provider, id)) = key.split_once(':') {
+        if !safe(id, &[]) {
+            return None;
+        }
+        return match provider {
+            "spotify" => Some(format!("https://i.scdn.co/image/{id}")),
+            "youtube" => Some(format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg")),
+            "twitch" => Some(format!(
+                "https://static-cdn.jtvnw.net/previews-ttv/live_user_{}-320x180.jpg",
+                id.to_ascii_lowercase()
+            )),
+            _ => None,
+        };
+    }
+    let (app, key) = (app?, snowflake(key)?);
+    Some(format!("{CDN_URL}/app-assets/{app}/{key}.png?size=160"))
 }
 
 #[cfg(test)]
@@ -285,7 +356,7 @@ mod tests {
                 { "type": 0, "name": "Minecraft", "details": "Sobrevivência", "timestamps": { "start": 1_700_000_000_000i64 } },
             ]
         });
-        let activity = activity(&presence).unwrap();
+        let activity = activity(&presence, OWN).unwrap();
         assert_eq!(
             (activity.kind, activity.name.as_str()),
             ("playing", "Minecraft")
@@ -293,21 +364,78 @@ mod tests {
         assert_eq!(activity.details.as_deref(), Some("Sobrevivência"));
         assert_eq!(activity.started_at.unwrap().timestamp(), 1_700_000_000);
         assert_eq!(activity.source, "discord");
+        assert_eq!(activity.image, None);
 
         let spotify = json!({ "status": "dnd", "activities": [{ "type": 2, "name": "Spotify", "details": "Música", "state": "Artista" }] });
-        assert_eq!(super::activity(&spotify).unwrap().kind, "listening");
+        assert_eq!(super::activity(&spotify, OWN).unwrap().kind, "listening");
         // Only a custom status, offline, or nothing at all: no activity.
         assert!(super::activity(
-            &json!({ "status": "online", "activities": [{ "type": 4, "name": "Custom Status" }] })
+            &json!({ "status": "online", "activities": [{ "type": 4, "name": "Custom Status" }] }),
+            OWN
         )
         .is_none());
         assert!(super::activity(
-            &json!({ "status": "offline", "activities": [{ "type": 0, "name": "Minecraft" }] })
+            &json!({ "status": "offline", "activities": [{ "type": 0, "name": "Minecraft" }] }),
+            OWN
         )
         .is_none());
         assert!(super::activity(
-            &json!({ "status": "online", "activities": [{ "type": 0, "name": "  " }] })
+            &json!({ "status": "online", "activities": [{ "type": 0, "name": "  " }] }),
+            OWN
         )
         .is_none());
+    }
+
+    const OWN: &str = "999";
+
+    #[test]
+    fn reads_activity_thumbnails() {
+        let spotify = json!({ "status": "online", "activities": [{
+            "type": 2, "name": "Spotify",
+            "assets": { "large_image": "spotify:ab67616d0000b273", "large_text": "Álbum" }
+        }] });
+        let found = activity(&spotify, OWN).unwrap();
+        assert_eq!(
+            found.image.as_deref(),
+            Some("https://i.scdn.co/image/ab67616d0000b273")
+        );
+        assert_eq!(found.image_text.as_deref(), Some("Álbum"));
+
+        // An app asset, falling back to the small image.
+        let game = json!({ "status": "online", "activities": [{
+            "type": 0, "name": "Jogo", "application_id": "123",
+            "assets": { "large_image": "bad key", "small_image": "456" }
+        }] });
+        assert_eq!(
+            activity(&game, OWN).unwrap().image.as_deref(),
+            Some("https://cdn.discordapp.com/app-assets/123/456.png?size=160")
+        );
+
+        assert_eq!(
+            asset_url(None, "mp:external/abc/https/x.png").as_deref(),
+            Some("https://media.discordapp.net/external/abc/https/x.png")
+        );
+        assert_eq!(
+            asset_url(None, "youtube:dQw4w9WgXcQ").as_deref(),
+            Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")
+        );
+        assert_eq!(asset_url(None, "mp:../x"), None);
+        assert_eq!(asset_url(None, "spotify:a?b"), None);
+        assert_eq!(asset_url(None, "other:abc"), None);
+        // An app asset needs the app.
+        assert_eq!(asset_url(None, "456"), None);
+    }
+
+    #[test]
+    fn ignores_own_rich_presence() {
+        let presence = json!({ "status": "online", "activities": [
+            { "type": 0, "name": "Disc Voice", "application_id": OWN, "details": "Em um canal de voz" },
+            { "type": 2, "name": "Spotify" },
+        ] });
+        assert_eq!(activity(&presence, OWN).unwrap().name, "Spotify");
+        let only_own = json!({ "status": "online", "activities": [
+            { "type": 0, "name": "Disc Voice", "application_id": OWN },
+        ] });
+        assert!(activity(&only_own, OWN).is_none());
     }
 }

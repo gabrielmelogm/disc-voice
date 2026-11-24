@@ -3,6 +3,7 @@ import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react
 import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
+import { useDiscordCallPresence } from "../lib/discordPresence";
 import { useActivities } from "../hooks/useActivities";
 import { useDirectMessages } from "../hooks/useDirectMessages";
 import { useFriends } from "../hooks/useFriends";
@@ -116,6 +117,13 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   }, [callName, voiceState.muted, servers, selected]);
   // Logged out: back to the plain icon, with no servers in the menu.
   useEffect(() => () => syncTray({ call: null, muted: false, recent: [] }), []);
+  // Discord shows "Disc Voice · Em um canal de voz" while the user is in a call.
+  const callChannel = inCall ? voiceState.channel : null;
+  useDiscordCallPresence(callChannel ? {
+    channelId: callChannel.id,
+    channel: callChannel.name,
+    server: servers.find(s => s.id === callChannel.serverId)?.name ?? "",
+  } : null);
 
   const trayActions = useRef({ openServer: (_id: string) => {}, toggleMute: () => {} });
   useEffect(() => {

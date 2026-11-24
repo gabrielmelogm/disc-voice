@@ -11,8 +11,12 @@ export const useActivity = (userId: string): Activity | undefined => useContext(
 
 export function ActivityLine({ activity }: { activity: Activity }) {
   const detail = activityDetail(activity);
-  return <div className="activity-line" title={activity.source === "discord" ? "Atividade sincronizada com o Discord" : undefined}>
-    <Gamepad2 size={16} aria-hidden="true" />
+  const [broken, setBroken] = useState<string | null>(null);
+  const image = activity.image && activity.image !== broken ? activity.image : null;
+  return <div className={`activity-line ${image ? "with-art" : ""}`} title={activity.source === "discord" ? "Atividade sincronizada com o Discord" : undefined}>
+    {image
+      ? <img className="activity-art" src={image} alt={activity.imageText || activity.name} title={activity.imageText || undefined} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(image)} />
+      : <Gamepad2 size={16} aria-hidden="true" />}
     <div><strong>{activityLabel(activity)}</strong>{detail && <small>{detail}</small>}</div>
   </div>;
 }

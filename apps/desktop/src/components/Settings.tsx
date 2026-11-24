@@ -9,6 +9,7 @@ import { openExternal } from "../lib/external";
 import type { Realtime } from "../lib/realtime";
 import { requestDesktopPermission, useNotificationPrefs } from "../lib/notifications";
 import { useTraySupported, useWindowPrefs } from "../lib/tray";
+import { useShowCallOnDiscord } from "../lib/discordPresence";
 import {
   addTheme, fetchTheme, MAX_THEME_BYTES, parseTheme, removeTheme, resolveTheme, THEME_EXAMPLE, THEME_TOKENS, ThemeError,
   themeById, themeTemplate, useAppearance, useThemes, type Appearance, type CustomTheme,
@@ -266,6 +267,7 @@ function Connections({ realtime }: { realtime?: Realtime }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [showCall, setShowCall] = useShowCallOnDiscord();
 
   const load = useCallback(() => api.discord()
     .then(result => { setStatus(result); setError(""); if (result.account) setWaiting(false); })
@@ -315,6 +317,11 @@ function Connections({ realtime }: { realtime?: Realtime }) {
       </div>
       <p className="field-help" role="status">{presenceHelp(status)}</p>
     </>}
+    {status?.enabled && status.clientId && <div className="switch-list">
+      <Switch id="discord-call-presence" checked={showCall} onChange={setShowCall}
+        label="Mostrar no Discord quando eu estiver em um canal de voz"
+        description="Seus amigos do Discord veem o nome do canal e do servidor. Precisa do Discord aberto neste computador." />
+    </div>}
     {error && <p className="inline-error" role="alert">{error}</p>}
   </section>;
 }
