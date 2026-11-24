@@ -20,7 +20,7 @@ pub(crate) struct Activity {
 }
 
 /// The user and everyone who shares a server with them.
-async fn audience(db: &DatabaseConnection, user: Uuid) -> ApiResult<HashSet<Uuid>> {
+pub(crate) async fn audience(db: &DatabaseConnection, user: Uuid) -> ApiResult<HashSet<Uuid>> {
     let rows = db
         .query_all(Statement::from_sql_and_values(
             DbBackend::Postgres,

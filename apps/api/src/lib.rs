@@ -5,8 +5,10 @@ mod entities;
 mod files;
 mod friends;
 pub mod google;
+mod members;
 mod messages;
 pub mod migration;
+mod presence;
 mod profile;
 mod reads;
 mod realtime;
@@ -83,6 +85,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/auth/logout", post(logout))
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}/invite", get(server_invite))
+        .route("/servers/{id}/members", get(members::list))
+        .route(
+            "/servers/{id}/members/{user}",
+            axum::routing::patch(members::update),
+        )
         .route(
             "/servers/{id}/channels",
             get(list_channels).post(create_channel),
@@ -565,6 +572,7 @@ async fn create_server(
         server_id: Set(server.id),
         user_id: Set(user.id),
         joined_at: Set(Utc::now()),
+        role: Set("member".into()),
     }
     .insert(&tx)
     .await?;
@@ -627,18 +635,33 @@ async fn join_invite(
     Path(code): Path<String>,
 ) -> ApiResult<Json<ServerView>> {
     let (_, server) = resolve_invite(&state, &code).await?;
-    member::Entity::insert(member::ActiveModel {
+    let member = member::ActiveModel {
         server_id: Set(server.id),
         user_id: Set(user.id),
         joined_at: Set(Utc::now()),
-    })
-    .on_conflict(
-        OnConflict::columns([member::Column::ServerId, member::Column::UserId])
-            .do_nothing()
-            .to_owned(),
-    )
-    .exec_without_returning(&state.db)
-    .await?;
+        role: Set("member".into()),
+    };
+    let inserted = member::Entity::insert(member)
+        .on_conflict(
+            OnConflict::columns([member::Column::ServerId, member::Column::UserId])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(&state.db)
+        .await?;
+    if inserted == 1 {
+        // Whoever has the server open sees the newcomer in its people list.
+        if let Some(member) = member::Entity::find_by_id((server.id, user.id))
+            .one(&state.db)
+            .await?
+        {
+            let view = members::view(&state, &server, &member, user.clone());
+            state.realtime.publish_server(
+                server.id,
+                serde_json::json!({ "type": "member.joined", "serverId": server.id, "member": view }),
+            );
+        }
+    }
     Ok(Json(server.into()))
 }
 

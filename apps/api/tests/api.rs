@@ -2466,6 +2466,200 @@ async fn direct_messages_read_state_and_typing() {
     }
 }
 
+/// Waits for the next presence update about this user.
+async fn presence_of(socket: &mut Socket, user: &str) -> Value {
+    loop {
+        let presence = event(socket, "presence.updated").await;
+        if presence["userId"] == user {
+            return presence["status"].clone();
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn server_members_roles_and_presence() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
+        vec![],
+    );
+    let (ana, ana_id) = register(&app, "Ana").await;
+    let (bia, bia_id) = register(&app, "Bia").await;
+    let (caio, caio_id) = register(&app, "Caio").await;
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&ana),
+        Some(json!({ "name": "Estúdio" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let server_id = created["server"]["id"].as_str().unwrap().to_owned();
+    let code = created["code"].as_str().unwrap().to_owned();
+    let members_path = format!("/servers/{server_id}/members");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut ana_ws, _) = socket(&url, &ana).await;
+    emit(
+        &mut ana_ws,
+        json!({ "type": "server.watch", "serverId": server_id }),
+    )
+    .await;
+    event(&mut ana_ws, "server.snapshot").await;
+
+    // Joining shows the newcomer to whoever has the server open.
+    let joined = call(
+        &app,
+        "POST",
+        &format!("/invites/{code}/join"),
+        Some(&bia),
+        None,
+    )
+    .await;
+    assert_eq!(joined.0, StatusCode::OK);
+    let newcomer = event(&mut ana_ws, "member.joined").await;
+    assert_eq!(newcomer["serverId"], server_id);
+    assert_eq!(newcomer["member"]["user"]["id"], bia_id);
+    assert_eq!(newcomer["member"]["role"], "member");
+    assert_eq!(newcomer["member"]["status"], "offline");
+
+    // Members only; everyone with their role and presence, by name.
+    assert_eq!(
+        call(&app, "GET", &members_path, Some(&caio), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, members) = call(&app, "GET", &members_path, Some(&bia), None).await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    let summary: Vec<_> = members
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["user"]["id"].clone(),
+                m["role"].clone(),
+                m["status"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (json!(ana_id), json!("owner"), json!("online")),
+            (json!(bia_id), json!("member"), json!("offline")),
+        ]
+    );
+    assert!(members[0]["joinedAt"].is_string());
+
+    // Server members see each other connect, change status and leave, live.
+    let (mut bia_ws, _) = socket(&url, &bia).await;
+    assert_eq!(presence_of(&mut ana_ws, &bia_id).await, "online");
+    assert_eq!(presence_of(&mut bia_ws, &bia_id).await, "online");
+    emit(
+        &mut bia_ws,
+        json!({ "type": "presence.set", "status": "dnd" }),
+    )
+    .await;
+    assert_eq!(presence_of(&mut ana_ws, &bia_id).await, "dnd");
+    // Their own other devices hear it too.
+    assert_eq!(presence_of(&mut bia_ws, &bia_id).await, "dnd");
+    let members = call(&app, "GET", &members_path, Some(&ana), None).await.1;
+    assert_eq!(members[1]["status"], "dnd");
+    emit(
+        &mut bia_ws,
+        json!({ "type": "presence.set", "status": "offline" }),
+    )
+    .await;
+    assert_eq!(
+        event(&mut bia_ws, "error").await["operation"],
+        "presence.set"
+    );
+    // A shared server shows the presence on the profile, too.
+    let profile = call(
+        &app,
+        "GET",
+        &format!("/users/{bia_id}/profile"),
+        Some(&ana),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(profile["status"], "dnd");
+
+    // Only the owner changes roles, and never their own.
+    let role = |token: &str, user: &str, role: &str| {
+        let (app, token, path) = (
+            app.clone(),
+            token.to_owned(),
+            format!("{members_path}/{user}"),
+        );
+        let body = json!({ "role": role });
+        async move { call(&app, "PATCH", &path, Some(&token), Some(body)).await }
+    };
+    assert_eq!(
+        role(&bia, &bia_id, "moderator").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        role(&ana, &ana_id, "member").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        role(&ana, &bia_id, "owner").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        role(&ana, &caio_id, "moderator").await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, promoted) = role(&ana, &bia_id, "moderator").await;
+    assert_eq!(status, StatusCode::OK, "{promoted}");
+    assert_eq!(promoted["role"], "moderator");
+    assert_eq!(promoted["status"], "dnd");
+    let updated = event(&mut ana_ws, "member.updated").await;
+    assert_eq!(
+        (&updated["member"]["user"]["id"], &updated["member"]["role"]),
+        (&json!(bia_id), &json!("moderator"))
+    );
+    let members = call(&app, "GET", &members_path, Some(&ana), None).await.1;
+    assert_eq!(members[1]["role"], "moderator");
+
+    bia_ws.close(None).await.unwrap();
+    assert_eq!(presence_of(&mut ana_ws, &bia_id).await, "offline");
+
+    live.abort();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM servers WHERE id = $1",
+        [Uuid::parse_str(&server_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    for id in [ana_id, bia_id, caio_id] {
+        db.execute(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM users WHERE id = $1",
+            [Uuid::parse_str(&id).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 #[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
 async fn friends_presence_and_profiles() {

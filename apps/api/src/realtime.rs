@@ -1,4 +1,5 @@
 use super::*;
+use crate::presence::Status;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::HeaderMap,
@@ -61,6 +62,8 @@ pub(crate) struct Hub {
     activities: Mutex<HashMap<Uuid, crate::activity::Activity>>,
     /// Last typing announcement relayed per (user, channel).
     typing: Mutex<HashMap<(Uuid, Uuid), Instant>>,
+    /// Status each user chose (idle, do not disturb); online when absent.
+    statuses: Mutex<HashMap<Uuid, Status>>,
 }
 
 impl Hub {
@@ -68,6 +71,7 @@ impl Hub {
         Self {
             clients: Mutex::new(HashMap::new()),
             activities: Mutex::new(HashMap::new()),
+            statuses: Mutex::new(HashMap::new()),
             typing: Mutex::new(HashMap::new()),
             events: broadcast::channel(512).0,
             capacity: std::env::var("VOICE_CHANNEL_CAPACITY")
@@ -147,6 +151,60 @@ impl Hub {
             .map(|c| c.user.id)
             .filter(|id| users.contains(id))
             .collect()
+    }
+
+    /// A user's presence: offline without a live connection, else the status they chose.
+    pub(crate) fn presence(&self, user: Uuid) -> Status {
+        let online = self
+            .clients
+            .lock()
+            .unwrap()
+            .values()
+            .any(|c| c.user.id == user);
+        if !online {
+            return Status::Offline;
+        }
+        self.statuses
+            .lock()
+            .unwrap()
+            .get(&user)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Presence of each of these accounts.
+    pub(crate) fn presences(
+        &self,
+        users: &std::collections::HashSet<Uuid>,
+    ) -> HashMap<Uuid, Status> {
+        let online = self.online(users);
+        let statuses = self.statuses.lock().unwrap();
+        users
+            .iter()
+            .map(|id| {
+                let status = if online.contains(id) {
+                    statuses.get(id).copied().unwrap_or_default()
+                } else {
+                    Status::Offline
+                };
+                (*id, status)
+            })
+            .collect()
+    }
+
+    /// Stores the status a user chose; returns whether it changed.
+    fn set_status(&self, user: Uuid, status: Status) -> ApiResult<bool> {
+        if status == Status::Offline {
+            return Err(ApiError::bad("Escolha online, ausente ou não perturbe."));
+        }
+        let mut statuses = self.statuses.lock().unwrap();
+        let previous = statuses.get(&user).copied().unwrap_or_default();
+        if status == Status::Online {
+            statuses.remove(&user);
+        } else {
+            statuses.insert(user, status);
+        }
+        Ok(previous != status)
     }
 
     /// Adds a connection; returns whether it is the account's first one.
@@ -436,6 +494,9 @@ enum Command {
     Signal { peer_id: Uuid, data: Value },
     #[serde(rename = "typing.start", rename_all = "camelCase")]
     Typing { channel_id: Uuid },
+    /// The user chose a status: online, idle or dnd.
+    #[serde(rename = "presence.set")]
+    Presence { status: Status },
 }
 
 /// Tells every online member of the server, whatever they have open, that someone
@@ -519,6 +580,11 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             };
             state.realtime.typing(id, channel_id, scope);
         }
+        Command::Presence { status } => {
+            if state.realtime.set_status(user.id, status)? {
+                announce(state, user.id).await;
+            }
+        }
     }
     Ok(())
 }
@@ -594,7 +660,7 @@ async fn connected(state: AppState, mut socket: WebSocket) {
         },
     );
     if first {
-        presence(&state, user.id, true).await;
+        announce(&state, user.id).await;
     }
     let (mut sender, mut receiver) = socket.split();
     let ready = Message::Text(json!({ "type": "ready", "peerId": id }).to_string().into());
@@ -658,21 +724,17 @@ async fn connected(state: AppState, mut socket: WebSocket) {
     let _ = timeout(Timeout::from_secs(1), sender.close()).await;
 }
 
-/// Presence is a courtesy: a failure to tell friends must not drop the connection.
-async fn presence(state: &AppState, user: Uuid, online: bool) {
-    if let Err(error) = crate::friends::announce_presence(state, user, online).await {
-        tracing::warn!(error = %error.1, "Não foi possível avisar a presença aos amigos");
+/// Presence is a courtesy: a failure to tell others must not drop the connection.
+async fn announce(state: &AppState, user: Uuid) {
+    if let Err(error) = crate::presence::announce(state, user).await {
+        tracing::warn!(error = %error.1, "Não foi possível avisar a presença");
     }
 }
 
 /// After a connection ends (or a logout revoked it), the account may be gone.
 async fn went_offline(state: &AppState, user: Uuid) {
-    if state
-        .realtime
-        .online(&std::collections::HashSet::from([user]))
-        .is_empty()
-    {
-        presence(state, user, false).await;
+    if state.realtime.presence(user) == Status::Offline {
+        announce(state, user).await;
     }
 }
 
@@ -819,6 +881,32 @@ mod tests {
         let dm = Uuid::new_v4();
         assert!(hub.typing(desktop, dm, Scope::Direct(other)));
         assert_eq!(recipients(&mut events), vec![watcher]);
+    }
+
+    #[test]
+    fn presence_follows_connections_and_the_chosen_status() {
+        let hub = Hub::new();
+        let user = Uuid::new_v4();
+        assert_eq!(hub.presence(user), Status::Offline);
+        let desktop = client(&hub, user);
+        assert_eq!(hub.presence(user), Status::Online);
+        assert!(hub.set_status(user, Status::Offline).is_err());
+        assert_eq!(hub.set_status(user, Status::Dnd).ok(), Some(true));
+        assert_eq!(hub.set_status(user, Status::Dnd).ok(), Some(false));
+        let laptop = client(&hub, user);
+        assert_eq!(
+            hub.presences(&std::collections::HashSet::from([user])),
+            HashMap::from([(user, Status::Dnd)])
+        );
+        hub.disconnect(desktop);
+        assert_eq!(hub.presence(user), Status::Dnd);
+        hub.disconnect(laptop);
+        assert_eq!(hub.presence(user), Status::Offline);
+        // The chosen status returns with the next connection.
+        client(&hub, user);
+        assert_eq!(hub.presence(user), Status::Dnd);
+        assert_eq!(hub.set_status(user, Status::Online).ok(), Some(true));
+        assert_eq!(hub.presence(user), Status::Online);
     }
 
     #[test]

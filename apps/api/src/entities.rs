@@ -66,6 +66,8 @@ pub mod member {
         #[sea_orm(primary_key, auto_increment = false)]
         pub user_id: Uuid,
         pub joined_at: DateTimeUtc,
+        /// `member` or `moderator`; the owner is `servers.owner_id`.
+        pub role: String,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

@@ -197,6 +197,7 @@ describe("accounts and communities", () => {
     });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Sua conta e configurações" }));
+    await user.click(screen.getByRole("menuitem", { name: "Configurações" }));
     await user.click(screen.getByRole("button", { name: "Sair da conta" }));
     expect(await screen.findByRole("button", { name: "Continuar com Google" })).toBeVisible();
     expect(sessionToken.get()).toBeNull();

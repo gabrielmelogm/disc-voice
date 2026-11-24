@@ -3,7 +3,8 @@ import {
   Check, ChevronUp, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
   MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX,
 } from "lucide-react";
-import type { Server, User } from "@disc-voice/shared";
+import type { ChosenStatus, Server, User } from "@disc-voice/shared";
+import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
 import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
 import { Avatar, Badge, unreadLabel } from "./ui";
 
@@ -59,8 +60,13 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch }: {
+export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch }: {
   user: User;
+  /** The status others see (an idle "online" shows as idle). */
+  status?: ChosenStatus;
+  /** The status the user picked. */
+  chosenStatus?: ChosenStatus;
+  onStatus?: (status: ChosenStatus) => void;
   /** Unread messages across all direct conversations. */
   dmUnread?: number;
   servers: Server[];
@@ -78,7 +84,7 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
   onVoiceSettings: () => void;
   onSearch: () => void;
 }) {
-  const [menu, setMenu] = useState<"servers" | "call" | "camera" | null>(null);
+  const [menu, setMenu] = useState<"servers" | "call" | "camera" | "account" | null>(null);
   const ref = useRef<HTMLElement>(null);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
 
@@ -138,6 +144,19 @@ export function AppBar({ user, servers, server, view, voice, voiceState, canJoin
     </button>
     {!inCall && <button className="bar-button" disabled={!canJoinVoice} aria-label="Ir para a sala de voz" title="Sala de voz" onClick={onVoice}><Headphones size={20} /></button>}
     <span className="bar-divider" />
-    <button className="bar-avatar" aria-label="Sua conta e configurações" title="Sua conta e configurações" onClick={onSettings}><Avatar name={user.name} src={user.avatar} status="online" /></button>
+    <div className="menu-anchor">
+      <button className="bar-avatar" aria-haspopup="menu" aria-expanded={menu === "account"} aria-label="Sua conta e configurações" title={`Sua conta · ${STATUS_LABELS[status]}`}
+        onClick={() => setMenu(menu === "account" ? null : "account")}><Avatar name={user.name} src={user.avatar} status={status} /></button>
+      {menu === "account" && <div className="popover-menu align-end" role="menu" aria-label="Sua conta">
+        <span className="menu-label">Status</span>
+        {CHOSEN_STATUSES.map(option => <button key={option.value} role="menuitemradio" aria-checked={option.value === chosenStatus} onClick={pick(() => onStatus(option.value))}>
+          <span className="menu-icon"><span className={`presence-dot presence-${option.value}`} /></span>
+          <span className="menu-text"><span>{option.label}</span><small>{option.hint}</small></span>
+          {option.value === chosenStatus && <Check size={16} />}
+        </button>)}
+        <hr />
+        <button role="menuitem" onClick={pick(onSettings)}><span className="menu-icon"><Settings2 size={16} /></span>Configurações</button>
+      </div>}
+    </div>
   </nav>;
 }

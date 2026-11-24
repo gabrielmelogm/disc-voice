@@ -55,6 +55,7 @@ async function openSettings(page: string) {
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "Sua conta e configurações" }));
+  await user.click(screen.getByRole("menuitem", { name: "Configurações" }));
   await user.click(screen.getByRole("button", { name: page }));
   return user;
 }
