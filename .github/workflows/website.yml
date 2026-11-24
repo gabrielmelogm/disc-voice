@@ -1,15 +1,12 @@
 name: Website
 
 # Runs only when the landing page (apps/website) changes.
-# Pull requests: install, lint, typecheck and build.
-# Merges to main: build the production image (infra/docker/website.Dockerfile)
-# and publish it to GitHub Container Registry.
+# Runs only on pushes to main (or when triggered manually): install, lint,
+# typecheck and build, then build the production image
+# (infra/docker/website.Dockerfile) and publish it to GitHub Container Registry.
 on:
   push:
     branches: [main]
-    paths:
-      - apps/website/**
-  pull_request:
     paths:
       - apps/website/**
   workflow_dispatch:
@@ -18,15 +15,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   NEXT_TELEMETRY_DISABLED: 1
 
 jobs:
   check:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +43,7 @@ jobs:
       - run: npm run build --workspace @disc-voice/website
 
   image:
-    if: github.event_name != 'pull_request'
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read
