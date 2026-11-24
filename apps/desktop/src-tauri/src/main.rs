@@ -6,6 +6,8 @@ mod app;
 mod call;
 #[cfg(any(windows, target_os = "linux"))]
 mod camera;
+#[cfg(any(windows, target_os = "linux"))]
+mod discord_rpc;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(any(windows, target_os = "linux"))]

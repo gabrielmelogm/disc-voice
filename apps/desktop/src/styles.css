@@ -652,6 +652,8 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .activity-line div { display: flex; flex-direction: column; min-width: 0; }
 .activity-line strong { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
 .activity-line small { color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+.activity-line.with-art { align-items: center; gap: 12px; }
+.activity-art { flex: none; width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: var(--surface-muted, rgba(127, 127, 127, 0.15)); }
 .people-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice.warning { background: var(--warning-soft); }
 .notice.warning svg { color: var(--warning-text); }

@@ -105,6 +105,10 @@ export interface Activity {
   details: string | null;
   state: string | null;
   startedAt: string | null;
+  /** Thumbnail (album cover, game art or app icon); absent from older servers. */
+  image?: string | null;
+  /** Tooltip of the thumbnail, e.g. the album name. */
+  imageText?: string | null;
   /** Where it came from; Discord is the only source for now. */
   source: "discord";
 }
@@ -125,6 +129,8 @@ export interface DiscordStatus {
   /** The bot is receiving Discord presences right now. */
   presence: boolean;
   account: DiscordAccount | null;
+  /** Discord application used for the desktop app's Rich Presence. */
+  clientId?: string | null;
 }
 
 export interface DiscordImport {

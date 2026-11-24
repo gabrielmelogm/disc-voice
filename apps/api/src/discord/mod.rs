@@ -148,6 +148,8 @@ pub struct Discord {
     links: Mutex<HashMap<String, Link>>,
     /// Last activity seen for each Discord user in a server shared with the bot.
     presences: Mutex<HashMap<String, Option<Activity>>>,
+    /// Icon URL of Discord applications (games), by application id.
+    app_icons: Mutex<HashMap<String, Option<String>>>,
     bot_id: Mutex<Option<String>>,
     intents: Mutex<Option<Intents>>,
     /// The gateway is connected and receiving presences.
@@ -166,6 +168,7 @@ impl Discord {
             flows: Mutex::default(),
             links: Mutex::default(),
             presences: Mutex::default(),
+            app_icons: Mutex::default(),
             bot_id: Mutex::default(),
             intents: Mutex::default(),
             live_presence: Mutex::new(false),
@@ -469,6 +472,45 @@ impl Discord {
         Ok(())
     }
 
+    /// The Discord application of this integration, also used for the Rich
+    /// Presence the desktop app shows on Discord.
+    pub(crate) fn client_id(&self) -> &str {
+        &self.config.client_id
+    }
+
+    /// A linked account that shares its activity.
+    fn is_linked(&self, discord_id: &str) -> bool {
+        self.links
+            .lock()
+            .unwrap()
+            .get(discord_id)
+            .is_some_and(|l| l.share)
+    }
+
+    /// Icon of a Discord application, looked up once. Runs inside the gateway
+    /// loop, so a slow answer is given up on quickly (and not retried).
+    async fn app_icon(&self, app: &str) -> Option<String> {
+        if let Some(icon) = self.app_icons.lock().unwrap().get(app) {
+            return icon.clone();
+        }
+        let path = format!("/applications/{app}/rpc");
+        let lookup = self.bot_get::<Value>(&path);
+        let icon = match tokio::time::timeout(Duration::from_secs(3), lookup).await {
+            Ok(Ok(info)) => app_icon_url(app, info["icon"].as_str()),
+            Ok(Err(error)) => {
+                tracing::debug!(?error, app, "Ícone do aplicativo Discord indisponível");
+                None
+            }
+            Err(_) => None,
+        };
+        let mut icons = self.app_icons.lock().unwrap();
+        if icons.len() > 10_000 {
+            icons.clear();
+        }
+        icons.insert(app.to_owned(), icon.clone());
+        icon
+    }
+
     pub(crate) fn presence_seen(&self, discord_id: &str) -> bool {
         self.presences.lock().unwrap().contains_key(discord_id)
     }
@@ -656,6 +698,11 @@ fn avatar_url(user_id: &str, hash: Option<&str>) -> Option<String> {
 fn icon_url(guild_id: &str, hash: Option<&str>) -> Option<String> {
     let hash = hash.filter(|h| h.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))?;
     Some(format!("{CDN_URL}/icons/{guild_id}/{hash}.png?size=128"))
+}
+
+fn app_icon_url(app_id: &str, hash: Option<&str>) -> Option<String> {
+    let hash = hash.filter(|h| h.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))?;
+    Some(format!("{CDN_URL}/app-icons/{app_id}/{hash}.png?size=160"))
 }
 
 /// A Discord id (snowflake): digits only.

@@ -187,6 +187,18 @@ describe("activities", () => {
     render(<ProfileCardProvider profiles={{}} activities={{ u1: minecraft }}><ProfileSummary user={person} /></ProfileCardProvider>);
     expect(screen.getByText("Jogando Minecraft")).toBeVisible();
     expect(screen.getByText("Sobrevivência")).toBeVisible();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("shows the activity thumbnail, falling back to the icon when it fails", () => {
+    const person = { id: "u1", email: "a@example.com", name: "Ana" };
+    const spotify: Activity = { ...minecraft, kind: "listening", name: "Spotify", image: "https://i.scdn.co/image/abc", imageText: "Álbum" };
+    render(<ProfileCardProvider profiles={{}} activities={{ u1: spotify }}><ProfileSummary user={person} /></ProfileCardProvider>);
+    const art = screen.getByRole("img", { name: "Álbum" });
+    expect(art).toHaveAttribute("src", "https://i.scdn.co/image/abc");
+    act(() => { art.dispatchEvent(new Event("error")); });
+    expect(screen.queryByRole("img", { name: "Álbum" })).not.toBeInTheDocument();
+    expect(screen.getByText("Ouvindo Spotify")).toBeVisible();
   });
 
   it("explains authors known only from Discord", () => {
