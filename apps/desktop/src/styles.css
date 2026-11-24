@@ -210,6 +210,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .auth-form { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: 380px; margin: auto; padding: 40px 0; }
 .auth-form h1 { font-size: 32px; }
 .google-button { position: relative; }
+/* Discord's own blurple, the same in both themes. */
+.button.discord-button { background: #5865f2; color: #ffffff; }
+.button.discord-button:hover:not(:disabled) { background: #4752c4; }
 .auth-switch { color: var(--ink-muted); text-align: center; }
 .auth-showcase { display: grid; place-items: center; padding: 40px; background: var(--surface-sunken); }
 .showcase { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 520px; }
@@ -680,6 +683,19 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .discord-channel-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .discord-channel-name small { color: var(--ink-subtle); font-size: 12px; white-space: nowrap; }
 .discord-channel-name svg { flex: none; color: var(--ink-subtle); }
+.guild-options { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.guild-options li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 52px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--surface-sunken); }
+.guild-option-name { display: flex; flex-direction: column; flex: 1 1 160px; min-width: 0; }
+.guild-option-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guild-option-name small { color: var(--ink-muted); font-size: 12px; }
+.create-choices { display: grid; gap: 10px; }
+.create-choice { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--ink); text-align: left; }
+.create-choice:hover:not(:disabled) { border-color: var(--brand); }
+.create-choice:disabled { opacity: .6; }
+.create-choice > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.create-choice small { color: var(--ink-muted); font-size: 13px; }
+.create-choice-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: var(--radius-md); background: var(--brand-soft); color: var(--brand-text); }
+.create-choice-icon.discord { background: #5865f2; color: #ffffff; }
 .import-status { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
 .import-status.ok { color: var(--success-text); }
 .import-status.error { color: var(--danger-text); flex-basis: 100%; }

@@ -73,16 +73,81 @@ impl DiscordConfig {
     }
 }
 
-/// An OAuth2 flow started by a signed-in user, waiting for Discord's redirect.
+/// An OAuth2 flow waiting for Discord's redirect.
 #[derive(Clone, Debug)]
 pub(crate) enum Flow {
+    /// Sign in (or sign up) with Discord; nobody is signed in yet.
+    Login { target: LoginTarget },
     /// Link the user's Discord account.
     Account { user: Uuid },
-    /// Install the bot in a Discord server for this Disc Voice server.
-    Install { user: Uuid, server: Uuid },
+    /// Install the bot in a Discord server for this Disc Voice server. With
+    /// `guild`, the server is being imported from that Discord server: its
+    /// channels are created once the bot is in.
+    Install {
+        user: Uuid,
+        server: Uuid,
+        guild: Option<String>,
+    },
+}
+
+/// Where the app waits for the result of a Discord sign-in.
+#[derive(Clone, Debug, PartialEq)]
+/// Both carry the app's own `state`, which comes back with the result so the
+/// app only accepts sign-ins it started.
+pub(crate) enum LoginTarget {
+    /// The desktop app's temporary local server.
+    Desktop { port: u16, state: String },
+    /// The web app, which redirected away and comes back to its callback page.
+    Web { state: String },
+}
+
+fn valid_state(state: &str) -> bool {
+    (16..=128).contains(&state.len())
+        && state
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+impl LoginTarget {
+    pub(crate) fn desktop(port: u16, state: &str) -> Option<Self> {
+        (port >= 1024 && valid_state(state)).then(|| Self::Desktop {
+            port,
+            state: state.to_owned(),
+        })
+    }
+
+    pub(crate) fn web(state: &str) -> Option<Self> {
+        valid_state(state).then(|| Self::Web {
+            state: state.to_owned(),
+        })
+    }
+
+    /// Where the browser goes after Discord: back to the app, with a ticket
+    /// it exchanges for a session, or with an error to show.
+    pub(crate) fn redirect(&self, web_url: &str, outcome: Result<&str, &str>) -> String {
+        let (base, state) = match self {
+            Self::Desktop { port, state } => (format!("http://127.0.0.1:{port}/"), state),
+            Self::Web { state } => (
+                format!("{}/auth/discord/callback", web_url.trim_end_matches('/')),
+                state,
+            ),
+        };
+        let mut params = vec![("state", state.as_str())];
+        match outcome {
+            Ok(ticket) => params.push(("ticket", ticket)),
+            Err(error) => params.push(("error", error)),
+        }
+        reqwest::Url::parse_with_params(&base, &params)
+            .map(String::from)
+            .unwrap_or(base)
+    }
 }
 
 const FLOW_LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// A sign-in ticket is exchanged by the app right after the redirect.
+const TICKET_LIFETIME: Duration = Duration::from_secs(2 * 60);
+/// Manage Server: who may import a Discord server.
+pub(crate) const MANAGE_GUILD: u64 = 1 << 5;
 
 #[derive(Clone, Copy)]
 struct Link {
@@ -144,6 +209,8 @@ pub struct Discord {
     config: DiscordConfig,
     http: reqwest::Client,
     flows: Mutex<HashMap<String, (Flow, Instant)>>,
+    /// Finished sign-ins waiting for the app, by ticket.
+    tickets: Mutex<HashMap<String, (Uuid, Instant)>>,
     /// Linked accounts, by Discord user id.
     links: Mutex<HashMap<String, Link>>,
     /// Last activity seen for each Discord user in a server shared with the bot.
@@ -166,6 +233,7 @@ impl Discord {
             config,
             http,
             flows: Mutex::default(),
+            tickets: Mutex::default(),
             links: Mutex::default(),
             presences: Mutex::default(),
             app_icons: Mutex::default(),
@@ -227,6 +295,16 @@ impl Discord {
         let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let mut flows = self.flows.lock().unwrap();
         flows.retain(|_, (_, at)| at.elapsed() < FLOW_LIFETIME);
+        // Sign-ins start without an account: bound what strangers can fill.
+        if flows.len() >= 10_000 {
+            if let Some(oldest) = flows
+                .iter()
+                .min_by_key(|(_, (_, at))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                flows.remove(&oldest);
+            }
+        }
         flows.insert(state.clone(), (flow, Instant::now()));
         state
     }
@@ -235,6 +313,20 @@ impl Discord {
     fn take_flow(&self, state: &str) -> Option<Flow> {
         let (flow, at) = self.flows.lock().unwrap().remove(state)?;
         (at.elapsed() < FLOW_LIFETIME).then_some(flow)
+    }
+
+    fn issue_ticket(&self, user: Uuid) -> String {
+        let ticket = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let mut tickets = self.tickets.lock().unwrap();
+        tickets.retain(|_, (_, at)| at.elapsed() < TICKET_LIFETIME);
+        tickets.insert(ticket.clone(), (user, Instant::now()));
+        ticket
+    }
+
+    /// Each ticket signs in once, within its lifetime.
+    fn take_ticket(&self, ticket: &str) -> Option<Uuid> {
+        let (user, at) = self.tickets.lock().unwrap().remove(ticket)?;
+        (at.elapsed() < TICKET_LIFETIME).then_some(user)
     }
 
     fn authorize_url(
@@ -358,9 +450,99 @@ impl Discord {
         .await
     }
 
+    async fn refresh(&self, refresh_token: &str) -> Result<Token, DiscordError> {
+        let form = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", self.config.client_id.as_str()),
+            ("client_secret", self.config.client_secret.as_str()),
+        ];
+        Self::json(
+            self.send(Method::POST, "/oauth2/token", "", Some(&form))
+                .await?,
+        )
+        .await
+    }
+
     async fn user(&self, access_token: &str) -> Result<DiscordUser, DiscordError> {
         let auth = format!("Bearer {access_token}");
         Self::json(self.send(Method::GET, "/users/@me", &auth, None).await?).await
+    }
+
+    /// Discord servers the user is in (OAuth2 `guilds`).
+    async fn user_guilds(&self, access_token: &str) -> Result<Vec<UserGuild>, DiscordError> {
+        let auth = format!("Bearer {access_token}");
+        Self::json(
+            self.send(Method::GET, "/users/@me/guilds", &auth, None)
+                .await?,
+        )
+        .await
+    }
+
+    /// Discord servers the bot is in.
+    async fn bot_guild_ids(&self) -> Result<HashSet<String>, DiscordError> {
+        let mut ids = HashSet::new();
+        let mut after = String::from("0");
+        loop {
+            let page: Vec<UserGuild> = self
+                .bot_get(&format!("/users/@me/guilds?limit=200&after={after}"))
+                .await?;
+            let Some(last) = page.last().map(|g| g.id.clone()) else {
+                break;
+            };
+            let full = page.len() == 200;
+            ids.extend(page.into_iter().map(|g| g.id));
+            if !full {
+                break;
+            }
+            after = last;
+        }
+        Ok(ids)
+    }
+
+    /// A valid OAuth2 access token of the user's linked account, refreshed
+    /// when it expired.
+    pub(crate) async fn user_token(
+        &self,
+        db: &sea_orm::DatabaseConnection,
+        user: Uuid,
+    ) -> ApiResult<String> {
+        use crate::ApiError;
+        use sea_orm::{ActiveModelTrait, Set};
+        let reconnect = || {
+            ApiError(
+                StatusCode::CONFLICT,
+                "Reconecte sua conta do Discord para listar seus servidores.".into(),
+            )
+        };
+        let account = discord_account::Entity::find_by_id(user)
+            .one(db)
+            .await?
+            .ok_or_else(|| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    "Nenhuma conta do Discord vinculada.".into(),
+                )
+            })?;
+        let fresh = account
+            .token_expires_at
+            .is_some_and(|at| at > chrono::Utc::now() + chrono::Duration::minutes(1));
+        if let (true, Some(token)) = (fresh, account.access_token.clone()) {
+            return Ok(token);
+        }
+        let refresh = account.refresh_token.clone().ok_or_else(reconnect)?;
+        let token = self.refresh(&refresh).await.map_err(|error| {
+            tracing::debug!(?error, "Falha ao renovar o token do Discord");
+            reconnect()
+        })?;
+        let access = token.access_token.clone();
+        let expires_at = token.expires_at();
+        let mut active: discord_account::ActiveModel = account.into();
+        active.access_token = Set(Some(token.access_token));
+        active.refresh_token = Set(token.refresh_token.or(Some(refresh)));
+        active.token_expires_at = Set(Some(expires_at));
+        active.update(db).await?;
+        Ok(access)
     }
 
     async fn bot_id(&self) -> Result<String, DiscordError> {
@@ -450,6 +632,17 @@ impl Discord {
             .collect();
         text.sort_by_key(|(order, _)| *order);
         Ok(text.into_iter().map(|(_, c)| c).collect())
+    }
+
+    /// Text and voice channels of a guild, in the order Discord shows them:
+    /// by category, then text before voice, then position. Categories
+    /// themselves have no equivalent in Disc Voice.
+    pub(crate) async fn guild_structure(
+        &self,
+        guild: &str,
+    ) -> Result<Vec<(&'static str, String)>, DiscordError> {
+        let channels: Vec<ChannelInfo> = self.bot_get(&format!("/guilds/{guild}/channels")).await?;
+        Ok(structure(&channels))
     }
 
     /// Reloads the linked accounts from the database.
@@ -643,6 +836,41 @@ fn is_text(kind: u8) -> bool {
     matches!(kind, 0 | 5)
 }
 
+/// Voice (2) and stage (13) channels.
+fn is_voice(kind: u8) -> bool {
+    matches!(kind, 2 | 13)
+}
+
+/// See [`Discord::guild_structure`].
+fn structure(channels: &[ChannelInfo]) -> Vec<(&'static str, String)> {
+    let categories: HashMap<&str, i64> = channels
+        .iter()
+        .filter(|c| c.kind == 4)
+        .map(|c| (c.id.as_str(), c.position))
+        .collect();
+    let mut list: Vec<_> = channels
+        .iter()
+        .filter(|c| is_text(c.kind) || is_voice(c.kind))
+        .map(|c| {
+            let category = c
+                .parent_id
+                .as_deref()
+                .and_then(|id| categories.get(id).copied())
+                .unwrap_or(-1);
+            let voice = is_voice(c.kind);
+            (
+                (category, voice, c.position, c.id.clone()),
+                (
+                    if voice { "voice" } else { "text" },
+                    c.name.clone().unwrap_or_default(),
+                ),
+            )
+        })
+        .collect();
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    list.into_iter().map(|(_, c)| c).collect()
+}
+
 /// Computes a member's permissions in a channel, following Discord's rules:
 /// base role permissions, then @everyone, role and member overwrites.
 fn channel_permissions(
@@ -727,7 +955,45 @@ fn short_text(value: &Value, max: usize) -> Option<String> {
 struct Token {
     access_token: String,
     #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+    #[serde(default)]
     guild: Option<TokenGuild>,
+}
+
+impl Token {
+    fn expires_at(&self) -> chrono::DateTime<chrono::Utc> {
+        // Discord's tokens last a week; assume an hour when it doesn't say.
+        let seconds = self.expires_in.unwrap_or(3600).clamp(0, 30 * 24 * 3600);
+        chrono::Utc::now() + chrono::Duration::seconds(seconds)
+    }
+}
+
+/// A Discord server as listed for a user (or the bot).
+#[derive(Clone, Deserialize)]
+pub(crate) struct UserGuild {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub owner: bool,
+    #[serde(default)]
+    pub permissions: Option<String>,
+}
+
+impl UserGuild {
+    /// Owner, administrator or Manage Server.
+    pub(crate) fn managed(&self) -> bool {
+        let permissions: u64 = self
+            .permissions
+            .as_deref()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0);
+        self.owner || permissions & (MANAGE_GUILD | ADMINISTRATOR) != 0
+    }
 }
 
 #[derive(Deserialize)]
@@ -746,6 +1012,11 @@ struct DiscordUser {
     global_name: Option<String>,
     #[serde(default)]
     avatar: Option<String>,
+    /// Only with the `email` scope.
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    verified: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -915,6 +1186,99 @@ mod tests {
             avatar_url("1", Some("a_bc")).as_deref(),
             Some("https://cdn.discordapp.com/avatars/1/a_bc.png?size=128")
         );
+    }
+
+    #[test]
+    fn login_goes_back_to_the_app() {
+        assert_eq!(LoginTarget::desktop(80, &"a".repeat(32)), None);
+        assert_eq!(LoginTarget::desktop(53124, "short"), None);
+        assert_eq!(LoginTarget::desktop(53124, &"a/".repeat(16)), None);
+        let desktop = LoginTarget::desktop(53124, &"a".repeat(32)).unwrap();
+        let url = desktop.redirect("https://x.example", Ok("t1"));
+        assert_eq!(
+            url,
+            format!("http://127.0.0.1:53124/?state={}&ticket=t1", "a".repeat(32))
+        );
+        assert_eq!(LoginTarget::web("x"), None);
+        assert_eq!(
+            LoginTarget::web(&"b".repeat(16))
+                .unwrap()
+                .redirect("https://x.example/", Err("Não deu & certo")),
+            format!(
+                "https://x.example/auth/discord/callback?state={}&error=N%C3%A3o+deu+%26+certo",
+                "b".repeat(16)
+            )
+        );
+    }
+
+    #[test]
+    fn tickets_work_once() {
+        let discord = Discord::new(
+            DiscordConfig {
+                client_id: "c".into(),
+                client_secret: "s".into(),
+                bot_token: "b".into(),
+                api_url: API_URL.into(),
+                authorize_url: AUTHORIZE_URL.into(),
+            },
+            reqwest::Client::new(),
+        );
+        let user = Uuid::new_v4();
+        let ticket = discord.issue_ticket(user);
+        assert_eq!(ticket.len(), 64);
+        assert_eq!(discord.take_ticket("other"), None);
+        assert_eq!(discord.take_ticket(&ticket), Some(user));
+        assert_eq!(discord.take_ticket(&ticket), None);
+    }
+
+    #[test]
+    fn orders_guild_structure_and_managed_guilds() {
+        let channel =
+            |id: &str, kind: u8, name: &str, parent: Option<&str>, position: i64| ChannelInfo {
+                id: id.into(),
+                kind,
+                guild_id: None,
+                name: Some(name.into()),
+                parent_id: parent.map(Into::into),
+                position,
+                permission_overwrites: vec![],
+            };
+        let channels = [
+            channel("1", 4, "Jogos", None, 1),
+            channel("2", 4, "Texto", None, 0),
+            channel("3", 2, "Sala", Some("1"), 0),
+            channel("4", 0, "lfg", Some("1"), 0),
+            channel("5", 0, "regras", None, 0),
+            channel("6", 0, "geral", Some("2"), 1),
+            channel("7", 5, "avisos", Some("2"), 0),
+            channel("8", 15, "forum", Some("2"), 2),
+        ];
+        let names: Vec<_> = structure(&channels)
+            .into_iter()
+            .map(|(kind, name)| format!("{kind}:{name}"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "text:regras",
+                "text:avisos",
+                "text:geral",
+                "text:lfg",
+                "voice:Sala"
+            ]
+        );
+
+        let guild = |owner: bool, permissions: u64| UserGuild {
+            id: "1".into(),
+            name: "G".into(),
+            icon: None,
+            owner,
+            permissions: Some(permissions.to_string()),
+        };
+        assert!(guild(true, 0).managed());
+        assert!(guild(false, MANAGE_GUILD).managed());
+        assert!(guild(false, ADMINISTRATOR).managed());
+        assert!(!guild(false, VIEW_CHANNEL).managed());
     }
 
     #[test]

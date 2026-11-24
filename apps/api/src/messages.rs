@@ -30,6 +30,7 @@ impl DiscordAuthor {
             bio: String::new(),
             banner: profile::DEFAULT_BANNER.into(),
             avatar: self.avatar.clone(),
+            avatar_source: None,
             discord: Some(self.username.clone()),
         }
     }

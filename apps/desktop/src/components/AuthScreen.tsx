@@ -1,35 +1,46 @@
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, MicOff } from "lucide-react";
 import type { AuthSession } from "@disc-voice/shared";
-import { message } from "../lib/api";
+import { api, message } from "../lib/api";
+import { signInWithDiscord } from "../lib/discordLogin";
 import { signInWithGoogle } from "../lib/google";
-import { Avatar, BrandMark, GoogleMark } from "./ui";
+import { Avatar, BrandMark, DiscordMark, GoogleMark } from "./ui";
+
+type Provider = "discord" | "google";
 
 export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
   onAuthenticated: (session: AuthSession) => void;
   hasInvite: boolean;
   notice: string;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<Provider | null>(null);
   const [error, setError] = useState("");
+  // Offered unless the server says the integration is not configured.
+  const [discord, setDiscord] = useState(true);
   const pending = useRef<AbortController | null>(null);
 
   useEffect(() => () => pending.current?.abort(), []);
+  useEffect(() => {
+    let active = true;
+    api.discordAuthConfig().then(config => { if (active) setDiscord(config.enabled); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
-  async function signIn() {
+  async function signIn(provider: Provider) {
     if (busy) return;
     const controller = new AbortController();
     pending.current = controller;
-    setBusy(true);
+    setBusy(provider);
     setError("");
     try {
-      onAuthenticated(await signInWithGoogle(controller.signal));
+      const start = provider === "discord" ? signInWithDiscord : signInWithGoogle;
+      onAuthenticated(await start(controller.signal));
     } catch (cause) {
       if (!controller.signal.aborted) setError(message(cause));
     } finally {
       if (pending.current === controller) {
         pending.current = null;
-        setBusy(false);
+        setBusy(null);
       }
     }
   }
@@ -37,21 +48,27 @@ export function AuthScreen({ onAuthenticated, hasInvite, notice }: {
   function cancel() {
     pending.current?.abort();
     pending.current = null;
-    setBusy(false);
+    setBusy(null);
   }
+
+  const waiting = <><LoaderCircle size={17} className="spin" />Continue no navegador…</>;
 
   return <main className="auth-page">
     <section className="auth-panel">
       <BrandMark />
       <div className="auth-form">
         <h1>Boas-vindas ao Disc Voice</h1>
-        <p className="lede">Entre com sua conta Google para voltar às suas comunidades, chamadas e conversas.</p>
+        <p className="lede">{discord
+          ? "Entre com o Discord para trazer sua foto, sua atividade e seus servidores, ou use sua conta Google."
+          : "Entre com sua conta Google para voltar às suas comunidades, chamadas e conversas."}</p>
         {hasInvite && <div className="notice">Você tem um convite. Entre para continuar.</div>}
         {notice && <p className="notice" role="status">{notice}</p>}
 
-        <button type="button" className="button primary full large google-button" disabled={busy} onClick={() => void signIn()}>
-          {busy ? <LoaderCircle size={17} className="spin" /> : <GoogleMark />}
-          {busy ? "Continue no navegador…" : "Continuar com Google"}
+        {discord && <button type="button" className="button primary full large discord-button" disabled={!!busy} onClick={() => void signIn("discord")}>
+          {busy === "discord" ? waiting : <><DiscordMark />Continuar com Discord</>}
+        </button>}
+        <button type="button" className={`button ${discord ? "secondary" : "primary"} full large google-button`} disabled={!!busy} onClick={() => void signIn("google")}>
+          {busy === "google" ? waiting : <><GoogleMark />Continuar com Google</>}
         </button>
         {busy && <button type="button" className="link-button" onClick={cancel}>Cancelar</button>}
         {error && <p className="inline-error" role="alert">{error}</p>}

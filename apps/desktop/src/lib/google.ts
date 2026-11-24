@@ -1,5 +1,6 @@
 import type { AuthSession, GoogleLogin } from "@disc-voice/shared";
 import { api } from "./api";
+import { challenge, native, random, signInThroughBrowser } from "./loopback";
 
 // Google Sign-In with an authorization code and PKCE. The app only gets the
 // code; the API exchanges it with Google using the client secret.
@@ -10,25 +11,6 @@ import { api } from "./api";
 export const CALLBACK_PATH = "/auth/google/callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const FLOW_KEY = "discvoice.google";
-const TIMEOUT_MS = 5 * 60_000;
-const native = () => "__TAURI_INTERNALS__" in window;
-
-const DONE_PAGE = `<!doctype html><meta charset="utf-8"><title>Disc Voice</title>
-<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0">
-<p>Login concluído. Você já pode fechar esta aba e voltar ao Disc Voice.</p></body>`;
-
-function base64url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function random(size: number) {
-  return base64url(crypto.getRandomValues(new Uint8Array(size)));
-}
-
-async function challenge(verifier: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  return base64url(new Uint8Array(digest));
-}
 
 async function authUrl(clientId: string, redirectUri: string, state: string, verifier: string) {
   const url = new URL(AUTH_URL);
@@ -77,36 +59,14 @@ export async function signInWithGoogle(signal?: AbortSignal): Promise<AuthSessio
     return new Promise<never>(() => {});
   }
 
-  if (!config.desktopClientId) notConfigured();
-  const [{ start, cancel, onUrl }, { openUrl }] = await Promise.all([
-    import("@fabianlars/tauri-plugin-oauth"),
-    import("@tauri-apps/plugin-opener"),
-  ]);
-  const port = await start({ response: DONE_PAGE });
-  const redirectUri = `http://127.0.0.1:${port}`;
-  let received!: (url: string) => void;
-  const redirect = new Promise<string>(resolve => { received = resolve; });
-  const unlisten = await onUrl(url => received(url));
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  try {
-    await openUrl(await authUrl(config.desktopClientId, redirectUri, state, verifier));
-    const url = await Promise.race([
-      redirect,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("O login com Google expirou. Tente novamente.")), TIMEOUT_MS);
-        onAbort = () => reject(new DOMException("Login cancelado.", "AbortError"));
-        if (signal?.aborted) onAbort();
-        signal?.addEventListener("abort", onAbort);
-      }),
-    ]);
-    return await finish(new URL(url), state, verifier, redirectUri, "desktop");
-  } finally {
-    clearTimeout(timer);
-    if (onAbort) signal?.removeEventListener("abort", onAbort);
-    unlisten();
-    await cancel(port).catch(() => {});
-  }
+  const clientId = config.desktopClientId;
+  if (!clientId) notConfigured();
+  return signInThroughBrowser({
+    authorize: port => authUrl(clientId, `http://127.0.0.1:${port}`, state, verifier),
+    finish: (url, port) => finish(url, state, verifier, `http://127.0.0.1:${port}`, "desktop"),
+    expired: "O login com Google expirou. Tente novamente.",
+    signal,
+  });
 }
 
 export function isGoogleCallback() {

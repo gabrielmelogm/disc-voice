@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react";
-import type { Channel, Server, User, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, DiscordAccount, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useDiscordCallPresence } from "../lib/discordPresence";
@@ -20,6 +20,7 @@ import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
 import { FriendsPage, friendshipWith } from "./Friends";
 import { DiscordImportDialog } from "./DiscordImportDialog";
+import { DiscordOnboarding } from "./DiscordOnboarding";
 import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
 import { SearchDialog, type SearchPick } from "./SearchDialog";
 import { ServerDialog, type DialogMode } from "./ServerDialog";
@@ -93,7 +94,9 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     // An imported channel opens for messages when its import is done.
     if (event.type === "discord.import" && event.serverId === selected) {
       const readOnly = event.import.phase === "history";
-      setChannels(current => current.map(c => c.id === event.import.channelId && !!c.readOnly !== readOnly ? { ...c, readOnly } : c));
+      // An existing empty channel (e.g. #geral) may be the one receiving the history.
+      setChannels(current => current.map(c => c.id === event.import.channelId && (!!c.readOnly !== readOnly || c.source !== "discord")
+        ? { ...c, readOnly, source: "discord" } : c));
     }
     if (event.type === "server.snapshot" && event.serverId === selected) {
       setParticipants(event.channels);
@@ -108,6 +111,16 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   }), [realtime.client, selected, user.id, onUserChange]);
 
   useEffect(() => { if (realtime.status !== "connected") setParticipants({}); }, [realtime.status]);
+
+  // Signed in with Discord and not asked yet what the integration may use.
+  const [onboarding, setOnboarding] = useState<DiscordAccount | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    api.discord(controller.signal)
+      .then(status => { if (status.account?.consentPending) setOnboarding(status.account); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   // The tray icon shows whether the user is in a call; its menu lists the recent servers.
   useEffect(() => { if (selected) rememberServer(selected); }, [selected]);
@@ -346,7 +359,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     {newDm && <NewMessageDialog selfId={user.id} onClose={() => setNewDm(false)} onPick={async person => { await messagePerson(person); setNewDm(false); }} />}
     {discordOpen && server && <DiscordImportDialog server={server} realtime={realtime.client} onClose={() => setDiscordOpen(false)}
       onOpenChannel={id => { setDiscordOpen(false); goToChannel(server.id, id); }} />}
-    {dialog && !loading && <ServerDialog mode={dialog} onClose={() => setDialog(null)} onServer={acceptServer} onChannel={next => {
+    {onboarding && <DiscordOnboarding account={onboarding} user={user} realtime={realtime.client} onServer={acceptServer} onUserChange={onUserChange}
+      onOpen={id => { setSelected(id); show("server"); }} onDone={() => setOnboarding(null)} />}
+    {dialog && !loading && <ServerDialog mode={dialog} realtime={realtime.client} onClose={() => setDialog(null)} onServer={acceptServer}
+      onOpenServer={id => { setSelected(id); show("server"); }} onChannel={next => {
       if (next.serverId === selected) {
         setChannels(current => current.some(c => c.id === next.id) ? current : [...current, next]); setChannelId(next.id);
       }

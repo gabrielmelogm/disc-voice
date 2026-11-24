@@ -67,6 +67,13 @@ pub(crate) async fn update(
         return Ok(Json(current));
     }
     let view = UserView::from(row.update(&state.db).await?);
+    broadcast(&state, &view).await?;
+    Ok(Json(view))
+}
+
+/// Tells everyone who sees the user (their servers, themselves) about a
+/// changed profile.
+pub(crate) async fn broadcast(state: &AppState, view: &UserView) -> ApiResult<()> {
     let servers: Vec<_> = member::Entity::find()
         .filter(member::Column::UserId.eq(view.id))
         .all(&state.db)
@@ -74,8 +81,8 @@ pub(crate) async fn update(
         .into_iter()
         .map(|m| m.server_id)
         .collect();
-    state.realtime.profile_updated(&view, &servers);
-    Ok(Json(view))
+    state.realtime.profile_updated(view, &servers);
+    Ok(())
 }
 
 #[cfg(test)]

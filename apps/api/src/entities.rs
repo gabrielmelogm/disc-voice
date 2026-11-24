@@ -16,6 +16,8 @@ pub mod user {
         pub google_sub: Option<String>,
         pub avatar_url: Option<String>,
         pub created_at: DateTimeUtc,
+        /// `google` or `discord`: the account the photo follows.
+        pub avatar_source: Option<String>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -49,6 +51,8 @@ pub mod server {
         pub name: String,
         pub owner_id: Uuid,
         pub created_at: DateTimeUtc,
+        /// Imported from Discord; otherwise initials are shown.
+        pub icon_url: Option<String>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -196,6 +200,12 @@ pub mod discord_account {
         pub avatar_url: Option<String>,
         pub share_activity: bool,
         pub linked_at: DateTimeUtc,
+        pub access_token: Option<String>,
+        pub refresh_token: Option<String>,
+        pub token_expires_at: Option<DateTimeUtc>,
+        /// When the user answered what the integration may use; until then
+        /// the app asks them.
+        pub consent_at: Option<DateTimeUtc>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

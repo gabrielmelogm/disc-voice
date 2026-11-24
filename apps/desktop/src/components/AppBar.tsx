@@ -103,14 +103,14 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   return <nav ref={ref} className="app-bar" aria-label="Barra do app">
     <div className="menu-anchor">
       <button className="server-switch" aria-haspopup="menu" aria-expanded={menu === "servers"} aria-label={`Trocar de servidor. Atual: ${server?.name || "nenhum"}`} title="Trocar de servidor" onClick={() => setMenu(menu === "servers" ? null : "servers")}>
-        {server ? <Avatar name={server.name} size="sm" /> : <span className="avatar avatar-sm"><Home size={15} /></span>}
+        {server ? <Avatar name={server.name} src={server.icon} size="sm" /> :<span className="avatar avatar-sm"><Home size={15} /></span>}
         {!inCall && <span className="server-switch-name">{server?.name || "Início"}</span>}
         <ChevronUp size={16} />
       </button>
       {menu === "servers" && <div className="popover-menu" role="menu" aria-label="Servidores">
         <span className="menu-label">Seus servidores</span>
         {servers.map(item => <button key={item.id} role="menuitem" aria-label={`Abrir servidor ${item.name}`} onClick={pick(() => onSelectServer(item))}>
-          <Avatar name={item.name} size="sm" /><span>{item.name}</span>{item.id === server?.id && view === "server" && <Check size={16} />}
+          <Avatar name={item.name} src={item.icon} size="sm" /><span>{item.name}</span>{item.id === server?.id && view === "server" && <Check size={16} />}
         </button>)}
         {!servers.length && <p className="menu-empty">Você ainda não está em nenhum servidor.</p>}
         <hr />

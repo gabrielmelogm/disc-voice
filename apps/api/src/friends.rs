@@ -361,7 +361,7 @@ pub(crate) async fn profile(
         .db
         .query_all(Statement::from_sql_and_values(
             DbBackend::Postgres,
-            r#"SELECT s.id, s.name, s.owner_id FROM servers s
+            r#"SELECT s.id, s.name, s.owner_id, s.icon_url FROM servers s
                JOIN members mine ON mine.server_id = s.id AND mine.user_id = $1
                JOIN members theirs ON theirs.server_id = s.id AND theirs.user_id = $2
                ORDER BY s.created_at, s.id"#,
@@ -374,6 +374,7 @@ pub(crate) async fn profile(
             id: row.try_get("", "id")?,
             name: row.try_get("", "name")?,
             owner_id: row.try_get("", "owner_id")?,
+            icon: row.try_get("", "icon_url")?,
         });
     }
     let friendship = relation(&state.db, user.id, other).await?;

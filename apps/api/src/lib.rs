@@ -112,6 +112,12 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/activities", get(activity::list))
         .route("/discord", get(discord::routes::status))
         .route("/discord/link", post(discord::routes::link_account))
+        .route("/discord/consent", post(discord::routes::consent))
+        .route("/discord/guilds", get(discord::routes::managed_guilds))
+        .route(
+            "/discord/guilds/{guild}/import",
+            post(discord::routes::import_guild),
+        )
         .route(
             "/discord/account",
             axum::routing::patch(discord::routes::update_account)
@@ -150,6 +156,9 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 )
                 .route("/auth/google/config", get(google_config))
                 .route("/auth/google", post(google_login))
+                .route("/auth/discord/config", get(discord::routes::login_config))
+                .route("/auth/discord/start", post(discord::routes::login_start))
+                .route("/auth/discord", post(discord::routes::login_finish))
                 .route("/discord/callback", get(discord::routes::callback))
                 .route("/files/{id}/{name}", get(files::serve))
                 .route(
@@ -223,6 +232,7 @@ impl IntoResponse for ApiError {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserView {
     pub id: Uuid,
     pub email: String,
@@ -230,8 +240,10 @@ pub struct UserView {
     pub pronouns: String,
     pub bio: String,
     pub banner: String,
-    /// Profile photo URL (from Google), or null to show initials.
+    /// Profile photo URL (from Google or Discord), or null to show initials.
     pub avatar: Option<String>,
+    /// `google` or `discord`: the account the photo follows.
+    pub avatar_source: Option<String>,
     /// Discord username of an author known only from imported messages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<String>,
@@ -247,6 +259,7 @@ impl From<user::Model> for UserView {
             bio: user.bio,
             banner: user.banner,
             avatar: user.avatar_url,
+            avatar_source: user.avatar_source,
             discord: None,
         }
     }
@@ -279,9 +292,12 @@ async fn renew(db: &DatabaseConnection, session: session::Model) -> ApiResult<()
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuthView {
     user: UserView,
     token: String,
+    /// Signed in with Discord and not yet asked what the integration may use.
+    discord_consent: bool,
 }
 
 async fn new_session(db: &DatabaseConnection, user: UserView) -> ApiResult<Json<AuthView>> {
@@ -293,7 +309,11 @@ async fn new_session(db: &DatabaseConnection, user: UserView) -> ApiResult<Json<
     }
     .insert(db)
     .await?;
-    Ok(Json(AuthView { user, token }))
+    Ok(Json(AuthView {
+        user,
+        token,
+        discord_consent: false,
+    }))
 }
 
 #[derive(Serialize)]
@@ -364,11 +384,15 @@ async fn google_login(
         .filter(user::Column::GoogleSub.eq(&claims.sub))
         .one(&state.db)
         .await?;
+    // The photo follows the Google account (refreshed on every sign-in)
+    // unless the user chose their Discord photo.
+    let follows_google = |user: &user::Model| user.avatar_source.as_deref() != Some("discord");
+    let google_source = claims.picture.as_ref().map(|_| "google".to_owned());
     let user = match existing {
-        // The photo follows the Google account; it is refreshed on every sign-in.
-        Some(user) if user.avatar_url != claims.picture => {
+        Some(user) if follows_google(&user) && user.avatar_url != claims.picture => {
             let mut active: user::ActiveModel = user.into();
             active.avatar_url = Set(claims.picture.clone());
+            active.avatar_source = Set(google_source.clone());
             active.update(&state.db).await?
         }
         Some(user) => user,
@@ -377,11 +401,16 @@ async fn google_login(
             .one(&state.db)
             .await?
         {
-            // Accounts created before Google Sign-In are linked by verified e-mail.
+            // Accounts created before Google Sign-In (or with Discord) are
+            // linked by verified e-mail.
             Some(user) if user.google_sub.is_none() => {
+                let keep_photo = !follows_google(&user);
                 let mut active: user::ActiveModel = user.into();
                 active.google_sub = Set(Some(claims.sub.clone()));
-                active.avatar_url = Set(claims.picture.clone());
+                if !keep_photo {
+                    active.avatar_url = Set(claims.picture.clone());
+                    active.avatar_source = Set(google_source.clone());
+                }
                 active.update(&state.db).await?
             }
             Some(_) => {
@@ -401,6 +430,7 @@ async fn google_login(
                     password_hash: Set(None),
                     google_sub: Set(Some(claims.sub.clone())),
                     avatar_url: Set(claims.picture.clone()),
+                    avatar_source: Set(google_source),
                     created_at: Set(Utc::now()),
                 }
                 .insert(&state.db)
@@ -463,6 +493,8 @@ struct ServerView {
     id: Uuid,
     name: String,
     owner_id: Uuid,
+    /// Icon URL (servers imported from Discord), or null for initials.
+    icon: Option<String>,
 }
 impl From<server::Model> for ServerView {
     fn from(s: server::Model) -> Self {
@@ -470,6 +502,7 @@ impl From<server::Model> for ServerView {
             id: s.id,
             name: s.name,
             owner_id: s.owner_id,
+            icon: s.icon_url,
         }
     }
 }
@@ -559,18 +592,30 @@ async fn create_server(
     Json(input): Json<NameInput>,
 ) -> ApiResult<(StatusCode, Json<InviteView>)> {
     let name = server_name(&input.name)?;
+    let view = insert_server(&state, user.id, name, None).await?;
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+/// Creates a server owned by `owner`, with its invite.
+async fn insert_server(
+    state: &AppState,
+    owner: Uuid,
+    name: String,
+    icon: Option<String>,
+) -> ApiResult<InviteView> {
     let tx = state.db.begin().await?;
     let server = server::ActiveModel {
         id: Set(Uuid::new_v4()),
         name: Set(name),
-        owner_id: Set(user.id),
+        owner_id: Set(owner),
         created_at: Set(Utc::now()),
+        icon_url: Set(icon),
     }
     .insert(&tx)
     .await?;
     member::ActiveModel {
         server_id: Set(server.id),
-        user_id: Set(user.id),
+        user_id: Set(owner),
         joined_at: Set(Utc::now()),
         role: Set("member".into()),
     }
@@ -584,10 +629,7 @@ async fn create_server(
     .insert(&tx)
     .await?;
     tx.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(invite_view(&state, invite.code, server)),
-    ))
+    Ok(invite_view(state, invite.code, server))
 }
 
 async fn server_invite(

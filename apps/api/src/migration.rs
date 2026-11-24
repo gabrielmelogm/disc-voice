@@ -17,7 +17,63 @@ impl MigratorTrait for Migrator {
             Box::new(DmsAndReadState),
             Box::new(Friendships),
             Box::new(MemberRoles),
+            Box::new(DiscordLogin),
         ]
+    }
+}
+
+struct DiscordLogin;
+
+impl MigrationName for DiscordLogin {
+    fn name(&self) -> &str {
+        "m20261128_000012_discord_login"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for DiscordLogin {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- Signing in with Discord: the user's OAuth2 token lists the Discord
+            -- servers they manage, to import them. `consent_at` is when they
+            -- answered what the integration may use (photo, activity).
+            ALTER TABLE discord_accounts
+                ADD COLUMN access_token text,
+                ADD COLUMN refresh_token text,
+                ADD COLUMN token_expires_at timestamptz,
+                ADD COLUMN consent_at timestamptz;
+            -- Linked before this existed: they already chose in the settings.
+            UPDATE discord_accounts SET consent_at = linked_at;
+            -- Which account the profile photo follows.
+            ALTER TABLE users ADD COLUMN avatar_source varchar(8)
+                CHECK (avatar_source IN ('google', 'discord'));
+            UPDATE users SET avatar_source = 'google' WHERE avatar_url IS NOT NULL;
+            ALTER TABLE servers ADD COLUMN icon_url varchar(512);
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE servers DROP COLUMN icon_url;
+            ALTER TABLE users DROP COLUMN avatar_source;
+            ALTER TABLE discord_accounts
+                DROP COLUMN consent_at,
+                DROP COLUMN token_expires_at,
+                DROP COLUMN refresh_token,
+                DROP COLUMN access_token;
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

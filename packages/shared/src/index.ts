@@ -90,8 +90,10 @@ export interface User {
   pronouns?: string;
   bio?: string;
   banner?: BannerColor;
-  /** Profile photo URL (from the Google account), or null for initials. */
+  /** Profile photo URL (from Google or Discord), or null for initials. */
   avatar?: string | null;
+  /** The account the photo follows. */
+  avatarSource?: "google" | "discord" | null;
   /** Discord username of an author known only from imported Discord messages. */
   discord?: string;
 }
@@ -119,8 +121,34 @@ export interface DiscordAccount {
   displayName: string | null;
   avatar: string | null;
   shareActivity: boolean;
+  /** The profile photo is the Discord one. Absent from older servers. */
+  useAvatar?: boolean;
+  /** Signed in with Discord and not yet asked what the integration may use. */
+  consentPending?: boolean;
+  /** Discord servers can be listed (and imported) with this account. */
+  canListGuilds?: boolean;
   /** The bot saw this account in a Discord server it is in. */
   presenceSeen: boolean;
+}
+
+/** A Discord server the user manages, which they may import. */
+export interface DiscordGuildOption {
+  id: string;
+  name: string;
+  icon: string | null;
+  /** The bot is already there: the channels come right away. */
+  botInstalled: boolean;
+  /** Already imported into this Disc Voice server. */
+  importedServerId: string | null;
+}
+
+export interface DiscordGuildImport {
+  server: Invite;
+  /** Open to add the bot to the Discord server; the channels come after. */
+  installUrl: string | null;
+  channels: number;
+  /** The server was created but its channels could not be read. */
+  warning: string | null;
 }
 
 export interface DiscordStatus {
@@ -154,6 +182,8 @@ export interface DiscordChannel {
   /** The bot can view the channel and read its history. */
   readable: boolean;
   import: DiscordImport | null;
+  /** Empty channel of the server with this name: the history goes there. */
+  target?: string | null;
 }
 
 export interface DiscordGuild {
@@ -231,12 +261,16 @@ export interface GoogleLogin {
 export interface AuthSession {
   user: User;
   token: string;
+  /** Signed in with Discord: ask what the integration may use. */
+  discordConsent?: boolean;
 }
 
 export interface Server {
   id: string;
   name: string;
   ownerId: string;
+  /** Icon URL (servers imported from Discord), or null for initials. */
+  icon?: string | null;
 }
 
 export interface Invite {
