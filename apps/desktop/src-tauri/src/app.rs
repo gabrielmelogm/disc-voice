@@ -37,6 +37,36 @@ async fn audio_action(
         .map_err(|error| error.to_string())?
 }
 
+/// Saves the theme template in the Downloads folder and shows it in the file
+/// manager. The webview ignores `<a download>`, so the file is written here.
+#[tauri::command]
+fn save_theme_template<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    contents: String,
+) -> Result<String, String> {
+    const MAX_BYTES: usize = 200 * 1024;
+    // The app checks the theme again when it is imported; this only keeps
+    // the command from writing anything other than a small JSON object.
+    if contents.len() > MAX_BYTES || !contents.trim_start().starts_with('{') {
+        return Err("O modelo de tema é inválido.".into());
+    }
+    let paths = app.path();
+    let folder = paths
+        .download_dir()
+        .or_else(|_| paths.document_dir())
+        .map_err(|_| "Não foi possível encontrar a pasta Downloads.".to_string())?;
+    let mut path = folder.join("tema-disc-voice.json");
+    let mut copy = 2;
+    while path.exists() {
+        path = folder.join(format!("tema-disc-voice ({copy}).json"));
+        copy += 1;
+    }
+    std::fs::write(&path, contents)
+        .map_err(|error| format!("Não foi possível salvar o modelo: {error}"))?;
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&path);
+    Ok(path.display().to_string())
+}
+
 pub fn run() {
     let builder = tauri::Builder::default();
     // Opening the app again while it sits in the tray brings back the running one.
@@ -108,6 +138,7 @@ pub fn run() {
             call::native::call_video_frame,
             notify::show_notification,
             tray_supported,
+            save_theme_template,
             #[cfg(windows)]
             tray::set_close_to_tray,
             #[cfg(windows)]

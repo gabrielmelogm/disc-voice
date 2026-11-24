@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
 import type { BannerColor, DiscordStatus, User } from "@disc-voice/shared";
 import { DeviceSettings } from "../DeviceSettings";
@@ -10,7 +11,7 @@ import { requestDesktopPermission, useNotificationPrefs } from "../lib/notificat
 import { useTraySupported, useWindowPrefs } from "../lib/tray";
 import {
   addTheme, fetchTheme, MAX_THEME_BYTES, parseTheme, removeTheme, resolveTheme, THEME_EXAMPLE, THEME_TOKENS, ThemeError,
-  themeById, useAppearance, useThemes, type Appearance, type CustomTheme,
+  themeById, themeTemplate, useAppearance, useThemes, type Appearance, type CustomTheme,
 } from "../lib/theme";
 import { BANNER_COLORS, bannerColor, ProfileSummary } from "./ProfileCard";
 import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
@@ -326,13 +327,22 @@ const builtInThemes: { id: Appearance; name: string; by: string }[] = [
 
 const exampleJson = JSON.stringify(THEME_EXAMPLE, null, 2);
 
-function downloadExample() {
-  const url = URL.createObjectURL(new Blob([exampleJson + "\n"], { type: "application/json" }));
+/**
+ * Saves a template with every color, based on the light or dark theme in use.
+ * Returns where the file went in the desktop app, or null in the browser.
+ */
+async function downloadTemplate(): Promise<string | null> {
+  const base = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const contents = JSON.stringify(themeTemplate(base), null, 2) + "\n";
+  // The desktop webview ignores <a download>, so the app writes the file.
+  if (isTauri()) return invoke<string>("save_theme_template", { contents });
+  const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
   const link = Object.assign(document.createElement("a"), { href: url, download: "tema-disc-voice.json" });
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+  return null;
 }
 
 function readText(file: File) {
@@ -359,7 +369,16 @@ function Themes() {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const [imported, setImported] = useState<CustomTheme | null>(null);
+  const [template, setTemplate] = useState<{ saved?: string; error?: string }>({});
   const picker = useRef<HTMLInputElement>(null);
+
+  async function saveTemplate() {
+    setTemplate({});
+    try {
+      const saved = await downloadTemplate();
+      if (saved) setTemplate({ saved });
+    } catch (cause) { setTemplate({ error: typeof cause === "string" ? cause : message(cause) }); }
+  }
 
   async function load(read: () => Promise<CustomTheme>) {
     setBusy(true); setError(""); setImported(null);
@@ -431,10 +450,13 @@ function Themes() {
     <section aria-labelledby="theme-howto-title">
       <div className="section-row">
         <h2 id="theme-howto-title" className="settings-section-title">Como montar um tema</h2>
-        <button type="button" className="link-button" onClick={downloadExample}><Download size={16} />Baixar modelo</button>
+        <button type="button" className="link-button" onClick={() => void saveTemplate()}><Download size={16} />Baixar modelo</button>
       </div>
+      {template.saved && <p className="notice" role="status">Modelo salvo em <code>{template.saved}</code>.</p>}
+      {template.error && <p className="inline-error" role="alert">{template.error}</p>}
       <p className="field-help">
         Use os mesmos nomes de cor do Disc Voice, em <code>#rrggbb</code>. O que faltar vem do tema da base (<code>light</code> ou <code>dark</code>).
+        O modelo baixado traz todas as cores do tema em uso: mude as que quiser e apague as outras.
         Cores de texto com pouco contraste são ajustadas automaticamente.
       </p>
       <pre className="code-block"><code>{exampleJson}</code></pre>

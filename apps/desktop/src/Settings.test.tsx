@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { sessionToken } from "./lib/api";
-import { removeTheme, setAppearance, THEME_EXAMPLE, themeById } from "./lib/theme";
+import { removeTheme, setAppearance, THEME_EXAMPLE, THEME_TOKENS, themeById } from "./lib/theme";
+
+const tauri = vi.hoisted(() => ({ isTauri: vi.fn(() => false), invoke: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined) }));
+vi.mock("@tauri-apps/api/core", async original => ({ ...await original<object>(), isTauri: tauri.isTauri, invoke: tauri.invoke }));
 
 const account = { id: "user-1", email: "amigo@example.com", name: "Amigo", pronouns: "", bio: "", banner: "brand" };
 const friend = { id: "user-2", email: "bia@example.com", name: "Bia", pronouns: "ela/dela", bio: "Toco violão.", banner: "green" };
@@ -157,6 +160,23 @@ describe("custom themes", () => {
     await user.click(screen.getByRole("button", { name: "Importar" }));
     expect(await screen.findByText("Tema “Aurora” importado.")).toBeVisible();
     expect(fetch).toHaveBeenCalledWith(new URL("https://temas.example/aurora.json"), expect.objectContaining({ credentials: "omit" }));
+  });
+
+  it("saves a template with every color in the desktop app", async () => {
+    mockApi(() => undefined);
+    const user = await openSettings("Temas");
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async command => command === "save_theme_template" ? "C:\\Downloads\\tema-disc-voice.json" : undefined);
+    try {
+      await user.click(screen.getByRole("button", { name: "Baixar modelo" }));
+      expect(await within(settings()).findByText("C:\\Downloads\\tema-disc-voice.json")).toBeVisible();
+      const call = tauri.invoke.mock.calls.find(([command]) => command === "save_theme_template")!;
+      const template = JSON.parse((call[1] as { contents: string }).contents);
+      expect(Object.keys(template.colors)).toEqual(THEME_TOKENS);
+    } finally {
+      tauri.isTauri.mockReturnValue(false);
+      tauri.invoke.mockReset();
+    }
   });
 });
 
