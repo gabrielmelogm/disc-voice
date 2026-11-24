@@ -52,6 +52,19 @@
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
+.window-frame { display: flex; flex-direction: column; height: 100%; }
+.window-content { flex: 1; min-height: 0; overflow: auto; }
+
+/* ---------- Window title bar (Windows, native frame off) ---------- */
+.window-titlebar { display: flex; flex: none; align-items: center; justify-content: space-between; height: 32px; padding-left: 12px; background: var(--surface-sunken); border-bottom: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
+.window-title { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+.window-title img { display: block; border-radius: 4px; }
+.window-controls { display: flex; align-self: stretch; }
+.window-control { display: grid; place-items: center; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink-muted); cursor: default; }
+.window-control:hover { background: var(--fill); color: var(--ink); }
+.window-control:active { background: var(--fill-hover); }
+.window-control.close:hover, .window-control.close:active { background: var(--danger); color: var(--on-danger); }
+.window-control:focus-visible { outline-offset: -2px; }
 body { margin: 0; min-width: 360px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
