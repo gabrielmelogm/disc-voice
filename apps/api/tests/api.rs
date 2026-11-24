@@ -717,6 +717,12 @@ async fn accounts_invites_channels_and_authorization() {
         event(&mut owner_ws, "message.created").await["message"],
         third
     );
+    // With no server open, members still get it, named for a notification.
+    let elsewhere = event(&mut owner_idle, "message.created").await;
+    assert_eq!(elsewhere["message"], third);
+    assert_eq!(elsewhere["serverId"], server_id);
+    assert_eq!(elsewhere["channelName"], channel["name"]);
+    assert!(elsewhere["serverName"].is_string());
     let join = |id: &Value| json!({ "type": "voice.join", "channelId": id, "muted": false, "deafened": false });
     emit(&mut guest_ws, join(&private_voice["id"])).await;
     assert_eq!(

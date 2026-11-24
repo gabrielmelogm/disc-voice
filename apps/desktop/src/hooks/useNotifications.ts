@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Channel, RealtimeEvent, User } from "@disc-voice/shared";
+import type { Channel, ChosenStatus, RealtimeEvent, User } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
 import type { VoiceState } from "../lib/voice";
 import { notificationPrefs, playNotificationSound, playVoiceConnectSound, showDesktopNotification } from "../lib/notifications";
@@ -15,35 +15,47 @@ function focused() {
   return typeof document.hasFocus === "function" ? document.hasFocus() : true;
 }
 
+/** Title of a message's OS notification: the author, plus where it was posted unless it is a direct message. */
+function messageTitle(event: Extract<RealtimeEvent, { type: "message.created" }>, channels: Channel[]) {
+  const { message } = event;
+  const known = channels.find(c => c.id === message.channelId);
+  const channel = event.channelName ?? (known?.type === "text" ? known.name : undefined);
+  if (!channel) return message.author.name;
+  return event.serverName ? `${message.author.name} em #${channel} (${event.serverName})` : `${message.author.name} em #${channel}`;
+}
+
 /**
  * Plays the notification sound (and shows an OS notification in the background) when
- * someone else posts a message, or enters a voice room of any of our servers while we
- * are not in a call. In a call, someone connecting to ours plays a cue with no notification.
+ * someone else sends us a direct message or posts in a text channel of any of our servers,
+ * or enters a voice room of them while we are not in a call. In a call, someone connecting
+ * to ours plays a cue with no notification. "Do not disturb" silences all but that cue.
  */
-export function useNotifications({ realtime, user, voiceState, viewingChannelId, channels }: {
+export function useNotifications({ realtime, user, status, voiceState, viewingChannelId, channels }: {
   realtime: Realtime;
   user: User;
+  status: ChosenStatus;
   voiceState: Pick<VoiceState, "channel" | "deafened">;
-  /** Text channel on screen, if any: its messages need no alert while the window has focus. */
+  /** Text channel or conversation on screen, if any: its messages need no alert while the window has focus. */
   viewingChannelId: string | null;
+  /** Channels of the server on screen: name messages that arrive without one. */
   channels: Channel[];
 }) {
-  const latest = useRef({ user, voiceState, viewingChannelId, channels });
-  latest.current = { user, voiceState, viewingChannelId, channels };
+  const latest = useRef({ user, status, voiceState, viewingChannelId, channels });
+  latest.current = { user, status, voiceState, viewingChannelId, channels };
 
   useEffect(() => realtime.onEvent((event: RealtimeEvent) => {
-    const { user, voiceState, viewingChannelId, channels } = latest.current;
+    const { user, status, voiceState, viewingChannelId, channels } = latest.current;
     const prefs = notificationPrefs();
+    const quiet = status === "dnd";
 
     if (event.type === "message.created") {
       const { message } = event;
-      if (message.author.id === user.id) return;
+      if (quiet || message.author.id === user.id) return;
       const background = !focused();
       if (!background && message.channelId === viewingChannelId) return;
       if (prefs.messageSounds) playNotificationSound();
       if (background && prefs.desktop) {
-        const channel = channels.find(c => c.id === message.channelId);
-        void showDesktopNotification(channel ? `${message.author.name} em #${channel.name}` : message.author.name, preview(message.content), message.author.name);
+        void showDesktopNotification(messageTitle(event, channels), preview(message.content), message.author.name);
       }
       return;
     }
@@ -56,6 +68,7 @@ export function useNotifications({ realtime, user, voiceState, viewingChannelId,
         if (event.channelId === call.id && !voiceState.deafened) playVoiceConnectSound();
         return;
       }
+      if (quiet) return;
       playNotificationSound();
       if (!focused() && prefs.desktop) {
         void showDesktopNotification(`${event.user.name} entrou em #${event.channelName}`, event.serverName, event.user.name);

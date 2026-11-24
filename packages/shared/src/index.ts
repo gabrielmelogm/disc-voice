@@ -376,7 +376,8 @@ export type RealtimeEvent =
   | { type: "session.expired" }
   | { type: "error"; operation: string; message: string }
   | { type: "channel.created"; channel: Channel }
-  | { type: "message.created"; message: ChatMessage }
+  /** In a server channel, also names the server and channel (it reaches members with any server open); absent in direct messages. */
+  | { type: "message.created"; message: ChatMessage; serverId?: string; serverName?: string; channelName?: string }
   | { type: "user.updated"; user: User }
   | { type: "server.snapshot"; serverId: string | null; channels: Record<string, VoiceParticipant[]> }
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }

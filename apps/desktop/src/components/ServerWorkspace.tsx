@@ -79,6 +79,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   useNotifications({
     realtime: realtime.client,
     user,
+    status: myStatus.status,
     voiceState,
     viewingChannelId: view === "dms" ? conversation?.channel.id ?? null : view === "server" && channel?.type === "text" ? channel.id : null,
     channels,
