@@ -738,7 +738,25 @@ async fn went_offline(state: &AppState, user: Uuid) {
     }
 }
 
-pub(crate) async fn ice_config(Extension(user): Extension<UserView>) -> ApiResult<Json<Value>> {
+pub(crate) async fn ice_config(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserView>,
+) -> ApiResult<Json<Value>> {
+    if let Some(turn) = &state.turn {
+        match turn.ice_servers().await {
+            Ok(servers) => return Ok(Json(json!({ "iceServers": servers }))),
+            Err(error) => tracing::warn!(
+                %error,
+                "Não foi possível obter o TURN da Cloudflare; usando STUN/TURN próprio"
+            ),
+        }
+    }
+    own_ice_config(&user)
+}
+
+/// `STUN_URL` plus, when `TURN_URLS` is set, TURN REST credentials signed
+/// with `TURN_SECRET` (Coturn's `use-auth-secret`).
+fn own_ice_config(user: &UserView) -> ApiResult<Json<Value>> {
     let mut servers = vec![json!({
         "urls": std::env::var("STUN_URL").unwrap_or_else(|_| "stun:stun.l.google.com:19302".into())
     })];

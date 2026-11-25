@@ -49,7 +49,22 @@ Em **Voz e vídeo → Dispositivos das chamadas**, escolha o microfone e a saíd
 
 No mesmo computador, use `localhost`. Entre computadores, publique a interface/API por **HTTPS** e permita o upgrade de **WebSocket/WSS** no proxy reverso. `VITE_API_URL` define também o endereço da sinalização.
 
-STUN ajuda a descobrir endereços acessíveis. Algumas redes exigem **TURN**, que retransmite o áudio quando a conexão direta falha. O Compose inclui Coturn no perfil `voice`. Configure na raiz:
+A voz é WebRTC ponto a ponto: a API só faz a sinalização (WebSocket), e o áudio vai direto entre os participantes. STUN ajuda a descobrir endereços acessíveis, mas quando os participantes estão em redes diferentes (casas, operadoras ou estados distintos) o NAT costuma bloquear a conexão direta e o áudio precisa de **TURN**, que retransmite o áudio. Expor a API por **Cloudflare Tunnel** não resolve isso: o túnel só leva HTTP/WebSocket, não o UDP da mídia. Sem TURN, a sala abre e todos aparecem, mas o áudio não conecta.
+
+#### TURN da Cloudflare (recomendado com Cloudflare Tunnel)
+
+O TURN gerenciado da Cloudflare Realtime dispensa abrir portas no roteador ou ter IP público. No painel da Cloudflare, abra **Realtime > TURN Server**, crie uma chave e configure na raiz:
+
+```dotenv
+CLOUDFLARE_TURN_KEY_ID=<id-da-chave-turn>
+CLOUDFLARE_TURN_API_TOKEN=<token-da-chave-turn>
+```
+
+Com as duas variáveis, `GET /voice/config` pede à Cloudflare credenciais válidas por 24 horas (`generate-ice-servers`) e devolve os servidores `stun:`, `turn:` e `turns:` dela. As credenciais ficam em cache por 12 horas, então a Cloudflare não é chamada a cada entrada em sala. O token fica só na API: não vai para o cliente nem para os logs. Se a Cloudflare falhar, a API registra um aviso e usa o STUN/TURN próprio abaixo, sem impedir a entrada na sala. O uso do TURN da Cloudflare é cobrado por tráfego retransmitido, com uma franquia gratuita; confira os limites no painel.
+
+#### Coturn próprio
+
+O Compose inclui Coturn no perfil `voice`. Configure na raiz:
 
 ```dotenv
 VOICE_CHANNEL_CAPACITY=8
@@ -67,7 +82,7 @@ docker compose --profile voice up --build -d
 
 Publique **3478/TCP**, **3478/UDP** e **49160–49200/UDP** no host/firewall/NAT, preservando os números das portas. O DNS `voz.exemplo.com` deve apontar ao host Coturn; não passa pelo proxy HTTP da API. O perfil fornecido oferece TURN UDP/TCP; para redes que exigem TURN sobre TLS/443, configure um serviço TURN TLS e forneça a URL `turns:` em `TURN_URLS`.
 
-Sem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localhost` não comprova conectividade entre redes diferentes.
+Sem TURN da Cloudflare nem `TURN_URLS`, o cliente usa apenas STUN/conexões diretas. Testar em `localhost` não comprova conectividade entre redes diferentes.
 
 ### Contratos HTTP de chat
 

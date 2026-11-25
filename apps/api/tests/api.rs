@@ -8,7 +8,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use disc_api::{
     google::{GoogleConfig, OAuthClient},
     migration::Migrator,
-    router, AppState,
+    router,
+    turn::CloudflareTurnConfig,
+    AppState,
 };
 use futures_util::{SinkExt, StreamExt};
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
@@ -3522,4 +3524,89 @@ async fn friends_presence_and_profiles() {
         .await
         .unwrap();
     }
+}
+
+/// A fake Cloudflare Realtime API that hands out one TURN credential.
+async fn fake_cloudflare_turn() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let generate = post(|headers: axum::http::HeaderMap| async move {
+        if headers["authorization"] != "Bearer cf-token" {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "auth" })));
+        }
+        (
+            StatusCode::CREATED,
+            Json(json!({ "iceServers": [
+                { "urls": ["stun:stun.cloudflare.com:3478"] },
+                { "urls": [
+                    "turn:turn.cloudflare.com:3478?transport=udp",
+                    "turns:turn.cloudflare.com:443?transport=tcp"
+                  ],
+                  "username": "cf-user", "credential": "cf-credential" }
+            ]})),
+        )
+    });
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/turn/keys/cf-key/credentials/generate-ice-servers",
+            generate,
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}/v1")
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn voice_config_uses_cloudflare_turn_and_falls_back() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let state = |api_url: String| {
+        let db = db.clone();
+        async move {
+            AppState::new(db, "https://discvoice.example".into(), fake_google().await)
+                .with_cloudflare_turn(CloudflareTurnConfig {
+                    key_id: "cf-key".into(),
+                    api_token: "cf-token".into(),
+                    api_url,
+                })
+        }
+    };
+    let app = router(state(fake_cloudflare_turn().await).await, vec![]);
+    let (token, user_id) = register(&app, "Turn").await;
+
+    let (status, body) = call(&app, "GET", "/voice/config", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let servers = body["iceServers"].as_array().unwrap();
+    assert_eq!(servers.len(), 2);
+    assert_eq!(servers[1]["username"], "cf-user");
+    assert_eq!(servers[1]["credential"], "cf-credential");
+    assert_eq!(
+        servers[1]["urls"][1],
+        "turns:turn.cloudflare.com:443?transport=tcp"
+    );
+    assert!(!body.to_string().contains("cf-token"));
+
+    // Cloudflare unreachable: joining a call still works with the own STUN.
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_url = format!("http://{}/v1", closed.local_addr().unwrap());
+    drop(closed);
+    let broken = router(state(dead_url).await, vec![]);
+    let (status, body) = call(&broken, "GET", "/voice/config", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["iceServers"][0]["urls"]
+        .as_str()
+        .unwrap()
+        .starts_with("stun:"));
+    assert!(!body.to_string().contains("cloudflare"));
+
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM users WHERE id = $1",
+        [Uuid::parse_str(&user_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
 }
