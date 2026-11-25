@@ -3,11 +3,13 @@ import {
   Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Signal, SignalHigh, SignalLow, SignalMedium,
   SignalZero, Video, Volume2, VolumeX, X, type LucideIcon,
 } from "lucide-react";
-import type { Channel, VoiceParticipant } from "@disc-voice/shared";
+import type { Channel, MemberRole, User, VoiceParticipant } from "@disc-voice/shared";
+import type { Realtime } from "../lib/realtime";
 import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
 import { ProfileButton } from "./ProfileCard";
-import { Avatar, LiveTag, SoonTag } from "./ui";
+import { TextChannel } from "./TextChannel";
+import { Avatar, LiveTag } from "./ui";
 
 export const voiceLabels: Record<VoiceState["status"], string> = {
   idle: "Desconectado", connecting: "Conectando áudio…", connected: "Voz conectada",
@@ -184,8 +186,10 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
   </li>;
 }
 
-export function VoiceChannel({ channel, voice, state, participants, online }: {
+/** `realtime`, `revision`, `self` and `roles` feed the room chat, as in a text channel. */
+export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, roles }: {
   channel: Channel; voice: Voice; state: VoiceState; participants: VoiceParticipant[]; online: boolean;
+  realtime: Realtime; revision: number; self?: User; roles?: Record<string, MemberRole>;
 }) {
   const active = state.channel?.id === channel.id && state.status !== "error";
   const [chatOpen, setChatOpen] = useState(true);
@@ -247,10 +251,10 @@ export function VoiceChannel({ channel, voice, state, participants, online }: {
       {active && state.status !== "connected" && <p className="call-progress" role="status"><LoaderCircle size={16} className="spin" />{voiceLabels[state.status]}</p>}
     </section>
 
+    {/* Only the panel closes: the call goes on. */}
     {chatOpen && <aside className="room-chat" aria-label="Chat da chamada">
       <header><h2>Chat da sala</h2><button className="icon-button" aria-label="Fechar chat da sala" onClick={() => setChatOpen(false)}><X size={18} /></button></header>
-      <div className="room-chat-empty"><MessageSquareText size={26} /><p>Mensagens dentro da sala de voz chegam em breve.</p><SoonTag /></div>
-      <div className="composer disabled-composer"><label className="sr-only" htmlFor="room-message">Mensagem para o chat da sala</label><input id="room-message" disabled placeholder={`Escrever em ${channel.name}`} /></div>
+      <TextChannel key={channel.id} channel={channel} realtime={realtime} revision={revision} self={self} roles={roles} room />
     </aside>}
   </div>;
 }

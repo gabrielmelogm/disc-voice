@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { Channel, ChatMessage, MemberRole, User } from "@disc-voice/shared";
 import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
@@ -30,10 +30,11 @@ function focused() {
  * focused and the list scrolled to the bottom).
  * `peer`: the other person, when the channel is a direct conversation.
  * `roles`: server roles by user id, shown as a badge next to the author.
+ * `room`: the chat of a voice room, in the narrow panel next to the call.
  */
-export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles }: {
+export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles, room = false }: {
   channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string;
-  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>;
+  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>; room?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -202,7 +203,13 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const imported = channel.source === "discord";
   const importing = imported && !!channel.readOnly;
   const typingText = typingLabel(typing);
-  return <section className="text-chat" aria-label={peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`}>
+  const typingIndicator = typingText && <span className="typing-indicator"><span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>{typingText}</span>;
+  const enterToSend = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault(); event.currentTarget.form?.requestSubmit();
+    }
+  };
+  return <section className={`text-chat ${room ? "room" : ""}`} aria-label={room ? `Mensagens da sala ${channel.name}` : peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`}>
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
       const element = list.current!;
@@ -211,7 +218,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     }}>
       {hasMore && <button className="button secondary history-button" disabled={older} onClick={() => void loadOlder()}>{older ? "Carregando…" : "Carregar mensagens anteriores"}</button>}
       {loading && <p className="chat-status" role="status">Sincronizando mensagens…</p>}
-      {welcome && (importing
+      {welcome && (room
+        ? <div className="chat-welcome room-welcome"><MessageSquareText size={26} /><p>Compartilhe links e converse sem microfone. As mensagens ficam na sala para quem entrar depois.</p></div>
+        : importing
         ? <div className="chat-welcome"><span className="welcome-icon"><History size={28} /></span><h2>#{channel.name} vem do Discord</h2><p>As mensagens aparecem aqui conforme a importação avança.</p></div>
         : peer ? <div className="chat-welcome"><Avatar name={peer.name} src={peer.avatar} size="xl" /><h2>{peer.name}</h2><p>Esse é o começo da sua conversa com {peer.name}.</p></div>
         : <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>)}
@@ -242,23 +251,24 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       </article>)}
     </div>
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
-    {importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
+    {room ? <form className="composer room-composer" onSubmit={submit}>
+      {/* Who is typing shows above the field, which stays a single line. */}
+      <span className="composer-hint" aria-live="polite">{typingIndicator}</span>
+      <label className="sr-only" htmlFor="room-message">Mensagem para o chat da sala</label>
+      <textarea id="room-message" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
+        onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
+      <button className="sr-only" type="submit" disabled={!content.trim()}>Enviar mensagem</button>
+    </form>
+    : importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
       <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
       <textarea id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-        onChange={event => type(event.target.value)}
-        onKeyDown={event => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault(); event.currentTarget.form?.requestSubmit();
-          }
-        }} />
+        onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
       <div className="composer-actions">
         {/* Attachments and emoji are designed but not implemented yet. */}
         <button type="button" className="icon-button" disabled aria-label="Anexar arquivo (em breve)" title="Anexos em breve"><Plus size={18} /></button>
         <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
         {/* Who is typing takes the hint's place, so the composer never jumps. */}
-        <span className="composer-hint" aria-live="polite">{typingText
-          ? <span className="typing-indicator"><span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>{typingText}</span>
-          : "Enter para enviar · Shift+Enter para nova linha"}</span>
+        <span className="composer-hint" aria-live="polite">{typingIndicator || "Enter para enviar · Shift+Enter para nova linha"}</span>
         <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
       </div>
     </form>}

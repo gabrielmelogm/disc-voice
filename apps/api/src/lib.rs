@@ -13,6 +13,7 @@ mod profile;
 mod reads;
 mod realtime;
 mod search;
+pub mod turn;
 
 use axum::{
     extract::{DefaultBodyLimit, Path, Request, State},
@@ -43,6 +44,8 @@ pub struct AppState {
     realtime: Arc<realtime::Hub>,
     /// Present when the Discord integration is configured.
     discord: Option<Arc<discord::Discord>>,
+    /// Present when Cloudflare's managed TURN is configured.
+    turn: Option<Arc<turn::CloudflareTurn>>,
     /// Where stored files live (see [`files`]).
     uploads: std::path::PathBuf,
 }
@@ -60,6 +63,7 @@ impl AppState {
             http,
             realtime: Arc::new(realtime::Hub::new()),
             discord: None,
+            turn: None,
             uploads: std::env::temp_dir().join("disc-voice-files"),
         }
     }
@@ -73,6 +77,15 @@ impl AppState {
     /// Enables the Discord integration (bot, imports and activity).
     pub fn with_discord(mut self, config: discord::DiscordConfig) -> Self {
         self.discord = Some(Arc::new(discord::Discord::new(config, self.http.clone())));
+        self
+    }
+
+    /// Serves TURN relays from Cloudflare Realtime on `/voice/config`.
+    pub fn with_cloudflare_turn(mut self, config: turn::CloudflareTurnConfig) -> Self {
+        self.turn = Some(Arc::new(turn::CloudflareTurn::new(
+            config,
+            self.http.clone(),
+        )));
         self
     }
 }
@@ -809,6 +822,21 @@ struct ChannelInput {
     kind: ChannelKind,
 }
 
+/// Channels that hold messages: text channels, direct messages and the room
+/// chat of voice channels.
+const MESSAGES: &str = "messages";
+
+/// Whether an operation on channels of `kind` accepts a channel of `actual`.
+fn kind_allows(kind: &str, actual: &str) -> bool {
+    match kind {
+        // Direct messages hold messages like text channels do.
+        "text" => matches!(actual, "text" | "dm"),
+        MESSAGES => matches!(actual, "text" | "dm" | "voice"),
+        _ => kind == actual,
+    }
+}
+
+/// `kind` is a channel type, or [`MESSAGES`] for any channel with messages.
 async fn require_channel(
     db: &DatabaseConnection,
     id: Uuid,
@@ -825,8 +853,7 @@ async fn require_channel(
             dms::require_participant(db, channel.id, user).await?;
         }
     }
-    // Direct messages hold messages like text channels do.
-    if channel.kind != kind && !(kind == "text" && channel.kind == "dm") {
+    if !kind_allows(kind, &channel.kind) {
         return Err(ApiError::bad(
             "Este tipo de canal não suporta esta operação.",
         ));

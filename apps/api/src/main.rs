@@ -1,5 +1,6 @@
 use disc_api::{
-    discord::DiscordConfig, google::GoogleConfig, migration::Migrator, router, AppState,
+    discord::DiscordConfig, google::GoogleConfig, migration::Migrator, router,
+    turn::CloudflareTurnConfig, AppState,
 };
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_migration::MigratorTrait;
@@ -76,6 +77,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => tracing::warn!(
             "Integração com o Discord desativada: defina DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET e DISCORD_BOT_TOKEN."
+        ),
+    }
+    match CloudflareTurnConfig::from_env() {
+        Some(config) => {
+            tracing::info!("TURN da Cloudflare ativo para chamadas de voz");
+            state = state.with_cloudflare_turn(config);
+        }
+        None if env::var("TURN_URLS").is_ok_and(|urls| !urls.trim().is_empty()) => {}
+        None => tracing::warn!(
+            "Nenhum TURN configurado: a voz só conecta quando os participantes alcançam um ao outro direto. \
+             Defina CLOUDFLARE_TURN_KEY_ID/CLOUDFLARE_TURN_API_TOKEN ou TURN_URLS/TURN_SECRET."
         ),
     }
     let app = router(state, origins).fallback_service(

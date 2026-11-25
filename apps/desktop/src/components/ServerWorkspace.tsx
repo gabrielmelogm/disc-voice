@@ -83,7 +83,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     user,
     status: myStatus.status,
     voiceState,
-    viewingChannelId: view === "dms" ? conversation?.channel.id ?? null : view === "server" && channel?.type === "text" ? channel.id : null,
+    viewingChannelId: view === "dms" ? conversation?.channel.id ?? null : view === "server" && channel && channel.type !== "dm" ? channel.id : null,
     channels,
   });
 
@@ -321,6 +321,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} memberCount={members.members.length} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
           roles={roles} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"}
+          realtime={realtime.client} revision={realtime.revision} self={user} roles={roles}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
           <span className="empty-icon"><MessageSquareText size={34} /></span>
