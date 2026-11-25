@@ -19,6 +19,7 @@ function focused() {
 function messageTitle(event: Extract<RealtimeEvent, { type: "message.created" }>, channels: Channel[]) {
   const { message } = event;
   const known = channels.find(c => c.id === message.channelId);
+  if (event.channelType === "voice") return `${message.author.name} no chat de ${event.channelName ?? known?.name ?? "sala"}`;
   const channel = event.channelName ?? (known?.type === "text" ? known.name : undefined);
   if (!channel) return message.author.name;
   return event.serverName ? `${message.author.name} em #${channel} (${event.serverName})` : `${message.author.name} em #${channel}`;
@@ -26,8 +27,8 @@ function messageTitle(event: Extract<RealtimeEvent, { type: "message.created" }>
 
 /**
  * Plays the notification sound (and shows an OS notification in the background) when
- * someone else sends us a direct message or posts in a text channel of any of our servers,
- * or enters a voice room of them while we are not in a call. In a call, someone connecting
+ * someone else sends us a direct message or posts in a text channel of any of our servers
+ * (or in the room chat of the call we are in), or enters a voice room of them while we are not in a call. In a call, someone connecting
  * to ours plays a cue with no notification. "Do not disturb" silences all but that cue.
  */
 export function useNotifications({ realtime, user, status, voiceState, viewingChannelId, channels }: {
@@ -51,6 +52,8 @@ export function useNotifications({ realtime, user, status, voiceState, viewingCh
     if (event.type === "message.created") {
       const { message } = event;
       if (quiet || message.author.id === user.id) return;
+      // A voice room's chat only concerns who is in that call.
+      if (event.channelType === "voice" && voiceState.channel?.id !== message.channelId) return;
       const background = !focused();
       if (!background && message.channelId === viewingChannelId) return;
       if (prefs.messageSounds) playNotificationSound();

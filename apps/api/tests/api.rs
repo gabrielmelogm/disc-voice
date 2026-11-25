@@ -661,17 +661,27 @@ async fn accounts_invites_channels_and_authorization() {
     .await
     .1;
     assert_eq!(voice["type"], "voice");
+    // Voice rooms have their own chat, readable by members who join later.
+    let room_path = format!("/channels/{}/messages", voice["id"].as_str().unwrap());
+    let (status, room_message) = call(
+        &app,
+        "POST",
+        &room_path,
+        Some(token),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "Link da reunião" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(room_message["channelId"], voice["id"]);
+    let (status, room_page) = call(&app, "GET", &room_path, Some(guest_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(room_page["messages"], json!([room_message]));
+    // The client id still belongs to the text channel message.
     assert_eq!(
-        call(
-            &app,
-            "POST",
-            &format!("/channels/{}/messages", voice["id"].as_str().unwrap()),
-            Some(token),
-            Some(payload)
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
+        call(&app, "POST", &room_path, Some(token), Some(payload))
+            .await
+            .0,
+        StatusCode::CONFLICT
     );
     assert_eq!(
         call(
@@ -724,7 +734,25 @@ async fn accounts_invites_channels_and_authorization() {
     assert_eq!(elsewhere["message"], third);
     assert_eq!(elsewhere["serverId"], server_id);
     assert_eq!(elsewhere["channelName"], channel["name"]);
+    assert_eq!(elsewhere["channelType"], "text");
     assert!(elsewhere["serverName"].is_string());
+    // Room chat messages arrive live too, marked as coming from a voice room.
+    let live_room = call(
+        &app,
+        "POST",
+        &room_path,
+        Some(guest_token),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "Sem microfone hoje" })),
+    )
+    .await
+    .1;
+    let room_event = event(&mut owner_ws, "message.created").await;
+    assert_eq!(room_event["message"], live_room);
+    assert_eq!(room_event["channelType"], "voice");
+    assert_eq!(
+        event(&mut owner_idle, "message.created").await["channelType"],
+        "voice"
+    );
     let join = |id: &Value| json!({ "type": "voice.join", "channelId": id, "muted": false, "deafened": false });
     emit(&mut guest_ws, join(&private_voice["id"])).await;
     assert_eq!(

@@ -565,7 +565,8 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             let scope = match state.realtime.typing_scope(id, channel_id) {
                 Some(scope) => scope,
                 None => {
-                    let channel = require_channel(&state.db, channel_id, user.id, "text").await?;
+                    let channel =
+                        require_channel(&state.db, channel_id, user.id, crate::MESSAGES).await?;
                     let scope = match channel.server_id {
                         Some(server) => Scope::Server(server),
                         None => Scope::Direct(

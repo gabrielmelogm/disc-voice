@@ -409,8 +409,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .call-progress { display: inline-flex; align-items: center; gap: 8px; align-self: center; color: var(--on-video-muted); }
 .room-chat { display: flex; flex-direction: column; width: 360px; min-height: 0; background: var(--surface); border-left: 1px solid var(--line); }
 .room-chat header { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--line); }
-.room-chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; flex: 1; padding: 24px; color: var(--ink-muted); text-align: center; }
-.room-chat .composer { margin: 0 12px 12px; box-shadow: none; padding: 0; background: none; }
+.text-chat.room .message-list { padding: 12px 8px; }
+.text-chat.room .chat-message { gap: 10px; padding: 6px 8px; }
+.text-chat.room .history-button { align-self: center; }
+.room-welcome { align-items: center; padding: 24px 16px; color: var(--ink-muted); text-align: center; }
+.room-composer { display: flex; flex-direction: column; gap: 4px; margin: 0 12px 12px; padding: 0; box-shadow: none; background: none; }
+.room-composer .composer-hint { min-height: 16px; margin-left: 4px; }
+.room-composer textarea { min-height: 44px; border-radius: var(--radius-lg); }
 
 .call-screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; width: 100%; max-width: 1100px; margin: 16px auto 0; }
 .call-screen { position: relative; margin: 0; overflow: hidden; border-radius: var(--radius-lg); background: #000; aspect-ratio: 16 / 9; }

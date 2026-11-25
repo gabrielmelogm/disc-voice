@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import type { VoiceParticipant } from "@disc-voice/shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatMessage, RealtimeEvent, VoiceParticipant } from "@disc-voice/shared";
+import { api } from "../lib/api";
+import type { Realtime } from "../lib/realtime";
 import type { Voice, VoiceState } from "../lib/voice";
 import { CameraButton, ScreenButton } from "./AppBar";
 import { arrangeTiles, moveTile, signalLevel, VoiceChannel } from "./VoiceChannel";
@@ -21,6 +23,23 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
   };
 }
 
+function realtime() {
+  const listeners = new Set<(event: RealtimeEvent) => void>();
+  return {
+    client: {
+      onEvent: (fn: (event: RealtimeEvent) => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; },
+      send: vi.fn(),
+    } as unknown as Realtime,
+    emit: (event: RealtimeEvent) => act(() => listeners.forEach(listener => listener(event))),
+  };
+}
+
+/** Props of the room chat, with an empty history. */
+function chat() {
+  vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+  return { realtime: realtime().client, revision: 1 };
+}
+
 function voice() {
   return {
     startScreen: vi.fn().mockResolvedValue(undefined), stopScreen: vi.fn(), join: vi.fn(), leave: vi.fn(), hangUp: vi.fn(), toggleMute: vi.fn(), toggleDeafen: vi.fn(),
@@ -31,10 +50,10 @@ function voice() {
 describe("VoiceChannel screen sharing", () => {
   it("starts and stops sharing from the app bar call controls", async () => {
     const controls = voice();
-    const view = render(<><ScreenButton voice={controls as unknown as Voice} state={state()} /><VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online /></>);
+    const view = render(<><ScreenButton voice={controls as unknown as Voice} state={state()} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online /></>);
     await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
     expect(controls.startScreen).toHaveBeenCalledOnce();
-    view.rerender(<><ScreenButton voice={controls as unknown as Voice} state={state({ screen: "picking" })} /><VoiceChannel channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online /></>);
+    view.rerender(<><ScreenButton voice={controls as unknown as Voice} state={state({ screen: "picking" })} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online /></>);
     expect(screen.getByText(/Escolha uma tela ou janela/)).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Cancelar escolha da tela" }));
     expect(controls.stopScreen).toHaveBeenCalledOnce();
@@ -48,17 +67,17 @@ describe("VoiceChannel screen sharing", () => {
 
   it("shows who is sharing and their screen once it arrives", () => {
     const controls = voice() as unknown as Voice;
-    const view = render(<VoiceChannel channel={channel} voice={controls} state={state()} participants={[self, friend]} online />);
+    const view = render(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state()} participants={[self, friend]} online />);
     expect(screen.getByLabelText("Compartilhando a tela")).toBeVisible();
     expect(screen.getByText("Recebendo a tela de Bia…")).toBeVisible();
     const stream = {} as MediaStream;
-    view.rerender(<VoiceChannel channel={channel} voice={controls} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText<HTMLVideoElement>("Tela de Bia").srcObject).toBe(stream);
   });
 
   it("draws screens from the native call engine on a canvas", () => {
     const pull = vi.fn(() => new Promise<ArrayBuffer>(() => {}));
-    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state({ native: true, remoteScreens: { friend: { pull } } })} participants={[self, friend]} online />);
+    render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ native: true, remoteScreens: { friend: { pull } } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText("Tela de Bia").tagName).toBe("CANVAS");
   });
 });
@@ -94,16 +113,16 @@ describe("VoiceChannel webcam", () => {
     const controls = voice() as unknown as Voice;
     const camFriend = { ...friend, screen: false, camera: true };
     const local = {} as MediaStream;
-    const view = render(<VoiceChannel channel={channel} voice={controls} state={state({ camera: "live", localCamera: local })} participants={[self, camFriend]} online />);
+    const view = render(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state({ camera: "live", localCamera: local })} participants={[self, camFriend]} online />);
     expect(screen.getByLabelText<HTMLVideoElement>("Sua câmera").srcObject).toBe(local);
     expect(screen.getByLabelText("Sua câmera")).toHaveClass("mirrored");
     expect(screen.getByText("Carregando câmera…")).toBeVisible();
     const pull = vi.fn(() => new Promise<ArrayBuffer>(() => {}));
-    view.rerender(<VoiceChannel channel={channel} voice={controls} state={state({ camera: "live", localCamera: local, remoteCameras: { friend: { pull } } })} participants={[self, camFriend]} online />);
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state({ camera: "live", localCamera: local, remoteCameras: { friend: { pull } } })} participants={[self, camFriend]} online />);
     expect(screen.getByLabelText("Câmera de Bia").tagName).toBe("CANVAS");
     expect(screen.getByLabelText("Câmera de Bia")).not.toHaveClass("mirrored");
     // A camera that was turned off shows the avatar again, even if its track remains.
-    view.rerender(<VoiceChannel channel={channel} voice={controls} state={state({ remoteCameras: { friend: { pull } } })} participants={[self, { ...camFriend, camera: false }]} online />);
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state({ remoteCameras: { friend: { pull } } })} participants={[self, { ...camFriend, camera: false }]} online />);
     expect(screen.queryByLabelText("Câmera de Bia")).toBeNull();
     expect(screen.queryByLabelText("Sua câmera")).toBeNull();
   });
@@ -111,7 +130,7 @@ describe("VoiceChannel webcam", () => {
 
 describe("VoiceChannel ping", () => {
   it("shows a signal for everyone in the call, with the ping on hover", async () => {
-    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state({ latency: { friend: 212 }, serverLatency: 34 })} participants={[self, friend]} online />);
+    render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ latency: { friend: 212 }, serverLatency: 34 })} participants={[self, friend]} online />);
     const friendTile = screen.getByRole("listitem", { name: /^Bia\./ });
     const signal = within(friendTile).getByLabelText("Ping: 212 ms");
     expect(signal).toHaveClass("fair");
@@ -121,9 +140,9 @@ describe("VoiceChannel ping", () => {
   });
 
   it("says it is measuring until a ping arrives, and hides it outside the call", () => {
-    const view = render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online />);
+    const view = render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online />);
     expect(screen.getByLabelText("Ping: medindo…")).toHaveClass("unknown");
-    view.rerender(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state({ channel: null, status: "idle" })} participants={[self, friend]} online />);
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ channel: null, status: "idle" })} participants={[self, friend]} online />);
     expect(screen.queryByLabelText(/Ping/)).toBeNull();
   });
 
@@ -142,7 +161,7 @@ describe("VoiceChannel tile order", () => {
 
   it("reorders tiles by dragging and keeps the order while the app runs", () => {
     const room = { ...channel, id: "voice-drag" };
-    const view = render(<VoiceChannel channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[self, friend, bob]} online />);
+    const view = render(<VoiceChannel {...chat()} channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[self, friend, bob]} online />);
     expect(names()).toEqual(["Amigo", "Bia", "Bob"]);
     const [first, , last] = screen.getAllByRole("listitem");
     fireEvent.dragStart(last);
@@ -153,13 +172,13 @@ describe("VoiceChannel tile order", () => {
     // Leaving the channel view and coming back keeps it; newcomers go last.
     view.unmount();
     const carol = { ...bob, peerId: "carol", user: { ...user, id: "user-4", name: "Carol" } };
-    render(<VoiceChannel channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[carol, self, friend, bob]} online />);
+    render(<VoiceChannel {...chat()} channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[carol, self, friend, bob]} online />);
     expect(names()).toEqual(["Bob", "Amigo", "Bia", "Carol"]);
   });
 
   it("moves the focused tile with Alt and the arrow keys", () => {
     const room = { ...channel, id: "voice-keys" };
-    render(<VoiceChannel channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[self, friend, bob]} online />);
+    render(<VoiceChannel {...chat()} channel={room} voice={voice() as unknown as Voice} state={state({ channel: room })} participants={[self, friend, bob]} online />);
     fireEvent.keyDown(screen.getAllByRole("listitem")[0], { key: "ArrowRight", altKey: true });
     expect(names()).toEqual(["Bia", "Amigo", "Bob"]);
     fireEvent.keyDown(screen.getAllByRole("listitem")[0], { key: "ArrowLeft", altKey: true });
@@ -173,5 +192,54 @@ describe("VoiceChannel tile order", () => {
     expect(arrangeTiles(people, ["c", "a"]).map(p => p.user.id)).toEqual(["c", "a", "b"]);
     expect(moveTile(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
     expect(moveTile(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+  });
+});
+
+describe("VoiceChannel room chat", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const owner = { ...user, id: "user-2", name: "Bia" };
+  const sent = (id: string, content: string, author = user): ChatMessage => ({
+    id, channelId: channel.id, clientId: `c-${id}`, author, content, createdAt: new Date().toISOString(),
+  });
+
+  it("loads the room history, shows roles and takes messages live", async () => {
+    vi.spyOn(api, "messages").mockResolvedValue({ messages: [sent("1", "Começando a pauta", owner)], hasMore: false });
+    const live = realtime();
+    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online
+      realtime={live.client} revision={1} self={user} roles={{ [owner.id]: "owner" }} />);
+    const panel = screen.getByRole("complementary", { name: "Chat da chamada" });
+    expect(await within(panel).findByText("Começando a pauta")).toBeVisible();
+    expect(within(panel).getByText("Dono")).toHaveClass("role-badge");
+    expect(api.messages).toHaveBeenCalledWith(channel.id, {}, expect.anything());
+
+    live.emit({ type: "message.created", message: sent("2", "Link: https://example.com", owner), channelType: "voice" });
+    expect(within(panel).getByText(/Link:/)).toBeVisible();
+    // Messages of other channels stay out.
+    live.emit({ type: "message.created", message: { ...sent("3", "Em outro canal"), channelId: "text-1" } });
+    expect(within(panel).queryByText("Em outro canal")).not.toBeInTheDocument();
+  });
+
+  it("sends messages to the voice channel", async () => {
+    const chatProps = chat();
+    const send = vi.spyOn(api, "sendMessage").mockImplementation(async (_channel, clientId, content) => ({ ...sent("5", content), clientId }));
+    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online {...chatProps} self={user} />);
+    const field = screen.getByRole("textbox", { name: "Mensagem para o chat da sala" });
+    expect(field).toHaveAttribute("placeholder", "Escrever em conversa");
+    await userEvent.type(field, "Sem microfone hoje{Enter}");
+    expect(send).toHaveBeenCalledWith(channel.id, expect.any(String), "Sem microfone hoje");
+    expect(await screen.findByText("Sem microfone hoje")).toBeVisible();
+    expect(field).toHaveValue("");
+  });
+
+  it("closes and reopens the panel without leaving the call", async () => {
+    const controls = voice();
+    render(<VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online />);
+    await userEvent.click(screen.getByRole("button", { name: "Fechar chat da sala" }));
+    expect(screen.queryByRole("complementary", { name: "Chat da chamada" })).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Participantes do canal de voz" })).toBeVisible();
+    expect(controls.leave).not.toHaveBeenCalled();
+    expect(controls.hangUp).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir chat da sala" }));
+    expect(screen.getByRole("textbox", { name: "Mensagem para o chat da sala" })).toBeVisible();
   });
 });

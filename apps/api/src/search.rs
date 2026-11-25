@@ -144,6 +144,7 @@ pub(crate) async fn search(
                    JOIN members m ON m.server_id = c.server_id AND m.user_id = $1
                    JOIN servers s ON s.id = c.server_id
                    WHERE to_tsvector('simple', msg.content) @@ to_tsquery('simple', $2)
+                     AND c.type = 'text'
                      AND ($3::bigint IS NULL OR msg.id < $3)
                    ORDER BY msg.id DESC
                    LIMIT $4"#,

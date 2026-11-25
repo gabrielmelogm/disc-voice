@@ -170,7 +170,7 @@ pub(crate) async fn list(
     Path(id): Path<Uuid>,
     Query(input): Query<History>,
 ) -> ApiResult<Json<Page>> {
-    require_channel(&state.db, id, user.id, "text").await?;
+    require_channel(&state.db, id, user.id, MESSAGES).await?;
     if input.before.is_some() && input.after.is_some() {
         return Err(ApiError::bad("Use apenas before ou after."));
     }
@@ -221,7 +221,7 @@ pub(crate) async fn send(
     Path(id): Path<Uuid>,
     Json(input): Json<SendMessage>,
 ) -> ApiResult<Json<MessageView>> {
-    let channel = require_channel(&state.db, id, user.id, "text").await?;
+    let channel = require_channel(&state.db, id, user.id, MESSAGES).await?;
     // New messages would land among the history still being imported.
     let importing = match channel.server_id {
         Some(server) if channel.source == "discord" => crate::discord::importing(&state.db, server)
@@ -309,7 +309,9 @@ async fn publish_to_members(
         &members,
         serde_json::json!({
             "type": "message.created", "message": view,
-            "serverId": server, "serverName": server_name, "channelName": channel.name
+            "serverId": server, "serverName": server_name, "channelName": channel.name,
+            // Room chat of a voice channel: clients keep it out of unread badges.
+            "channelType": channel.kind
         }),
     );
     Ok(())

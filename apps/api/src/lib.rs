@@ -822,6 +822,21 @@ struct ChannelInput {
     kind: ChannelKind,
 }
 
+/// Channels that hold messages: text channels, direct messages and the room
+/// chat of voice channels.
+const MESSAGES: &str = "messages";
+
+/// Whether an operation on channels of `kind` accepts a channel of `actual`.
+fn kind_allows(kind: &str, actual: &str) -> bool {
+    match kind {
+        // Direct messages hold messages like text channels do.
+        "text" => matches!(actual, "text" | "dm"),
+        MESSAGES => matches!(actual, "text" | "dm" | "voice"),
+        _ => kind == actual,
+    }
+}
+
+/// `kind` is a channel type, or [`MESSAGES`] for any channel with messages.
 async fn require_channel(
     db: &DatabaseConnection,
     id: Uuid,
@@ -838,8 +853,7 @@ async fn require_channel(
             dms::require_participant(db, channel.id, user).await?;
         }
     }
-    // Direct messages hold messages like text channels do.
-    if channel.kind != kind && !(kind == "text" && channel.kind == "dm") {
+    if !kind_allows(kind, &channel.kind) {
         return Err(ApiError::bad(
             "Este tipo de canal não suporta esta operação.",
         ));

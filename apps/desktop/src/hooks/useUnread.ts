@@ -34,7 +34,8 @@ export function useUnread(realtime: Realtime, revision: number, { userId, server
   }, [revision, serverId, reload]);
 
   useEffect(() => realtime.onEvent(event => {
-    if (event.type === "message.created") {
+    // A voice room's chat belongs to the call: it has no unread badge.
+    if (event.type === "message.created" && event.channelType !== "voice") {
       const { message } = event;
       const seen = latest.current.get(message.channelId);
       if (!seen || newer(message.id, seen)) latest.current.set(message.channelId, message.id);
