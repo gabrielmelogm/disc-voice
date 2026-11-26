@@ -1,14 +1,6 @@
-#[cfg(windows)]
-use crate::tray;
-use crate::{call, camera, discord_rpc, notify, screen};
+use crate::{call, camera, discord_rpc, notify, screen, tray};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
-
-/// Whether the app can live in the system tray (Windows only for now).
-#[tauri::command]
-fn tray_supported() -> bool {
-    cfg!(windows)
-}
 
 #[tauri::command]
 async fn list_audio_devices(engine: tauri::State<'_, AudioEngine>) -> Result<AudioDevices, String> {
@@ -68,13 +60,11 @@ fn save_theme_template<R: tauri::Runtime>(
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
-    // Opening the app again while it sits in the tray brings back the running one.
-    #[cfg(windows)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-        tray::show_main(app)
-    }));
-    builder
+    tauri::Builder::default()
+        // Opening the app again while it sits in the tray brings back the running one.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show_main(app)
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_oauth::init())
@@ -86,8 +76,7 @@ pub fn run() {
             call::manage(app).map_err(std::io::Error::other)?;
             notify::manage(app);
             discord_rpc::manage(app);
-            #[cfg(windows)]
-            tray::manage(app)?;
+            tray::manage(app);
             // On Windows the frontend draws its own title bar to match the app theme.
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
@@ -99,10 +88,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            #[cfg(windows)]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // The call and the connection keep running; Quit in the tray menu exits.
-                if window.state::<tray::TrayState>().close_to_tray() {
+                if tray::hides_on_close(window) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -146,11 +134,9 @@ pub fn run() {
             call::native::call_video_frame,
             notify::show_notification,
             discord_rpc::discord_presence,
-            tray_supported,
             save_theme_template,
-            #[cfg(windows)]
+            tray::tray_supported,
             tray::set_close_to_tray,
-            #[cfg(windows)]
             tray::set_tray_status,
         ])
         .run(tauri::generate_context!())

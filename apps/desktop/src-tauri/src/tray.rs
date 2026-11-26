@@ -1,18 +1,23 @@
 //! System tray: the app keeps running there after its window is closed.
 //!
-//! A left click brings the window back. The right-click menu opens one of the recently
-//! used servers, mutes or unmutes the microphone during a call, and quits for real. The
-//! icon gets a green dot while the user is in a call. The page tells this module what
-//! to show (`set_tray_status`) and acts on the `tray-*` events it emits.
+//! The menu opens the window or one of the recently used servers, mutes or unmutes the
+//! microphone during a call, and quits for real. On Windows a left click also brings the
+//! window back; AppIndicator (Linux) has no click events and opens the menu on any click,
+//! and shows no tooltip. The icon gets a green dot while the user is in a call. The page
+//! tells this module what to show (`set_tray_status`) and acts on the `tray-*` events it
+//! emits.
 //!
-//! Windows only for now; elsewhere closing the window quits as before.
+//! On Linux the icon needs the AppIndicator library and a panel that shows tray icons
+//! (GNOME only does with the AppIndicator extension). Without them closing the window
+//! quits, as there would be no way back to a hidden one.
 
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Window};
 
 const TRAY_ID: &str = "main";
 const ICON: &[u8] = include_bytes!("../icons/32x32.png");
@@ -27,14 +32,85 @@ const RECENT_TITLE: &str = "recent";
 const SERVER_PREFIX: &str = "server:";
 
 /// Whether closing the window sends the app to the tray (the page keeps it in sync).
-pub struct TrayState {
+struct TrayState {
     close_to_tray: AtomicBool,
 }
 
-impl TrayState {
-    pub fn close_to_tray(&self) -> bool {
-        self.close_to_tray.load(Ordering::Relaxed)
+/// The one tray menu. AppIndicator cannot swap a tray's menu for another, so its items
+/// are rewritten instead, and only when they change.
+struct TrayMenu<R: Runtime> {
+    menu: Menu<R>,
+    shown: Mutex<Shown>,
+}
+
+struct Shown {
+    in_call: bool,
+    entries: Vec<Entry>,
+}
+
+#[cfg(windows)]
+mod platform {
+    pub fn can_build() -> bool {
+        true
     }
+
+    pub fn shows_icons() -> bool {
+        true
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::sync::OnceLock;
+    use webkit2gtk::gio;
+    use webkit2gtk::glib::{ToVariant, VariantTy};
+
+    /// tray-icon loads the AppIndicator library on first use and panics if it is missing.
+    pub fn can_build() -> bool {
+        static FOUND: OnceLock<bool> = OnceLock::new();
+        *FOUND.get_or_init(|| {
+            ["libayatana-appindicator3.so.1", "libappindicator3.so.1"]
+                .iter()
+                // SAFETY: these libraries run no code of their own when loaded.
+                .any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+        })
+    }
+
+    /// Whether a panel shows tray icons: KDE, most other desktops and GNOME with the
+    /// AppIndicator extension own this D-Bus name. Checked each time, since the user can
+    /// turn the extension on or off while the app runs.
+    pub fn shows_icons() -> bool {
+        let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+            return false;
+        };
+        bus.call_sync(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            Some(&("org.kde.StatusNotifierWatcher",).to_variant()),
+            VariantTy::new("(b)").ok(),
+            gio::DBusCallFlags::NONE,
+            1000,
+            gio::Cancellable::NONE,
+        )
+        .ok()
+        .and_then(|reply| reply.get::<(bool,)>())
+        .is_some_and(|(owned,)| owned)
+    }
+}
+
+/// Whether the tray icon exists and the desktop shows it.
+fn available<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.tray_by_id(TRAY_ID).is_some() && platform::shows_icons()
+}
+
+/// Whether closing this window should hide it in the tray instead of quitting.
+pub fn hides_on_close<R: Runtime>(window: &Window<R>) -> bool {
+    window
+        .try_state::<TrayState>()
+        .is_some_and(|state| state.close_to_tray.load(Ordering::Relaxed))
+        && available(window.app_handle())
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -165,17 +241,18 @@ fn icon(in_call: bool) -> tauri::Result<Image<'static>> {
     ))
 }
 
-fn build_menu<R: Runtime>(app: &AppHandle<R>, status: &TrayStatus) -> tauri::Result<Menu<R>> {
-    let menu = Menu::new(app)?;
-    for entry in menu_entries(status) {
+/// Replaces the menu's items with these entries.
+fn fill<R: Runtime>(app: &AppHandle<R>, menu: &Menu<R>, entries: &[Entry]) -> tauri::Result<()> {
+    while menu.remove_at(0)?.is_some() {}
+    for entry in entries {
         match entry {
             Entry::Item { id, text, enabled } => {
-                menu.append(&MenuItem::with_id(app, id, text, enabled, None::<&str>)?)?
+                menu.append(&MenuItem::with_id(app, id, text, *enabled, None::<&str>)?)?
             }
             Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
         }
     }
-    Ok(menu)
+    Ok(())
 }
 
 /// Brings the main window back from the tray, the taskbar or behind other windows.
@@ -214,37 +291,78 @@ fn on_icon<R: Runtime>(tray: &TrayIcon<R>, event: TrayIconEvent) {
     }
 }
 
-pub fn manage<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    app.manage(TrayState {
-        close_to_tray: AtomicBool::new(true),
-    });
+fn build<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let handle = app.handle();
     let status = TrayStatus::default();
+    let entries = menu_entries(&status);
+    let menu = Menu::new(handle)?;
+    fill(handle, &menu, &entries)?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon(false)?)
         .tooltip(tooltip(&status))
-        .menu(&build_menu(handle, &status)?)
+        .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)
         .on_tray_icon_event(on_icon)
         .build(app)?;
+    app.manage(TrayMenu {
+        menu,
+        shown: Mutex::new(Shown {
+            in_call: false,
+            entries,
+        }),
+    });
     Ok(())
 }
 
+/// Creates the tray icon where it can be. Without one the app still runs, and closing
+/// the window quits.
+pub fn manage<R: Runtime>(app: &tauri::App<R>) {
+    app.manage(TrayState {
+        close_to_tray: AtomicBool::new(true),
+    });
+    if !platform::can_build() {
+        eprintln!("Bandeja do sistema indisponível: instale a libayatana-appindicator3");
+        return;
+    }
+    if let Err(error) = build(app) {
+        eprintln!("Não foi possível criar o ícone da bandeja: {error}");
+    }
+}
+
+/// Whether the app can live in the system tray right now.
 #[tauri::command]
-pub fn set_close_to_tray(state: tauri::State<'_, TrayState>, enabled: bool) {
-    state.close_to_tray.store(enabled, Ordering::Relaxed);
+pub fn tray_supported<R: Runtime>(app: AppHandle<R>) -> bool {
+    available(&app)
+}
+
+#[tauri::command]
+pub fn set_close_to_tray(app: AppHandle<impl Runtime>, enabled: bool) {
+    if let Some(state) = app.try_state::<TrayState>() {
+        state.close_to_tray.store(enabled, Ordering::Relaxed);
+    }
 }
 
 #[tauri::command]
 pub fn set_tray_status<R: Runtime>(app: AppHandle<R>, status: TrayStatus) -> Result<(), String> {
-    let tray = app
-        .tray_by_id(TRAY_ID)
-        .ok_or("Ícone da bandeja indisponível")?;
+    let (Some(tray), Some(menu)) = (app.tray_by_id(TRAY_ID), app.try_state::<TrayMenu<R>>()) else {
+        return Err("Ícone da bandeja indisponível".into());
+    };
+    let mut shown = menu.shown.lock().unwrap_or_else(PoisonError::into_inner);
     (|| -> tauri::Result<()> {
-        tray.set_icon(Some(icon(status.call.is_some())?))?;
+        let in_call = status.call.is_some();
+        // On Linux every new icon is written to a file: only change it when it differs.
+        if shown.in_call != in_call {
+            tray.set_icon(Some(icon(in_call)?))?;
+            shown.in_call = in_call;
+        }
         tray.set_tooltip(Some(tooltip(&status)))?;
-        tray.set_menu(Some(build_menu(&app, &status)?))
+        let entries = menu_entries(&status);
+        if shown.entries != entries {
+            fill(&app, &menu.menu, &entries)?;
+            shown.entries = entries;
+        }
+        Ok(())
     })()
     .map_err(|error| error.to_string())
 }

@@ -1443,6 +1443,7 @@ dependencies = [
  "disc-audio",
  "disc-call",
  "disc-video",
+ "libloading 0.8.9",
  "serde",
  "serde_json",
  "tauri",

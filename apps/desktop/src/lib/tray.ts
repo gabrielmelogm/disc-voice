@@ -28,12 +28,12 @@ function read(): WindowPrefs {
   } catch { return { ...defaults }; }
 }
 
-let support: Promise<boolean> | null = null;
-
-/** Whether the app can live in the system tray (Windows only for now). */
+/**
+ * Whether the app can live in the system tray. Asked each time: on Linux the panel that
+ * shows tray icons can come and go (GNOME's AppIndicator extension) while the app runs.
+ */
 export function traySupported() {
-  support ??= isTauri() ? invoke<boolean>("tray_supported").then(value => value === true, () => false) : Promise.resolve(false);
-  return support;
+  return isTauri() ? invoke<boolean>("tray_supported").then(value => value === true, () => false) : Promise.resolve(false);
 }
 
 export function useTraySupported() {
@@ -46,9 +46,12 @@ export function useTraySupported() {
   return supported;
 }
 
-/** Calls the tray backend; where there is no tray, or if it fails, nothing happens. */
+/**
+ * Calls the tray backend, which keeps the state even while no tray shows the icon;
+ * without an icon, or if it fails, nothing happens.
+ */
 function call(command: string, args: Record<string, unknown>) {
-  void traySupported().then(supported => supported ? invoke(command, args) : undefined).catch(() => {});
+  if (isTauri()) invoke(command, args).catch(() => {});
 }
 
 let current = read();

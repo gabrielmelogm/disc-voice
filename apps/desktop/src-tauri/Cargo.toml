@@ -9,7 +9,9 @@ rust-version = "1.85"
 tauri-build = { version = "2", features = [] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Opening the app again while it runs in the tray brings back that window.
+tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 # Google Sign-In: a loopback server for the OAuth redirect, and the system browser.
 tauri-plugin-oauth = "2"
@@ -20,12 +22,11 @@ disc-audio = { path = "../../../packages/audio-engine" }
 disc-video = { path = "../../../packages/video-engine" }
 
 [target.'cfg(windows)'.dependencies]
-# The system tray is Windows only for now.
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-single-instance = "2"
 tauri-winrt-notification = "0.8"
 winreg = "0.56"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 disc-call = { path = "../../../packages/call-engine" }
 webkit2gtk = { version = "2.0", features = ["v2_38"] }
+# Checks for the AppIndicator library before the tray uses it (it panics without it).
+libloading = "0.8"
