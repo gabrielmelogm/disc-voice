@@ -1,9 +1,14 @@
 name: Terraform
 
-# Applies infra/terraform (Lightsail host of the API) on pushes to main.
+# Applies infra/terraform (Lightsail host of the API).
+#
+# - Push to main: applies automatically only when the plan does not change the
+#   monthly cost. A plan that changes it stops here and waits for approval.
+# - Approval: @gabrielmelogm runs this workflow manually (Run workflow) on main
+#   with `approve_costs` checked. Nobody else can apply a cost change.
+#
 # AWS access comes from OIDC: the role in AWS_ROLE_ARN only trusts main of this
-# repository (created by infra/terraform/bootstrap). The bootstrap itself is
-# applied by hand, never here.
+# repository (created by infra/terraform/bootstrap, which is applied by hand).
 on:
   push:
     branches: [main]
@@ -11,7 +16,13 @@ on:
       - infra/terraform/**
       - "!infra/terraform/bootstrap/**"
       - .github/workflows/terraform.yml
+      - .github/scripts/terraform-cost.js
   workflow_dispatch:
+    inputs:
+      approve_costs:
+        description: Aprovar mudanças que alteram o custo mensal (só gabrielmelogm)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +36,11 @@ concurrency:
 defaults:
   run:
     working-directory: infra/terraform
+
+env:
+  # Only this GitHub user (login and immutable id) may approve cost changes.
+  COST_APPROVER: gabrielmelogm
+  COST_APPROVER_ID: "73313748"
 
 jobs:
   apply:
@@ -54,4 +70,37 @@ jobs:
             echo "::error::Plan deletes or replaces: $destructive"
             exit 1
           fi
+      - name: Cost approval
+        env:
+          EVENT: ${{ github.event_name }}
+          APPROVE: ${{ inputs.approve_costs }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          aws lightsail get-bundles --include-inactive --query 'bundles[].{id:bundleId,price:price}' --output json > bundles.json
+          cost=$(node "$GITHUB_WORKSPACE/.github/scripts/terraform-cost.js" plan.json bundles.json)
+          before=$(jq -r .before <<<"$cost"); after=$(jq -r .after <<<"$cost")
+          echo "Custo mensal estimado: US\$ $before -> US\$ $after"
+          {
+            echo "### Custo mensal estimado"
+            echo "US\$ $before → US\$ $after"
+            unknown=$(jq -r '.unknown | join(", ")' <<<"$cost")
+            [ -n "$unknown" ] && echo "Sem preço conhecido: $unknown"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r .changesCost <<<"$cost")" != "true" ]; then
+            echo "Sem mudança de custo: apply automático."
+            exit 0
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$APPROVE" = "true" ] \
+            && [ "$ACTOR" = "$COST_APPROVER" ] && [ "$ACTOR_ID" = "$COST_APPROVER_ID" ] \
+            && [ "$TRIGGERING_ACTOR" = "$COST_APPROVER" ]; then
+            echo "Mudança de custo aprovada por $ACTOR."
+            echo "Aprovado por @$ACTOR." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          msg="O plano muda o custo mensal (US\$ $before -> US\$ $after). Só @$COST_APPROVER pode aplicar: Actions > Terraform > Run workflow na main, com approve_costs marcado."
+          echo "::error::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       - run: terraform apply -input=false tfplan
