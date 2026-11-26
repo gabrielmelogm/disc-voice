@@ -203,8 +203,9 @@ describe("dropping files on the window", () => {
   });
 
   it("lets the webview, not the native window, receive dropped files", async () => {
-    const { readFileSync } = await import("node:fs");
-    const config = JSON.parse(readFileSync(`${process.cwd()}/src-tauri/tauri.conf.json`, "utf8"));
+    // Imported as JSON, not read with node:fs: the browser build (api.Dockerfile)
+    // type-checks the tests without the website workspace, so no @types/node.
+    const { default: config } = await import("../../src-tauri/tauri.conf.json");
     // With Tauri's native drop handler on, WebView2 never fires `drop` with the files.
     expect(config.app.windows[0].dragDropEnabled).toBe(false);
   });
