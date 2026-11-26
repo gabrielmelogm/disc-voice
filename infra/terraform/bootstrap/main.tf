@@ -93,7 +93,7 @@ data "aws_iam_policy_document" "github_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = ["${var.github_subject_prefix}:ref:refs/heads/main"]
     }
   }
 }
@@ -150,7 +150,7 @@ data "aws_iam_policy_document" "github_plan_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:pull_request"]
+      values   = ["${var.github_subject_prefix}:pull_request"]
     }
   }
 }
@@ -191,10 +191,14 @@ variable "region" {
   default = "sa-east-1"
 }
 
-variable "github_repository" {
-  description = "owner/name of the repository whose main branch may assume the role"
+# The repository uses GitHub's immutable OIDC subject (owner and repository IDs
+# included), so renaming the repository or owner does not grant access to a
+# look-alike. Read it with:
+#   gh api repos/gabrielmelogm/disc-voice/actions/oidc/customization/sub
+variable "github_subject_prefix" {
+  description = "OIDC `sub` prefix of the repository whose workflows may assume the roles"
   type        = string
-  default     = "gabrielmelogm/disc-voice"
+  default     = "repo:gabrielmelogm@73313748/disc-voice@1461930131"
 }
 
 output "github_role_arn" {
