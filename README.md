@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/gabrielmelogm/disc-voice/releases"><img src="https://img.shields.io/badge/Baixar%20para%20Windows-0.1.0-6410c9?style=for-the-badge&amp;logo=windows11&amp;logoColor=white" alt="Baixar para Windows" /></a>
+  <a href="https://github.com/gabrielmelogm/disc-voice/releases"><img src="https://img.shields.io/badge/Baixar%20para%20Windows-0.1.0--alpha.1-6410c9?style=for-the-badge&amp;logo=windows11&amp;logoColor=white" alt="Baixar para Windows" /></a>
   <a href="DOCS.md"><img src="https://img.shields.io/badge/Documenta%C3%A7%C3%A3o-DOCS.md-262032?style=for-the-badge&amp;logo=readthedocs&amp;logoColor=white" alt="Documentação" /></a>
   <a href="https://github.com/gabrielmelogm/disc-voice/issues/new"><img src="https://img.shields.io/badge/Reportar%20bug-Abrir%20issue-f397aa?style=for-the-badge&amp;logo=github&amp;logoColor=14111c" alt="Reportar bug" /></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/vers%C3%A3o-0.1.0-6410c9?style=flat-square" alt="Versão 0.1.0" />
+  <img src="https://img.shields.io/badge/vers%C3%A3o-0.1.0--alpha.1-6410c9?style=flat-square" alt="Versão 0.1.0-alpha.1" />
   <img src="https://img.shields.io/badge/Windows-10%2F11%20x64-0078D4?style=flat-square&amp;logo=windows11&amp;logoColor=white" alt="Windows 10/11 x64" />
   <img src="https://img.shields.io/badge/Web-navegador-a66bf4?style=flat-square&amp;logo=googlechrome&amp;logoColor=white" alt="Web no navegador" />
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&amp;logo=tauri&amp;logoColor=white" alt="Tauri 2" />
@@ -50,7 +50,7 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 
 ## 🖥️ Plataformas e instalação
 
-**Versão atual:** `0.1.0`
+**Versão atual:** `0.1.0-alpha.1`
 
 | Plataforma | Instalação | Disponibilidade |
 |:--|:--|:--|
@@ -65,7 +65,7 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 
 ### Instalar no Windows
 
-1. **Baixe o instalador** `Disc Voice_0.1.0_x64-setup.exe` na página de
+1. **Baixe o instalador** `Disc Voice_0.1.0-alpha.1_x64-setup.exe` na página de
    [Releases](https://github.com/gabrielmelogm/disc-voice/releases). Se ainda não houver
    uma release publicada, baixe o artefato **`disc-voice-windows`** na execução mais recente
    do workflow [Windows](https://github.com/gabrielmelogm/disc-voice/actions/workflows/windows.yml).
@@ -104,7 +104,7 @@ Toda ajuda é bem-vinda! Antes de abrir uma issue:
 
 - 🔍 Procure nas [issues existentes](https://github.com/gabrielmelogm/disc-voice/issues)
   para evitar relatos duplicados.
-- ⬆️ Confirme se o problema acontece na versão mais recente (**0.1.0**).
+- ⬆️ Confirme se o problema acontece na versão mais recente (**0.1.0-alpha.1**).
 - 🧪 Se possível, tente reproduzir o bug mais de uma vez.
 
 ### Como abrir uma issue
@@ -113,7 +113,7 @@ Toda ajuda é bem-vinda! Antes de abrir uma issue:
 2. Use um título claro e descritivo, como `[Bug] Microfone não aparece após conectar via USB`.
 3. Descreva o que aconteceu com o máximo de detalhes: passos para reproduzir, comportamento
    esperado e comportamento atual.
-4. Informe a **versão do Disc Voice** (`0.1.0`), a versão do Windows, o modelo do
+4. Informe a **versão do Disc Voice** (`0.1.0-alpha.1`), a versão do Windows, o modelo do
    microfone, da saída de áudio ou da webcam quando o problema for relacionado a dispositivos.
 5. Anexe prints, vídeos ou logs que ajudem a entender o problema.
 6. Clique em **Submit new issue** e acompanhe as respostas.
@@ -137,7 +137,7 @@ O que deveria ter acontecido.
 O que realmente aconteceu.
 
 ## Ambiente
-- Versão do Disc Voice: 0.1.0
+- Versão do Disc Voice: 0.1.0-alpha.1
 - Windows: 10/11 (build)
 - Microfone/saída/webcam (se aplicável):
 - Versão instalada ou versão web:
@@ -171,6 +171,6 @@ Sugestões e ideias de novas funcionalidades também são bem-vindas na
 <p align="center">
   <img src="public/icon.png" alt="" width="40" />
   <br />
-  <sub><strong>Disc Voice</strong> · versão 0.1.0 · feito com Tauri, React, Rust e TypeScript</sub><br />
+  <sub><strong>Disc Voice</strong> · versão 0.1.0-alpha.1 · feito com Tauri, React, Rust e TypeScript</sub><br />
   <sub>Projeto independente, sem vínculo com o Discord.</sub>
 </p>
