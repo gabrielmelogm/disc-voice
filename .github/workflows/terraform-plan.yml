@@ -10,6 +10,7 @@ on:
       - infra/terraform/**
       - "!infra/terraform/bootstrap/**"
       - .github/workflows/terraform-plan.yml
+      - .github/scripts/terraform-cost.js
 
 permissions:
   contents: read
@@ -93,30 +94,24 @@ jobs:
               }
 
               // Monthly cost of the Lightsail resources before and after the plan.
-              const prices = Object.fromEntries(JSON.parse(read('bundles.json') || '[]').map((b) => [b.id, b.price]));
-              const usd = (v) => `US$ ${v.toFixed(2)}`;
-              const STATIC_IP_IDLE = 0.005 * 730; // only charged while detached
-              const attached = (state) => new Set(changes.filter((r) => r.type === 'aws_lightsail_static_ip_attachment' && r.change[state]).map((r) => r.change[state].static_ip_name));
-              const rows = [];
-              let before = 0, after = 0;
-              const priced = ['aws_lightsail_instance', 'aws_lightsail_static_ip'];
-              for (const r of changes) {
-                if (!priced.includes(r.type)) continue;
-                const cost = (state) => {
-                  const v = r.change[state];
-                  if (!v) return 0;
-                  if (r.type === 'aws_lightsail_instance') return prices[v.bundle_id] ?? NaN;
-                  return attached(state).has(v.name) ? 0 : STATIC_IP_IDLE;
-                };
-                const b = cost('before'), a = cost('after');
-                before += b || 0; after += a || 0;
-                const detail = r.type === 'aws_lightsail_instance' ? ` (${(r.change.after || r.change.before).bundle_id})` : '';
-                rows.push(`| \`${r.address}\`${detail} | ${isNaN(b) ? '?' : usd(b)} | ${isNaN(a) ? '?' : usd(a)} |`);
+              const { estimate } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/terraform-cost.js`);
+              const cost = estimate(plan, JSON.parse(read('bundles.json') || '[]'));
+              const usd = (v) => (typeof v === 'number' && !Number.isNaN(v) ? `US$ ${v.toFixed(2)}` : '?');
+              lines.push('### Estimativa de custo mensal', '', '| Recurso | Antes | Depois |', '|---|---|---|');
+              for (const row of cost.rows) {
+                lines.push(`| \`${row.address}\`${row.detail ? ` (${row.detail})` : ''} | ${usd(row.before)} | ${usd(row.after)} |`);
               }
-              lines.push('### Estimativa de custo mensal', '', '| Recurso | Antes | Depois |', '|---|---|---|', ...rows);
-              const diff = after - before;
-              lines.push(`| **Total** | **${usd(before)}** | **${usd(after)}** (${diff >= 0 ? '+' : ''}${usd(diff)}) |`, '');
+              const diff = cost.after - cost.before;
+              lines.push(`| **Total** | **${usd(cost.before)}** | **${usd(cost.after)}** (${diff >= 0 ? '+' : ''}${usd(diff)}) |`, '');
+              if (cost.unknown.length) {
+                lines.push(`Sem preço conhecido: ${cost.unknown.map((a) => '`' + a + '`').join(', ')}`, '');
+              }
               lines.push('<sub>Preços dos planos do Lightsail na região (instância, com tráfego incluído; IP estático só é cobrado desanexado). Não inclui snapshots nem tráfego excedente.</sub>', '');
+              if (cost.changesCost) {
+                lines.push('> [!IMPORTANT]', '> Este plano muda o custo. Depois do merge, o apply automático para e só roda quando **@gabrielmelogm** disparar o workflow **Terraform** manualmente com `approve_costs` marcado.', '');
+              } else {
+                lines.push('✅ Sem mudança de custo: o apply roda automaticamente após o merge.', '');
+              }
             }
 
             let log = read('plan.txt') || 'Sem saída do plan.';
