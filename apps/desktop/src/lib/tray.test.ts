@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = vi.hoisted(() => {
-  const state = { supported: true };
+  const state = { supported: true, fail: false };
   return {
     state,
     isTauri: vi.fn(() => false),
-    invoke: vi.fn(async (command: string, ..._args: unknown[]): Promise<unknown> => command === "tray_supported" ? state.supported : undefined),
+    invoke: vi.fn(async (command: string, ..._args: unknown[]): Promise<unknown> => {
+      if (state.fail) throw new Error("Ícone da bandeja indisponível");
+      return command === "tray_supported" ? state.supported : undefined;
+    }),
   };
 });
 const events = vi.hoisted(() => {
@@ -44,6 +47,7 @@ describe("tray", () => {
     events.handlers.clear();
     tauri.isTauri.mockReturnValue(false);
     tauri.state.supported = true;
+    tauri.state.fail = false;
   });
 
   it("closes to the tray by default and persists the choice", async () => {
@@ -75,15 +79,22 @@ describe("tray", () => {
     expect(tauri.invoke).not.toHaveBeenCalled();
   });
 
-  it("does nothing where the app has no tray", async () => {
+  it("asks the app whether there is a tray each time", async () => {
     tauri.isTauri.mockReturnValue(true);
     tauri.state.supported = false;
     const tray = await load();
-    tray.syncTray({ call: "Geral", muted: false, recent: [] });
-    tray.setWindowPrefs({ closeToTray: false });
     expect(await tray.traySupported()).toBe(false);
-    await Promise.resolve();
-    expect(tauri.invoke.mock.calls.map(([command]) => command)).toEqual(["tray_supported"]);
+    tauri.state.supported = true;
+    expect(await tray.traySupported()).toBe(true);
+  });
+
+  it("ignores failures from the tray backend", async () => {
+    tauri.isTauri.mockReturnValue(true);
+    tauri.state.fail = true;
+    const tray = await load();
+    tray.syncTray({ call: "Geral", muted: false, recent: [] });
+    await vi.waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith("set_tray_status", expect.anything()));
+    expect(await tray.traySupported()).toBe(false);
   });
 
   it("sends the tray status", async () => {

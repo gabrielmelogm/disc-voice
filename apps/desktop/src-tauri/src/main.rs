@@ -14,7 +14,7 @@ mod linux;
 mod notify;
 #[cfg(any(windows, target_os = "linux"))]
 mod screen;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod tray;
 
 #[cfg(any(windows, target_os = "linux"))]
