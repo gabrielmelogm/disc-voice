@@ -59,9 +59,29 @@ pub(crate) struct Attachment {
     /// Still frame of an animated image, for people who prefer reduced motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still: Option<String>,
+    /// The sender deleted the file from their gallery: only the name is left.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 impl Attachment {
+    /// A file the sender uploaded (`id` is the file's id).
+    fn file(file: crate::entities::file::Model) -> Self {
+        Self {
+            id: file.id.to_string(),
+            url: crate::files::url(file.id, &file.name),
+            filename: file.name,
+            size: file.size.max(0) as u64,
+            content_type: Some(file.content_type),
+            width: file.width.map(|w| w as u32),
+            height: file.height.map(|h| h as u32),
+            unavailable: false,
+            provider: None,
+            still: None,
+            deleted: false,
+        }
+    }
+
     /// A GIF chosen in the Klipy picker. It stays on Klipy's CDN, as their
     /// terms ask: the API keeps only the link.
     fn gif(gif: crate::klipy::GifChoice) -> Self {
@@ -91,6 +111,7 @@ impl Attachment {
             unavailable: false,
             provider: Some("klipy".into()),
             still: gif.still,
+            deleted: false,
         }
     }
 }
@@ -257,6 +278,9 @@ pub(crate) struct SendMessage {
     content: String,
     /// A GIF from the Klipy picker; the text is then optional.
     gif: Option<crate::klipy::GifChoice>,
+    /// Ids of files the sender uploaded with `POST /files`.
+    #[serde(default)]
+    files: Vec<Uuid>,
 }
 
 pub(crate) async fn send(
@@ -280,10 +304,14 @@ pub(crate) async fn send(
         ));
     }
     let content = input.content.trim();
-    let attachments = match input.gif {
-        Some(gif) => vec![Attachment::gif(gif.validate()?)],
-        None => Vec::new(),
-    };
+    let mut attachments: Vec<Attachment> = crate::files::owned(&state, user.id, &input.files)
+        .await?
+        .into_iter()
+        .map(Attachment::file)
+        .collect();
+    if let Some(gif) = input.gif {
+        attachments.push(Attachment::gif(gif.validate()?));
+    }
     if (content.is_empty() && attachments.is_empty())
         || content.chars().count() > 4000
         || content.contains('\0')

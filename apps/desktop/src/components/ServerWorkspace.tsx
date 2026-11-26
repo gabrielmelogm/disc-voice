@@ -18,6 +18,7 @@ import { ChannelDetails, ChannelHeader, roomPresence, voiceOccupants } from "./C
 import { MembersDialog } from "./Members";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
+import { FilesDrawer } from "./FilesDrawer";
 import { FriendsPage, friendshipWith } from "./Friends";
 import { DiscordImportDialog } from "./DiscordImportDialog";
 import { DiscordOnboarding } from "./DiscordOnboarding";
@@ -50,6 +51,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [channelReload, setChannelReload] = useState(0);
   const [leaving, setLeaving] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   // Message to scroll to when its text channel opens (from a search result).
   const [focusMessage, setFocusMessage] = useState<{ channelId: string; messageId: string; nonce: number } | null>(null);
   // Channel to open once another server's channel list arrives (e.g. returning to a call).
@@ -342,7 +344,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
           canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
-          onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} onSearch={() => setSearching(true)} />
+          onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} onSearch={() => setSearching(true)} onFiles={() => setFilesOpen(true)} />
       </div>
     </div>
 
@@ -357,6 +359,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
       leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} realtime={realtime.client} />}
     {search}
+    {filesOpen && <FilesDrawer onClose={() => setFilesOpen(false)} />}
     {newDm && <NewMessageDialog selfId={user.id} onClose={() => setNewDm(false)} onPick={async person => { await messagePerson(person); setNewDm(false); }} />}
     {discordOpen && server && <DiscordImportDialog server={server} realtime={realtime.client} onClose={() => setDiscordOpen(false)}
       onOpenChannel={id => { setDiscordOpen(false); goToChannel(server.id, id); }} />}

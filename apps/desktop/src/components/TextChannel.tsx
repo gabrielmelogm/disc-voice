@@ -1,12 +1,13 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { Channel, ChatMessage, GifChoice, MemberRole, User } from "@disc-voice/shared";
-import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import type { Channel, ChatMessage, CloudFile, GifChoice, MemberRole, User } from "@disc-voice/shared";
+import { FileText, History, MessageSquareText, Plus, SendHorizontal, Smile, Upload, X } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
+import { fileProblem, MAX_FILES_PER_MESSAGE, uploadFile } from "../lib/files";
 import type { Realtime } from "../lib/realtime";
 import { GifImage, GifPicker } from "./GifPicker";
-import { Attachments, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
+import { Attachments, fileSize, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
 import { RoleBadge } from "./Members";
 import { ProfileButton } from "./ProfileCard";
 import { Avatar } from "./ui";
@@ -19,7 +20,36 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
   return [...unique.values()].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
 }
 
-interface Pending { clientId: string; content: string; gif?: GifChoice; error: string; sending: boolean }
+interface Pending { clientId: string; content: string; gif?: GifChoice; files?: CloudFile[]; error: string; sending: boolean }
+
+/** A file chosen in the composer: uploads to the user's space right away. */
+interface Draft { key: string; name: string; size: number; preview?: string; progress: number; uploaded?: CloudFile; error?: string }
+
+/**
+ * Files on the clipboard. A screenshot may come only as a clipboard item, and
+ * is always called `image.png`: it gets a name with the date and time.
+ */
+export function clipboardFiles(data: DataTransfer | null, now = new Date()): File[] {
+  if (!data) return [];
+  let files = Array.from(data.files || []);
+  if (!files.length) {
+    files = Array.from(data.items || []).filter(item => item.kind === "file")
+      .map(item => item.getAsFile()).filter((file): file is File => !!file);
+  }
+  const stamp = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map(n => String(n).padStart(2, "0")).join("-")
+    + " " + [now.getHours(), now.getMinutes(), now.getSeconds()].map(n => String(n).padStart(2, "0")).join(".");
+  return files.map((file, index) => {
+    if (file.name && !/^image\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)) return file;
+    const extension = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+    const suffix = files.length > 1 ? ` (${index + 1})` : "";
+    return new File([file], `Captura de tela ${stamp}${suffix}.${extension}`, { type: file.type, lastModified: file.lastModified });
+  });
+}
+
+/** Whether a drag carries files (not text or a link). */
+function hasFiles(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
 
 function focused() {
   return typeof document.hasFocus === "function" ? document.hasFocus() : true;
@@ -85,6 +115,75 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const [gifOpen, setGifOpen] = useState(false);
   const closeGifs = useCallback(() => setGifOpen(false), []);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [fileError, setFileError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const uploads = useRef(new Map<string, AbortController>());
+  const previews = useRef(new Set<string>());
+  // Leaving the channel cancels uploads still running and frees the previews.
+  useEffect(() => () => {
+    uploads.current.forEach(controller => controller.abort());
+    previews.current.forEach(url => URL.revokeObjectURL(url));
+  }, []);
+
+  // Ctrl+V with the focus anywhere but a field (after clicking a message,
+  // say) still attaches what is on the clipboard, like a screenshot.
+  const attachFromClipboard = useRef<((files: File[]) => void) | null>(null);
+  useEffect(() => {
+    const paste = (event: globalThis.ClipboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const editable = target?.closest("input, textarea, select, [contenteditable='true']");
+      if (event.defaultPrevented || editable || document.querySelector("dialog[open]") || !attachFromClipboard.current) return;
+      const files = clipboardFiles(event.clipboardData);
+      if (!files.length) return;
+      event.preventDefault();
+      attachFromClipboard.current(files);
+    };
+    document.addEventListener("paste", paste);
+    return () => document.removeEventListener("paste", paste);
+  }, []);
+
+  function addFiles(files: File[]) {
+    if (!files.length) return;
+    const problems: string[] = [];
+    const room = MAX_FILES_PER_MESSAGE - drafts.length;
+    if (files.length > room) problems.push(`Envie no máximo ${MAX_FILES_PER_MESSAGE} arquivos por mensagem.`);
+    const accepted = files.slice(0, Math.max(0, room)).filter(file => {
+      const problem = fileProblem(file);
+      if (problem) problems.push(problem);
+      return !problem;
+    });
+    setFileError(problems.join(" "));
+    const added = accepted.map(file => {
+      const preview = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.type) ? URL.createObjectURL(file) : undefined;
+      if (preview) previews.current.add(preview);
+      return { draft: { key: crypto.randomUUID(), name: file.name, size: file.size, preview, progress: 0 } as Draft, file };
+    });
+    setDrafts(current => [...current, ...added.map(item => item.draft)]);
+    for (const { draft, file } of added) {
+      const controller = new AbortController();
+      uploads.current.set(draft.key, controller);
+      const update = (changes: Partial<Draft>) => setDrafts(current => current.map(d => d.key === draft.key ? { ...d, ...changes } : d));
+      uploadFile(file, progress => update({ progress }), controller.signal)
+        .then(uploaded => update({ uploaded, progress: 1 }))
+        .catch(cause => { if (!controller.signal.aborted) update({ error: message(cause) }); })
+        .finally(() => uploads.current.delete(draft.key));
+    }
+    textarea.current?.focus();
+  }
+
+  function removeDraft(draft: Draft) {
+    uploads.current.get(draft.key)?.abort();
+    if (draft.preview) { URL.revokeObjectURL(draft.preview); previews.current.delete(draft.preview); }
+    setDrafts(current => current.filter(d => d.key !== draft.key));
+    setFileError("");
+  }
+
+  const uploading = drafts.some(d => !d.uploaded && !d.error);
+  const failed = drafts.some(d => d.error);
+  const ready = drafts.length > 0 && !uploading && !failed;
+  const canSend = !uploading && !failed && (!!content.trim() || ready);
   // Imported from Discord: messages arrive in batches as the import advances.
   const importedCount = useRef<number | null>(null);
   useEffect(() => realtime.onEvent(event => {
@@ -177,7 +276,8 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     inFlight.current.add(item.clientId);
     setPending(current => current.map(p => p.clientId === item.clientId ? { ...p, sending: true, error: "" } : p));
     try {
-      const sent = item.gif ? api.sendMessage(channel.id, item.clientId, item.content, item.gif) : api.sendMessage(channel.id, item.clientId, item.content);
+      const sent = item.files?.length ? api.sendMessage(channel.id, item.clientId, item.content, undefined, item.files.map(file => file.id))
+        : item.gif ? api.sendMessage(channel.id, item.clientId, item.content, item.gif) : api.sendMessage(channel.id, item.clientId, item.content);
       accept([await sent]);
     }
     catch (cause) {
@@ -187,10 +287,14 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!content.trim()) return;
-    const item: Pending = { clientId: crypto.randomUUID(), content: content.trim(), sending: true, error: "" };
+    if (!canSend) return;
+    const files = drafts.flatMap(d => d.uploaded ? [d.uploaded] : []);
+    const item: Pending = { clientId: crypto.randomUUID(), content: content.trim(), ...(files.length ? { files } : {}), sending: true, error: "" };
     setPending(current => [...current, item]);
     setContent("");
+    drafts.forEach(d => { if (d.preview) { URL.revokeObjectURL(d.preview); previews.current.delete(d.preview); } });
+    setDrafts([]);
+    setFileError("");
     pinBottom.current = true;
     // The next message starts a new announcement right away.
     lastTyping.current = 0;
@@ -230,7 +334,52 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     aria-haspopup="dialog" aria-expanded={gifOpen} onPointerDown={event => { if (gifOpen) event.stopPropagation(); }}
     onClick={() => setGifOpen(open => !open)}>GIF</button>;
   const gifPicker = gifOpen && <GifPicker className={room ? "narrow" : ""} label="Enviar um GIF" onPick={sendGif} onClose={closeGifs} />;
-  return <section className={`text-chat ${room ? "room" : ""}`} aria-label={room ? `Mensagens da sala ${channel.name}` : peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`}>
+  const attachButton = <button type="button" className={`icon-button ${room ? "attach-button" : ""}`} aria-label="Anexar arquivos" title="Anexar arquivos (até 15 MB cada)"
+    disabled={drafts.length >= MAX_FILES_PER_MESSAGE} onClick={() => picker.current?.click()}><Plus size={18} /></button>;
+  const fileInput = <input ref={picker} type="file" multiple hidden data-testid="file-input" tabIndex={-1} aria-hidden="true"
+    onChange={event => { addFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />;
+  const draftList = (drafts.length > 0 || fileError) && <div className="composer-files">
+    {fileError && <p className="composer-file-error" role="alert">{fileError}</p>}
+    {drafts.length > 0 && <ul aria-label="Arquivos para enviar">
+      {drafts.map(draft => {
+        const sending = !draft.uploaded && !draft.error;
+        const percent = Math.round(draft.progress * 100);
+        return <li key={draft.key} className={`draft-file ${draft.error ? "failed" : ""} ${sending ? "sending" : ""}`}>
+        <span className="draft-media">
+          {draft.preview ? <img src={draft.preview} alt="" /> : <span className="draft-icon"><FileText size={20} aria-hidden="true" /></span>}
+          {sending && <span className="draft-percent" aria-hidden="true">{percent}%</span>}
+        </span>
+        <span className="draft-text">
+          <strong title={draft.name}>{draft.name}</strong>
+          <small>{draft.error || (draft.uploaded ? `${fileSize(draft.size)} · pronto` : `Enviando… ${percent}% de ${fileSize(draft.size)}`)}</small>
+          {sending && <span className="upload-bar" role="progressbar" aria-label={`Enviando ${draft.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+            <span style={{ width: `${Math.max(percent, 2)}%` }} />
+          </span>}
+        </span>
+        <button type="button" className="icon-button" aria-label={sending ? `Cancelar envio de ${draft.name}` : `Remover ${draft.name}`} title={sending ? "Cancelar envio" : "Remover"} onClick={() => removeDraft(draft)}><X size={16} /></button>
+      </li>;
+      })}
+    </ul>}
+  </div>;
+  const canAttach = !importing;
+  const dragProps = canAttach ? {
+    onDragEnter: (event: DragEvent) => { if (hasFiles(event)) { event.preventDefault(); setDragging(true); } },
+    onDragOver: (event: DragEvent) => { if (hasFiles(event)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } },
+    onDragLeave: (event: DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); },
+    onDrop: (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDragging(false);
+      addFiles(Array.from(event.dataTransfer.files));
+    },
+  } : {};
+  const pasteFiles = (event: ClipboardEvent) => {
+    const files = clipboardFiles(event.clipboardData);
+    if (files.length) { event.preventDefault(); addFiles(files); }
+  };
+  attachFromClipboard.current = canAttach ? addFiles : null;
+  return <section className={`text-chat ${room ? "room" : ""}`} aria-label={room ? `Mensagens da sala ${channel.name}` : peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`} {...dragProps}>
+    {dragging && <div className="drop-overlay" aria-hidden="true"><Upload size={32} /><strong>Solte para anexar</strong><span>Até {MAX_FILES_PER_MESSAGE} arquivos de 15 MB cada</span></div>}
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
       const element = list.current!;
@@ -269,6 +418,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
           <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div>
           {item.content && <MessageText text={item.content} />}
           {item.gif && <figure className="message-gif"><GifImage url={item.gif.url} still={item.gif.still} alt={item.gif.title || "GIF"} /></figure>}
+          {item.files && <ul className="pending-files">{item.files.map(file => <li key={file.id}><FileText size={14} aria-hidden="true" />{file.name}</li>)}</ul>}
           {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}
         </div>
       </article>)}
@@ -276,29 +426,34 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
     {room ? <form className="composer room-composer" onSubmit={submit}>
       {gifPicker}
+      {fileInput}
+      {draftList}
       {/* Who is typing shows above the field, which stays a single line. */}
       <span className="composer-hint" aria-live="polite">{typingIndicator}</span>
       <label className="sr-only" htmlFor="room-message">Mensagem para o chat da sala</label>
       <div className="room-input">
+        {attachButton}
         <textarea ref={textarea} id="room-message" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-          onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
+          onChange={event => type(event.target.value)} onKeyDown={enterToSend} onPaste={pasteFiles} />
         {gifButton}
       </div>
-      <button className="sr-only" type="submit" disabled={!content.trim()}>Enviar mensagem</button>
+      <button className="sr-only" type="submit" disabled={!canSend}>Enviar mensagem</button>
     </form>
     : importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
       {gifPicker}
+      {fileInput}
+      {draftList}
       <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
       <textarea ref={textarea} id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-        onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
+        onChange={event => type(event.target.value)} onKeyDown={enterToSend} onPaste={pasteFiles} />
       <div className="composer-actions">
-        {/* Attachments and emoji are designed but not implemented yet. */}
-        <button type="button" className="icon-button" disabled aria-label="Anexar arquivo (em breve)" title="Anexos em breve"><Plus size={18} /></button>
+        {attachButton}
+        {/* Emoji is designed but not implemented yet. */}
         <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
         {gifButton}
         {/* Who is typing takes the hint's place, so the composer never jumps. */}
-        <span className="composer-hint" aria-live="polite">{typingIndicator || "Enter para enviar · Shift+Enter para nova linha"}</span>
-        <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
+        <span className="composer-hint" aria-live="polite">{typingIndicator || (uploading ? "Aguardando o envio dos arquivos…" : "Enter para enviar · Shift+Enter para nova linha")}</span>
+        <button className="button primary small" type="submit" disabled={!canSend} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>
       </div>
     </form>}
   </section>;

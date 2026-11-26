@@ -5,7 +5,7 @@ A infraestrutura de produção da API fica em AWS Lightsail (`sa-east-1`). Todo 
 | Pasta | O que gerencia | Quem aplica |
 |---|---|---|
 | `bootstrap/` | Bucket S3 do estado (`disc-voice-terraform-state-481116707314`, versionado e criptografado), provedor OIDC do GitHub e as roles IAM `disc-voice-github-terraform` (apply, só a `main`) e `disc-voice-github-terraform-plan` (só leitura, pull requests) | Manualmente, com credenciais de administrador |
-| `.` (raiz) | Instância `disc-voice-api`, IP estático `disc-voice-ip`, anexo do IP e firewall (22, 80, 443) | GitHub Actions (`.github/workflows/terraform.yml`) em push na `main` |
+| `.` (raiz) | Instância `disc-voice-api`, IP estático `disc-voice-ip`, anexo do IP, firewall (22, 80, 443) e o bucket de arquivos `disc-voice-files-481116707314` | GitHub Actions (`.github/workflows/terraform.yml`) em push na `main` |
 
 Os recursos da raiz foram criados à mão e adotados com blocos `import`: o primeiro apply só adiciona as tags. A instância e o IP têm `prevent_destroy`, e o workflow recusa qualquer plano que apague ou substitua recursos, porque a instância guarda o PostgreSQL e os uploads. Mudar `bundle_id`, `blueprint_id` ou a zona substitui a instância: faça isso de propósito, com backup e fora do CI.
 
@@ -26,6 +26,18 @@ Em seguida, configure no repositório:
 - Variáveis `LIGHTSAIL_HOST` (IP estático), `PUBLIC_URL` (`https://discvoice.devgabrielmelo.shop`) e `LIGHTSAIL_KNOWN_HOSTS` (chave do host SSH).
 - Secret `LIGHTSAIL_SSH_KEY`: chave privada de deploy, cuja chave pública está em `~ubuntu/.ssh/authorized_keys` no servidor.
 - Secret `KLIPY_TOKEN`: chave da API do Klipy (GIFs). O deploy da API grava o valor no `.env` do servidor; o Terraform não guarda segredos da aplicação.
+
+## Arquivos
+
+Os arquivos enviados nos chats ficam no bucket do Lightsail `disc-voice-files-481116707314` (`aws_lightsail_bucket.files`). O plano `small_1_0` tem 5 GB e 25 GB de transferência por mês, é grátis nos primeiros 12 meses da conta e custa US$ 1/mês depois. O bucket é privado: a API valida cada envio (15 MB por arquivo, 1 GB por pessoa, extensões perigosas bloqueadas) e entrega links assinados que valem por poucos minutos.
+
+A chave de acesso da API é criada uma vez, fora do Terraform, para o segredo não ficar no estado:
+
+```powershell
+aws lightsail create-bucket-access-key --bucket-name disc-voice-files-481116707314 --region sa-east-1
+```
+
+Guarde `accessKeyId` e `secretAccessKey` nos secrets `FILES_ACCESS_KEY_ID` e `FILES_SECRET_ACCESS_KEY` do repositório. O deploy da API grava os dois no `.env` do servidor, junto com `FILES_BUCKET` e `FILES_REGION`. Sem eles, a API guarda os arquivos no volume `api-uploads` da instância.
 
 ## Mudanças de custo
 

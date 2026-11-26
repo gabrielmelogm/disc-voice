@@ -1,6 +1,6 @@
 import type {
   Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
-  GifChoice, GifPage, GoogleConfig, GoogleLogin, Invite,
+  FileGallery, GifChoice, GifPage, GoogleConfig, GoogleLogin, Invite,
   Friends, MemberRole, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
 
@@ -122,8 +122,16 @@ export const api = {
   createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
   messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>
     request<MessagePage>(`/channels/${channelId}/messages?${new URLSearchParams(cursor)}`, { signal }),
-  sendMessage: (channelId: string, clientId: string, content: string, gif?: GifChoice) =>
-    request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: gif ? { clientId, content, gif } : { clientId, content } }),
+  /** `files`: ids from `uploadFile`, sent with the text (which may then be empty). */
+  sendMessage: (channelId: string, clientId: string, content: string, gif?: GifChoice, files?: string[]) =>
+    request<ChatMessage>(`/channels/${channelId}/messages`, {
+      method: "POST",
+      body: { clientId, content, ...(gif ? { gif } : {}), ...(files?.length ? { files } : {}) },
+    }),
+  /** The files the user sent and the space they take. */
+  files: (signal?: AbortSignal) => request<FileGallery>("/files", { signal }),
+  /** Deletes one of the user's files, freeing its space. */
+  deleteFile: (id: string) => request<void>(`/files/${id}`, { method: "DELETE" }),
   /** GIFs from Klipy, through the API (which holds the key): trending without `q`. */
   gifs: (q: string, page = 1, signal?: AbortSignal) =>
     request<GifPage>(`/gifs?${new URLSearchParams(q ? { q, page: String(page) } : { page: String(page) })}`, { signal }),
@@ -157,6 +165,11 @@ export const api = {
   retryDiscord: (channelId: string) => request<DiscordImport>(`/discord/imports/${channelId}/retry`, { method: "POST" }),
   finishDiscord: (channelId: string) => request<DiscordImport>(`/discord/imports/${channelId}/finish`, { method: "POST" }),
 };
+
+/** Absolute URL of an API path such as `/files`. */
+export function apiUrl(path: string) {
+  return new URL(`${baseUrl}${path}`, window.location.href).href;
+}
 
 /** Files kept by the API come as `/api/files/...`; other URLs are absolute. */
 export function mediaUrl(url: string) {

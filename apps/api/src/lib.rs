@@ -14,6 +14,7 @@ mod profile;
 mod reads;
 mod realtime;
 mod search;
+pub mod storage;
 pub mod turn;
 
 use axum::{
@@ -49,8 +50,11 @@ pub struct AppState {
     turn: Option<Arc<turn::CloudflareTurn>>,
     /// Present when GIFs from Klipy are configured.
     klipy: Option<Arc<klipy::Klipy>>,
-    /// Where stored files live (see [`files`]).
+    /// Where stored files live (see [`files`]) without a bucket, and files
+    /// kept before it existed.
     uploads: std::path::PathBuf,
+    /// Present when the S3 bucket for files is configured.
+    bucket: Option<Arc<storage::Bucket>>,
 }
 
 impl AppState {
@@ -69,7 +73,14 @@ impl AppState {
             turn: None,
             klipy: None,
             uploads: std::env::temp_dir().join("disc-voice-files"),
+            bucket: None,
         }
+    }
+
+    /// Keeps new files in this S3 bucket instead of the uploads directory.
+    pub fn with_bucket(mut self, config: storage::BucketConfig) -> Self {
+        self.bucket = Some(Arc::new(storage::Bucket::new(config, self.http.clone())));
+        self
     }
 
     /// Directory for stored files; it must persist across restarts.
@@ -131,6 +142,13 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/friends/requests/{id}/accept", post(friends::accept))
         .route("/friends/{id}", axum::routing::delete(friends::remove))
         .route("/users/{id}/profile", get(friends::profile))
+        .route(
+            "/files",
+            get(files::list)
+                .post(files::upload)
+                .layer(DefaultBodyLimit::max(files::MAX_FILE_BYTES as usize)),
+        )
+        .route("/files/{id}", axum::routing::delete(files::remove))
         .route("/voice/config", get(realtime::ice_config))
         .route("/gifs", get(klipy::list))
         .route("/activities", get(activity::list))

@@ -74,9 +74,13 @@ describe("imported Discord channels", () => {
     expect(within(thumb).getByRole("img")).toHaveAttribute("src", `${window.location.origin}/api/files/f1/mapa.png`);
     expect(thumb).toHaveStyle({ width: "400px" });
     expect(screen.getByLabelText("clipe.mp4").tagName).toBe("VIDEO");
-    expect(screen.getByRole("link", { name: /notas\.pdf/ })).toHaveTextContent("3 MB");
+    expect(screen.getByRole("link", { name: /notas\.pdf/ }).closest(".file-card")).toHaveTextContent("3 MB");
+    // Files kept by the API can be saved to the computer.
+    expect(screen.getByRole("button", { name: "Baixar notas.pdf" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Baixar mapa.png" })).toBeInTheDocument();
     // Media that couldn't be copied falls back to a file card.
-    expect(screen.getByRole("link", { name: /velho\.png/ })).toHaveTextContent("pode ter expirado");
+    expect(screen.getByRole("link", { name: /velho\.png/ }).closest(".file-card")).toHaveTextContent("pode ter expirado");
+    expect(screen.queryByRole("button", { name: "Baixar velho.png" })).not.toBeInTheDocument();
     expect(screen.getByText("Mensagem sem texto")).toBeVisible();
 
     await user.click(thumb);

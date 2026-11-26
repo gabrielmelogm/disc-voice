@@ -3866,3 +3866,274 @@ async fn gifs_from_klipy_in_messages_and_profiles() {
     .await
     .unwrap();
 }
+
+async fn upload(app: &Router, token: &str, name: &str, bytes: Vec<u8>) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/files?name={}", urlencode(name)))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/octet-stream")
+        .body(Body::from(bytes))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn file_uploads_quota_gallery_and_deletion() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        )
+        .with_uploads(std::env::temp_dir().join(format!("disc-voice-test-{}", Uuid::new_v4()))),
+        vec![],
+    );
+    let (token, user_id) = register(&app, "Arquivos").await;
+    let (other, _) = register(&app, "Outra").await;
+
+    assert_eq!(
+        upload(&app, "", "a.txt", b"oi".to_vec()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // A PNG: typed by its bytes, with its size, and shown inline.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&64u32.to_be_bytes());
+    png.extend_from_slice(&32u32.to_be_bytes());
+    png.extend_from_slice(&[0; 64]);
+    let (status, image) = upload(&app, &token, "foto de férias.png", png.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{image}");
+    assert_eq!(image["contentType"], "image/png");
+    assert_eq!(image["width"], 64);
+    assert_eq!(image["size"], png.len());
+    let image_id = image["id"].as_str().unwrap().to_owned();
+    let image_url = image["url"].as_str().unwrap().to_owned();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&image_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("inline"));
+    // ?download=1 saves it instead.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{image_url}?download=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment"));
+
+    // Programs and pages are refused, by name or by content.
+    for (name, bytes) in [
+        ("setup.exe", b"oi".to_vec()),
+        ("foto.png.exe", b"oi".to_vec()),
+        ("foto.jpg", b"MZ\x90\x00programa".to_vec()),
+        ("pagina.html", b"<script>".to_vec()),
+    ] {
+        let (status, body) = upload(&app, &token, name, bytes).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{name}: {body}");
+        assert!(body["error"].as_str().unwrap().contains("não é permitido"));
+    }
+
+    // Larger than 15 MB: refused by the API with a clear message.
+    let (status, body) = upload(&app, &token, "grande.zip", vec![0; 15 * 1024 * 1024 + 1]).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(body["error"].as_str().unwrap().contains("15 MB"), "{body}");
+    // Exactly 15 MB fits.
+    let (status, big) = upload(&app, &token, "limite.zip", vec![1; 15 * 1024 * 1024]).await;
+    assert_eq!(status, StatusCode::CREATED, "{big}");
+    let big_id = big["id"].as_str().unwrap().to_owned();
+
+    // The gallery lists the user's files and the space they take.
+    let (status, gallery) = call(&app, "GET", "/files", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(gallery["files"].as_array().unwrap().len(), 2);
+    assert_eq!(gallery["files"][0]["id"], big_id.as_str());
+    assert_eq!(gallery["used"], png.len() + 15 * 1024 * 1024);
+    assert_eq!(gallery["quota"], 1024 * 1024 * 1024u64);
+    assert_eq!(
+        call(&app, "GET", "/files", Some(&other), None).await.1["files"],
+        json!([])
+    );
+
+    // 1 GB per person: a file that would pass it is refused.
+    let filler = Uuid::new_v4();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "INSERT INTO files (id, name, content_type, size, created_at, owner_id) VALUES ($1, 'cheio.bin', 'application/octet-stream', $2, now() - interval '1 day', $3)",
+        [filler.into(), (1024i64 * 1024 * 1024 - 15 * 1024 * 1024 - png.len() as i64 - 10).into(), Uuid::parse_str(&user_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+    let (status, body) = upload(&app, &token, "mais.txt", vec![b'a'; 11]).await;
+    assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
+    assert!(body["error"].as_str().unwrap().contains("1 GB"));
+    assert_eq!(
+        upload(&app, &token, "cabe.txt", vec![b'a'; 10]).await.0,
+        StatusCode::CREATED
+    );
+    // Deleting frees the space.
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/files/{filler}"),
+            Some(&token),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        upload(&app, &token, "agora.txt", vec![b'a'; 11]).await.0,
+        StatusCode::CREATED
+    );
+
+    // Sending the files in a channel, with or without text.
+    let server = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&token),
+        Some(json!({ "name": "Arquivos" })),
+    )
+    .await
+    .1;
+    let server_id = server["server"]["id"].as_str().unwrap().to_owned();
+    let channel = call(
+        &app,
+        "POST",
+        &format!("/servers/{server_id}/channels"),
+        Some(&token),
+        Some(json!({ "name": "fotos" })),
+    )
+    .await
+    .1;
+    let channel_id = channel["id"].as_str().unwrap().to_owned();
+    let (status, sent) = call(
+        &app,
+        "POST",
+        &format!("/channels/{channel_id}/messages"),
+        Some(&token),
+        Some(json!({ "clientId": Uuid::new_v4(), "files": [image_id, big_id] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["content"], "");
+    assert_eq!(sent["attachments"][0]["id"], image_id.as_str());
+    assert_eq!(sent["attachments"][0]["filename"], "foto de férias.png");
+    assert_eq!(sent["attachments"][0]["contentType"], "image/png");
+    assert_eq!(sent["attachments"][1]["size"], 15 * 1024 * 1024);
+
+    // Nobody can send someone else's file.
+    let invite = server["code"].as_str().unwrap().to_owned();
+    call(
+        &app,
+        "POST",
+        &format!("/invites/{invite}/join"),
+        Some(&other),
+        None,
+    )
+    .await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/channels/{channel_id}/messages"),
+        Some(&other),
+        Some(json!({ "clientId": Uuid::new_v4(), "files": [image_id] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/files/{image_id}"),
+            Some(&other),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The owner deletes it: the link stops working and the message keeps
+    // only the name, marked as deleted.
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/files/{image_id}"),
+            Some(&token),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&image_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let history = call(
+        &app,
+        "GET",
+        &format!("/channels/{channel_id}/messages"),
+        Some(&other),
+        None,
+    )
+    .await
+    .1;
+    let attachments = &history["messages"][0]["attachments"];
+    assert_eq!(attachments[0]["deleted"], true);
+    assert_eq!(attachments[0]["filename"], "foto de férias.png");
+    assert!(attachments[1].get("deleted").is_none());
+}

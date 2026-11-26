@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, ChevronUp, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
+  Check, ChevronUp, Cloud, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
   MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX,
 } from "lucide-react";
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
@@ -60,7 +60,7 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch }: {
+export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
   user: User;
   /** The status others see (an idle "online" shows as idle). */
   status?: ChosenStatus;
@@ -83,6 +83,8 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   onSettings: () => void;
   onVoiceSettings: () => void;
   onSearch: () => void;
+  /** Opens the drawer with the user's files in the cloud. */
+  onFiles?: () => void;
 }) {
   const [menu, setMenu] = useState<"servers" | "call" | "camera" | "account" | null>(null);
   const ref = useRef<HTMLElement>(null);
@@ -138,6 +140,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
 
     <span className="bar-divider" />
     <button className="bar-button" aria-haspopup="dialog" aria-keyshortcuts="Control+K" aria-label="Buscar mensagens, pessoas e canais" title="Buscar (Ctrl+K)" onClick={onSearch}><Search size={20} /></button>
+    {onFiles && <button className="bar-button" aria-haspopup="dialog" aria-label="Seus arquivos na nuvem" title="Seus arquivos" onClick={onFiles}><Cloud size={20} /></button>}
     <button className={`bar-button ${view === "dms" ? "current" : ""}`} aria-current={view === "dms" ? "page" : undefined}
       aria-label={dmUnread > 0 ? `Mensagens diretas, ${unreadLabel(dmUnread)}` : "Mensagens diretas"} title="Mensagens diretas" onClick={onDms}>
       <MessageCircle size={20} />{dmUnread > 0 && <span className="bar-badge"><Badge count={dmUnread} /></span>}
