@@ -257,6 +257,8 @@ fn fill<R: Runtime>(app: &AppHandle<R>, menu: &Menu<R>, entries: &[Entry]) -> ta
 
 /// Brings the main window back from the tray, the taskbar or behind other windows.
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
+    // Out of picture-in-picture first: the user wants the whole app.
+    crate::pip::restore(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

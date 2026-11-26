@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   publicDir: "../../public",
-  envDir: "../..",
+  // Tests run without the developer's .env: they call the API at "/api",
+  // whatever the local app is pointed to (src/test has no .env).
+  envDir: process.env.VITEST ? "./src/test" : "../..",
   clearScreen: false,
   server: {
     port: 1420,

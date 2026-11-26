@@ -17,7 +17,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
   return {
     status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
-    screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
+    screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
     latency: {}, serverLatency: null, ...overrides,
@@ -85,6 +85,33 @@ describe("VoiceChannel screen sharing", () => {
     const stream = {} as MediaStream;
     view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText<HTMLVideoElement>("Tela de Bia").srcObject).toBe(stream);
+  });
+
+  it("puts a screen in full screen from its button, apart from expanding it in the call", async () => {
+    const requestFullscreen = vi.fn(function (this: HTMLElement) {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: this });
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    });
+    const exitFullscreen = vi.fn(() => {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    });
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exitFullscreen });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+    const stream = {} as MediaStream;
+    render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Tela cheia de Tela de Bia" }));
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    // The whole frame, so the caption (and its volume) stays visible.
+    expect(requestFullscreen.mock.contexts[0]).toBe(screen.getByLabelText("Tela de Bia").closest("figure"));
+    expect(screen.queryByRole("button", { name: "Ampliar Tela de Bia" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Sair da tela cheia de Tela de Bia" }));
+    expect(exitFullscreen).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Ampliar Tela de Bia" })).toBeVisible();
   });
 
   it("draws screens from the native call engine on a canvas", () => {

@@ -1,4 +1,4 @@
-use crate::{call, camera, discord_rpc, notify, screen, tray};
+use crate::{call, camera, discord_rpc, notify, pip, screen, tray};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
 
@@ -77,6 +77,7 @@ pub fn run() {
             notify::manage(app);
             discord_rpc::manage(app);
             tray::manage(app);
+            pip::manage(app);
             // On Windows the frontend draws its own title bar to match the app theme.
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
@@ -92,8 +93,14 @@ pub fn run() {
                 // The call and the connection keep running; Quit in the tray menu exits.
                 if tray::hides_on_close(window) {
                     api.prevent_close();
-                    let _ = window.hide();
+                    // Watching a shared screen, it floats instead of hiding.
+                    if !pip::on_close_to_tray(window) {
+                        let _ = window.hide();
+                    }
                 }
+            }
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                pip::on_resized(window);
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<AudioEngine>().shutdown();
@@ -140,6 +147,8 @@ pub fn run() {
             notify::show_notification,
             discord_rpc::discord_presence,
             save_theme_template,
+            pip::set_pip_ready,
+            pip::pip_exit,
             tray::tray_supported,
             tray::set_close_to_tray,
             tray::set_tray_status,

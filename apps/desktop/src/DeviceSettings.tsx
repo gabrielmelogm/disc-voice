@@ -9,6 +9,7 @@ import { useScreenShare } from "./hooks/useScreenShare";
 import { NativeCameraPreview } from "./components/NativeCameraPreview";
 import { ScreenShareTest } from "./components/ScreenShareTest";
 import { Avatar, RadioCards, SoonTag, Switch } from "./components/ui";
+import { usePipEnabled } from "./lib/pip";
 import { audioProcessing, saveAudioProcessing, type AudioProcessing } from "./lib/voice";
 
 const SEGMENTS = 30;
@@ -64,6 +65,7 @@ export function DeviceSettings({ inCall = false, callDevices, userName = "Você"
   const [volume, setVolume] = useState(35);
   const [mirrored, setMirrored] = useState(true);
   const [processing, setProcessing] = useState(audioProcessing);
+  const [pipOn, setPipOn] = usePipEnabled();
   const inputActive = audio.status.inputActive;
   const outputActive = audio.status.outputActive;
   const screenActive = screen.status === "live" || screen.status === "picking";
@@ -158,6 +160,14 @@ export function DeviceSettings({ inCall = false, callDevices, userName = "Você"
     </section>
 
     <ScreenShareTest screen={screen} />
+
+    <section aria-labelledby="pip-title">
+      <h2 id="pip-title" className="settings-section-title">Picture-in-picture</h2>
+      <div className="switch-list">
+        <Switch id="pip" label="Picture-in-picture automático" checked={pipOn} onChange={setPipOn}
+          description="Mostra a tela compartilhada numa janela flutuante quando você minimiza o app ou o fecha para a bandeja" />
+      </div>
+    </section>
 
     <section aria-labelledby="processing-title">
       <h2 id="processing-title" className="settings-section-title">Processamento de áudio</h2>

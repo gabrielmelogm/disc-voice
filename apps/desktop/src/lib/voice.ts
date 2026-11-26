@@ -107,8 +107,10 @@ export interface VoiceState {
   screenInfo: ScreenInfo | null;
   /** What we send, for the local preview. */
   localScreen: ScreenFeed | null;
-  /** Screens received, by peer ID. */
+  /** Screens received, by peer ID, in the order they arrived. */
   remoteScreens: Record<string, ScreenFeed>;
+  /** The peer whose screen is expanded in the call view, if any. */
+  focusedScreen: string | null;
   /** Include the computer's audio when we share the screen (saved). */
   shareAudio: boolean;
   /** Quality and frame rate for the next share (saved). */
@@ -268,7 +270,7 @@ export class Voice {
   private state: VoiceState = {
     status: "idle", channel: null, participants: [], muted: false, deafened: false, error: "",
     speaking: [], devices: [], inputId: preference("input"), outputId: preference("output"), playbackBlocked: false, deviceBusy: false,
-    peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
+    peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: preference("screenAudio") !== "off", screenAudio: false, screenVolumes: savedScreenVolumes(),
     screenQuality: savedScreenQuality(), screenFrameRate: savedScreenFrameRate(), screenShare: null,
     cameraSupported: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
@@ -648,6 +650,11 @@ export class Voice {
     if (!this.share || !this.shareAudio || peer.screenAudioSender) return;
     peer.screenAudioSender = this.sendVideo(peer, { stream: this.share.stream, track: this.shareAudio.track }, SCREEN_AUDIO_BITRATE);
   }
+
+  /** The screen expanded in the call view (picture-in-picture shows it first). */
+  focusScreen = (peerId: string | null) => {
+    if (peerId !== this.state.focusedScreen) this.update({ focusedScreen: peerId });
+  };
 
   /** Whether the computer's audio goes with our next screen share (saved). */
   setShareAudio = (shareAudio: boolean) => {
