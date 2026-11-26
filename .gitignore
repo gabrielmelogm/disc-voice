@@ -13,3 +13,11 @@ apps/desktop/src-tauri/gen/
 .env
 .env.*
 !.env.example
+# Terraform: provider cache, local state and plan outputs (.terraform.lock.hcl is committed).
+.terraform/
+*.tfstate
+*.tfstate.*
+infra/terraform/**/tfplan
+infra/terraform/**/plan.json
+infra/terraform/**/plan.txt
+infra/terraform/**/bundles.json
