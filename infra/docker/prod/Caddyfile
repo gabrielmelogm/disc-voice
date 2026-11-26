@@ -1,0 +1,6 @@
+# HTTPS with an automatic Let's Encrypt certificate. Caddy proxies WebSocket
+# upgrades (/api/realtime) without extra configuration.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:3001
+}

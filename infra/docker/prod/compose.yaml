@@ -1,0 +1,71 @@
+# Production stack for a single host (e.g. AWS Lightsail): PostgreSQL, the API
+# (image built elsewhere and loaded with `docker load`) and Caddy for HTTPS/WSS.
+# Run from the folder that holds this file, a Caddyfile and the .env.
+name: disc-voice
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: discvoice
+      POSTGRES_USER: discvoice
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U discvoice -d discvoice"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  api:
+    image: disc-voice-api:prod
+    environment:
+      DATABASE_URL: postgres://discvoice:${POSTGRES_PASSWORD}@db:5432/discvoice
+      API_BIND: 0.0.0.0:3001
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:?defina PUBLIC_WEB_URL}
+      WEB_DIST: /app/web
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      VOICE_CHANNEL_CAPACITY: ${VOICE_CHANNEL_CAPACITY:-8}
+      STUN_URL: ${STUN_URL:-stun:stun.l.google.com:19302}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      CLOUDFLARE_TURN_KEY_ID: ${CLOUDFLARE_TURN_KEY_ID:-}
+      CLOUDFLARE_TURN_API_TOKEN: ${CLOUDFLARE_TURN_API_TOKEN:-}
+      GOOGLE_DESKTOP_CLIENT_ID: ${GOOGLE_DESKTOP_CLIENT_ID:-}
+      GOOGLE_DESKTOP_CLIENT_SECRET: ${GOOGLE_DESKTOP_CLIENT_SECRET:-}
+      GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID:-}
+      GOOGLE_WEB_CLIENT_SECRET: ${GOOGLE_WEB_CLIENT_SECRET:-}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      UPLOADS_DIR: /app/data/uploads
+    volumes:
+      # Media copied from Discord; must outlive the container.
+      - api-uploads:/app/data/uploads
+    # Reachable only through Caddy; the port is not published on the host.
+    expose:
+      - "3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?defina DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  api-uploads:
+  caddy-data:
+  caddy-config:

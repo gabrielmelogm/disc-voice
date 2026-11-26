@@ -1,0 +1,134 @@
+name: Terraform plan
+
+# On pull requests that touch infra/terraform: runs `terraform plan` with a
+# read-only role (AWS_PLAN_ROLE_ARN) and posts a single comment on the PR with
+# what will be added, changed and destroyed, plus the monthly cost before and
+# after, priced from the Lightsail bundles of the account's region.
+on:
+  pull_request:
+    paths:
+      - infra/terraform/**
+      - "!infra/terraform/bootstrap/**"
+      - .github/workflows/terraform-plan.yml
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: sa-east-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+      - id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - run: terraform init -input=false
+      - id: validate
+        run: terraform validate -no-color
+      # The read-only role cannot write the state lock.
+      - id: plan
+        run: |
+          set -o pipefail
+          terraform plan -input=false -lock=false -no-color -out=tfplan | tee plan.txt
+          terraform show -json tfplan > plan.json
+        continue-on-error: true
+      - name: Lightsail prices
+        if: steps.plan.outcome == 'success'
+        run: |
+          aws lightsail get-bundles --include-inactive --query 'bundles[].{id:bundleId,price:price}' --output json > bundles.json
+      - name: Comment on the PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          FMT: ${{ steps.fmt.outcome }}
+          PLAN: ${{ steps.plan.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = 'infra/terraform';
+            const read = (f) => (fs.existsSync(`${dir}/${f}`) ? fs.readFileSync(`${dir}/${f}`, 'utf8') : '');
+            const marker = '<!-- terraform-plan -->';
+            const lines = [marker, '## Terraform plan', ''];
+            const planOk = process.env.PLAN === 'success';
+            lines.push(`- Formatação: ${process.env.FMT === 'success' ? '✅' : '❌ rode `terraform fmt -recursive`'}`);
+            lines.push(`- Plan: ${planOk ? '✅' : '❌ falhou (veja o log abaixo)'}`);
+
+            if (planOk) {
+              const plan = JSON.parse(read('plan.json'));
+              const changes = (plan.resource_changes || []).filter((r) => r.mode === 'managed');
+              const groups = { create: [], update: [], delete: [], replace: [], import: [] };
+              for (const r of changes) {
+                const a = r.change.actions;
+                if (a.includes('delete') && a.includes('create')) groups.replace.push(r.address);
+                else if (a.includes('create')) groups.create.push(r.address);
+                else if (a.includes('delete')) groups.delete.push(r.address);
+                else if (a.includes('update')) groups.update.push(r.address);
+                if (r.change.importing) groups.import.push(r.address);
+              }
+              const n = (k) => groups[k].length;
+              lines.push('', `**${n('create')} a adicionar · ${n('update')} a alterar · ${n('replace')} a substituir · ${n('delete')} a destruir · ${n('import')} a importar**`, '');
+              if (n('delete') + n('replace') > 0) {
+                lines.push('> [!CAUTION]', '> Este plano apaga ou substitui recursos. O workflow de apply na `main` recusa planos assim.', '');
+              }
+              const labels = { create: '➕ Adicionar', update: '✏️ Alterar', replace: '♻️ Substituir', delete: '🗑️ Destruir', import: '📥 Importar' };
+              for (const k of Object.keys(labels)) {
+                if (n(k)) lines.push(`${labels[k]}: ${groups[k].map((a) => '`' + a + '`').join(', ')}`, '');
+              }
+
+              // Monthly cost of the Lightsail resources before and after the plan.
+              const prices = Object.fromEntries(JSON.parse(read('bundles.json') || '[]').map((b) => [b.id, b.price]));
+              const usd = (v) => `US$ ${v.toFixed(2)}`;
+              const STATIC_IP_IDLE = 0.005 * 730; // only charged while detached
+              const attached = (state) => new Set(changes.filter((r) => r.type === 'aws_lightsail_static_ip_attachment' && r.change[state]).map((r) => r.change[state].static_ip_name));
+              const rows = [];
+              let before = 0, after = 0;
+              const priced = ['aws_lightsail_instance', 'aws_lightsail_static_ip'];
+              for (const r of changes) {
+                if (!priced.includes(r.type)) continue;
+                const cost = (state) => {
+                  const v = r.change[state];
+                  if (!v) return 0;
+                  if (r.type === 'aws_lightsail_instance') return prices[v.bundle_id] ?? NaN;
+                  return attached(state).has(v.name) ? 0 : STATIC_IP_IDLE;
+                };
+                const b = cost('before'), a = cost('after');
+                before += b || 0; after += a || 0;
+                const detail = r.type === 'aws_lightsail_instance' ? ` (${(r.change.after || r.change.before).bundle_id})` : '';
+                rows.push(`| \`${r.address}\`${detail} | ${isNaN(b) ? '?' : usd(b)} | ${isNaN(a) ? '?' : usd(a)} |`);
+              }
+              lines.push('### Estimativa de custo mensal', '', '| Recurso | Antes | Depois |', '|---|---|---|', ...rows);
+              const diff = after - before;
+              lines.push(`| **Total** | **${usd(before)}** | **${usd(after)}** (${diff >= 0 ? '+' : ''}${usd(diff)}) |`, '');
+              lines.push('<sub>Preços dos planos do Lightsail na região (instância, com tráfego incluído; IP estático só é cobrado desanexado). Não inclui snapshots nem tráfego excedente.</sub>', '');
+            }
+
+            let log = read('plan.txt') || 'Sem saída do plan.';
+            if (log.length > 55000) log = '…\n' + log.slice(-55000);
+            lines.push('<details><summary>Saída do plan</summary>', '', '```', log, '```', '</details>');
+            lines.push('', `<sub>Commit ${context.sha.slice(0, 7)} · [execução](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})</sub>`);
+
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.includes(marker));
+            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            if (process.env.PLAN !== 'success' || process.env.FMT !== 'success') core.setFailed('Terraform fmt ou plan falhou');

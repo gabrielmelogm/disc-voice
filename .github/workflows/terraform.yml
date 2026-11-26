@@ -1,0 +1,57 @@
+name: Terraform
+
+# Applies infra/terraform (Lightsail host of the API) on pushes to main.
+# AWS access comes from OIDC: the role in AWS_ROLE_ARN only trusts main of this
+# repository (created by infra/terraform/bootstrap). The bootstrap itself is
+# applied by hand, never here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/terraform/**
+      - "!infra/terraform/bootstrap/**"
+      - .github/workflows/terraform.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Never run two applies against the same state.
+concurrency:
+  group: terraform-production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+jobs:
+  apply:
+    # No `environment:` here: it would change the OIDC subject the role trusts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: sa-east-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -input=false
+      - run: terraform validate
+      - run: terraform plan -input=false -out=tfplan
+      # The API host holds the database: refuse any plan that deletes or
+      # replaces a resource. Do those by hand, on purpose.
+      - name: Block destructive changes
+        run: |
+          terraform show -json tfplan > plan.json
+          destructive=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete")) | .address] | join(", ")' plan.json)
+          if [ -n "$destructive" ]; then
+            echo "::error::Plan deletes or replaces: $destructive"
+            exit 1
+          fi
+      - run: terraform apply -input=false tfplan
