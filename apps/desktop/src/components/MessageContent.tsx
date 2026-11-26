@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { ExternalLink, FileText, X } from "lucide-react";
+import { Download, ExternalLink, FileText, FileX, X } from "lucide-react";
 import type { Attachment } from "@disc-voice/shared";
 import { mediaUrl } from "../lib/api";
 import { openExternal } from "../lib/external";
+import { downloadFile } from "../lib/files";
 import { GifImage } from "./GifPicker";
 
 /** Something shown in the media viewer. */
@@ -126,13 +127,32 @@ function thumbStyle(width?: number | null, height?: number | null) {
   return { width: Math.round(width * scale), aspectRatio: `${width} / ${height}` };
 }
 
+/** Files kept by the API can be saved to the computer. */
+function stored(file: Attachment) {
+  return file.url.startsWith("/api/files/") && !file.unavailable;
+}
+
+function DownloadButton({ file, className = "" }: { file: Attachment; className?: string }) {
+  return <button type="button" className={`icon-button download-button ${className}`} aria-label={`Baixar ${file.filename}`} title="Baixar"
+    onClick={() => downloadFile(mediaUrl(file.url))}><Download size={16} /></button>;
+}
+
 function FileCard({ file }: { file: Attachment }) {
   const url = mediaUrl(file.url);
-  return <a className="file-card" href={url} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); void openExternal(url); }}
-    title={file.unavailable ? "Não foi possível copiar este arquivo do Discord; o link original pode ter expirado." : `Abrir ${file.filename}`}>
+  return <div className="file-card">
     <FileText size={22} aria-hidden="true" />
-    <span><strong>{file.filename}</strong><small>{fileSize(file.size)}{file.unavailable ? " · pode ter expirado" : ""}</small></span>
-  </a>;
+    <span><a href={url} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); stored(file) ? downloadFile(url) : void openExternal(url); }}
+      title={file.unavailable ? "Não foi possível copiar este arquivo do Discord; o link original pode ter expirado." : `Baixar ${file.filename}`}><strong>{file.filename}</strong></a>
+      <small>{fileSize(file.size)}{file.unavailable ? " · pode ter expirado" : ""}</small></span>
+    {stored(file) && <DownloadButton file={file} />}
+  </div>;
+}
+
+function DeletedFile({ file }: { file: Attachment }) {
+  return <div className="file-card deleted" title="Quem enviou apagou este arquivo da nuvem.">
+    <FileX size={22} aria-hidden="true" />
+    <span><strong>{file.filename}</strong><small>Arquivo apagado por quem enviou</small></span>
+  </div>;
 }
 
 export function ImageThumb({ url, name, width, height, onView }: { url: string; name: string; width?: number | null; height?: number | null; onView: (media: Media) => void }) {
@@ -159,14 +179,22 @@ export function Attachments({ files, onView }: { files: Attachment[]; onView: (m
   return <div className="attachment-list" aria-label="Anexos">
     {files.map(file => {
       if (file.provider === "klipy") return <GifAttachment key={file.id} file={file} onView={onView} />;
+      if (file.deleted) return <DeletedFile key={file.id} file={file} />;
       const url = mediaUrl(file.url);
       const kind = mediaKind(file);
-      if (kind === "image") return <ImageThumb key={file.id} url={url} name={file.filename} width={file.width} height={file.height} onView={onView} />;
+      const download = stored(file) && <DownloadButton file={file} className="overlay" />;
+      if (kind === "image") return <div key={file.id} className="media-item">
+        <ImageThumb url={url} name={file.filename} width={file.width} height={file.height} onView={onView} />{download}
+      </div>;
       if (kind === "video") return <div key={file.id} className="media-video">
         <video src={url} controls preload="metadata" style={thumbStyle(file.width, file.height)} aria-label={file.filename} />
-        <button type="button" className="link-button subtle" onClick={() => onView({ url, name: file.filename, kind: "video" })}>Ampliar</button>
+        <span className="media-actions">
+          <button type="button" className="link-button subtle" onClick={() => onView({ url, name: file.filename, kind: "video" })}>Ampliar</button>
+          {stored(file) && <button type="button" className="link-button subtle" onClick={() => downloadFile(url)}><Download size={14} />Baixar</button>}
+        </span>
       </div>;
-      if (kind === "audio") return <div key={file.id} className="media-audio"><small>{file.filename}</small><audio src={url} controls preload="metadata" aria-label={file.filename} /></div>;
+      if (kind === "audio") return <div key={file.id} className="media-audio"><small>{file.filename}</small><audio src={url} controls preload="metadata" aria-label={file.filename} />
+        {stored(file) && <button type="button" className="link-button subtle" onClick={() => downloadFile(url)}><Download size={14} />Baixar</button>}</div>;
       return <FileCard key={file.id} file={file} />;
     })}
   </div>;
@@ -185,6 +213,7 @@ export function MediaViewer({ media, onClose }: { media: Media; onClose: () => v
     onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <header>
       <span title={media.name}>{media.name}</span>
+      {media.url.includes("/api/files/") && <button type="button" className="icon-button" aria-label={`Baixar ${media.name}`} title="Baixar" onClick={() => downloadFile(media.url)}><Download size={18} /></button>}
       <button type="button" className="icon-button" aria-label="Abrir no navegador" title="Abrir no navegador" onClick={() => void openExternal(media.url)}><ExternalLink size={18} /></button>
       <button type="button" className="icon-button" aria-label="Fechar" title="Fechar (Esc)" onClick={onClose}><X size={20} /></button>
     </header>

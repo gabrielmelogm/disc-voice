@@ -278,6 +278,16 @@ KLIPY_TOKEN=<chave-da-api-do-klipy>
 - Com **Reduzir movimento** ativo no sistema, GIFs aparecem parados (o quadro estático do Klipy) com um botão para reproduzir, e avatares e banners ficam parados.
 - Sem `KLIPY_TOKEN`, o seletor avisa que os GIFs não estão disponíveis neste servidor.
 
+### Arquivos nos chats
+
+O **+** do campo de mensagem (canais de texto, mensagens diretas e chat das salas de voz) anexa arquivos. Também dá para arrastar arquivos para o chat ou colar com Ctrl+V, inclusive um print da área de transferência (Print Screen, Win+Shift+S), que vira `Captura de tela <data e hora>.png`. O Ctrl+V funciona com o foco em qualquer parte do chat, fora de outros campos. Cada arquivo sobe assim que é escolhido, com barra de progresso e porcentagem; o envio da mensagem espera os uploads terminarem, e o X cancela um upload em andamento. A mensagem pode ir só com os arquivos, sem texto.
+
+- Limites: 15 MB por arquivo, 10 arquivos por mensagem e 1 GB por pessoa. O app recusa antes de enviar, e a API recusa de novo (`413` e `507`).
+- Tipos bloqueados: programas, scripts, atalhos, instaladores, documentos do Office com macros, páginas HTML, SVG e imagens de disco (lista em `apps/api/src/files.rs`). A API também olha o começo do arquivo: um programa renomeado para `foto.png` é recusado. Só imagens confirmadas pelos bytes aparecem como prévia; o resto é baixado.
+- Quem recebe vê a prévia das imagens (e dos links que apontam para imagens), assiste vídeos e áudios no chat e baixa qualquer arquivo pelo botão **Baixar**.
+- O botão de nuvem na barra do app abre **Seus arquivos**: tudo o que a pessoa enviou, o espaço usado e os botões para baixar e apagar. Apagar libera o espaço e deixa só o nome do arquivo nas conversas.
+- Com `FILES_BUCKET`, `FILES_REGION`, `FILES_ACCESS_KEY_ID` e `FILES_SECRET_ACCESS_KEY`, os arquivos novos vão para o bucket S3 (em produção, o bucket do Lightsail de `infra/terraform`), e o link do arquivo redireciona para um link assinado que vale por pelo menos uma hora. Sem elas, ficam em `UPLOADS_DIR`.
+
 Canais de texto e de voz podem ter o mesmo nome (ex.: `geral` de texto e `geral` de voz); dois canais do mesmo tipo, não.
 
 ## Executar no Windows

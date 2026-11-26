@@ -40,8 +40,14 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       KLIPY_TOKEN: ${KLIPY_TOKEN:-}
       UPLOADS_DIR: /app/data/uploads
+      # Lightsail bucket for files sent in chats (infra/terraform); without
+      # them files stay in the api-uploads volume.
+      FILES_BUCKET: ${FILES_BUCKET:-}
+      FILES_REGION: ${FILES_REGION:-}
+      FILES_ACCESS_KEY_ID: ${FILES_ACCESS_KEY_ID:-}
+      FILES_SECRET_ACCESS_KEY: ${FILES_SECRET_ACCESS_KEY:-}
     volumes:
-      # Media copied from Discord; must outlive the container.
+      # Files kept before the bucket existed; must outlive the container.
       - api-uploads:/app/data/uploads
     # Reachable only through Caddy; the port is not published on the host.
     expose:

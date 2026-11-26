@@ -8,7 +8,10 @@
 
 // Billed per hour only while detached (~730 h/month).
 const STATIC_IP_IDLE = 0.005 * 730;
-const PRICED = ['aws_lightsail_instance', 'aws_lightsail_static_ip'];
+// Bucket plans have the same price in every Lightsail region. small_1_0 is
+// free for the first 12 months of an account; counted at its regular price.
+const BUCKETS = { small_1_0: 1, medium_1_0: 3, large_1_0: 5 };
+const PRICED = ['aws_lightsail_instance', 'aws_lightsail_static_ip', 'aws_lightsail_bucket'];
 // Types that never add to the bill by themselves.
 const FREE = [
   'aws_lightsail_instance_public_ports',
@@ -36,6 +39,7 @@ function estimate(plan, bundles) {
       const v = r.change[state];
       if (!v) return 0;
       if (r.type === 'aws_lightsail_instance') return prices[v.bundle_id] ?? NaN;
+      if (r.type === 'aws_lightsail_bucket') return BUCKETS[v.bundle_id] ?? NaN;
       return attached(state).has(v.name) ? 0 : STATIC_IP_IDLE;
     };
     const b = cost('before');
@@ -43,7 +47,7 @@ function estimate(plan, bundles) {
     before += b || 0;
     after += a || 0;
     const v = r.change.after || r.change.before;
-    rows.push({ address: r.address, detail: r.type === 'aws_lightsail_instance' ? v.bundle_id : '', before: b, after: a });
+    rows.push({ address: r.address, detail: r.type === 'aws_lightsail_static_ip' ? '' : v.bundle_id, before: b, after: a });
   }
   // Resources whose price this script does not know, being created, replaced
   // or changed: treated as a cost change so they need approval.

@@ -1,6 +1,6 @@
 use disc_api::{
     discord::DiscordConfig, google::GoogleConfig, klipy::KlipyConfig, migration::Migrator, router,
-    turn::CloudflareTurnConfig, AppState,
+    storage::BucketConfig, turn::CloudflareTurnConfig, AppState,
 };
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_migration::MigratorTrait;
@@ -88,6 +88,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => tracing::warn!(
             "Nenhum TURN configurado: a voz só conecta quando os participantes alcançam um ao outro direto. \
              Defina CLOUDFLARE_TURN_KEY_ID/CLOUDFLARE_TURN_API_TOKEN ou TURN_URLS/TURN_SECRET."
+        ),
+    }
+    match BucketConfig::from_env() {
+        Some(config) => {
+            tracing::info!(bucket = %config.bucket, "Arquivos dos chats no bucket S3");
+            state = state.with_bucket(config);
+        }
+        None => tracing::warn!(
+            "Arquivos dos chats no disco da API: defina FILES_BUCKET, FILES_REGION, FILES_ACCESS_KEY_ID e FILES_SECRET_ACCESS_KEY para usar o bucket."
         ),
     }
     match KlipyConfig::from_env() {

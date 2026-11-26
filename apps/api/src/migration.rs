@@ -19,7 +19,59 @@ impl MigratorTrait for Migrator {
             Box::new(MemberRoles),
             Box::new(DiscordLogin),
             Box::new(GifProfiles),
+            Box::new(UserFiles),
         ]
+    }
+}
+
+struct UserFiles;
+
+impl MigrationName for UserFiles {
+    fn name(&self) -> &str {
+        "m20261201_000014_user_files"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for UserFiles {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- Files people send in chats: each counts against its owner's
+            -- space until they delete it. Media copied from Discord has no
+            -- owner. `storage` says where the bytes are: the API's disk or
+            -- the S3 bucket.
+            ALTER TABLE files
+                ADD COLUMN owner_id uuid REFERENCES users(id) ON DELETE CASCADE,
+                ADD COLUMN storage varchar(8) NOT NULL DEFAULT 'local'
+                    CHECK (storage IN ('local', 's3')),
+                ADD COLUMN width integer,
+                ADD COLUMN height integer;
+            CREATE INDEX files_owner_idx ON files (owner_id, created_at DESC)
+                WHERE owner_id IS NOT NULL;
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            DROP INDEX files_owner_idx;
+            ALTER TABLE files
+                DROP COLUMN owner_id,
+                DROP COLUMN storage,
+                DROP COLUMN width,
+                DROP COLUMN height;
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

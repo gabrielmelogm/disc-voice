@@ -223,6 +223,29 @@ export interface Attachment {
   provider?: "klipy";
   /** Still frame of an animated image, for reduced motion. */
   still?: string | null;
+  /** The sender deleted the file from their gallery: only the name is left. */
+  deleted?: boolean;
+}
+
+/** A file the user sent, kept in their space in the cloud. */
+export interface CloudFile {
+  id: string;
+  name: string;
+  /** `/api/files/...` (resolve with `mediaUrl`). */
+  url: string;
+  size: number;
+  contentType: string;
+  width: number | null;
+  height: number | null;
+  createdAt: string;
+}
+
+/** Everything the user sent, and how much of their space it takes. */
+export interface FileGallery {
+  files: CloudFile[];
+  used: number;
+  quota: number;
+  maxFileSize: number;
 }
 
 /** A GIF in the Klipy picker. */

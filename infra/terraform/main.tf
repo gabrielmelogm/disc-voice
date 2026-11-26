@@ -108,6 +108,23 @@ resource "aws_lightsail_instance_public_ports" "api" {
   }
 }
 
+# Files people send in chats (see apps/api/src/storage.rs). A Lightsail bucket
+# is an S3 bucket with a fixed price: the 5 GB plan is free for the first 12
+# months, then US$ 1/month, with 25 GB of transfer. The API caps each person at
+# 1 GB, so the plan can be raised (medium_1_0: 100 GB) once usage grows.
+# The bucket stays private: the API signs short-lived links to each file.
+resource "aws_lightsail_bucket" "files" {
+  name      = "disc-voice-files-481116707314"
+  bundle_id = var.files_bundle_id
+  lifecycle {
+    # Deleting the bucket would delete every file sent in the chats.
+    prevent_destroy = true
+  }
+}
+
+# The API's access key is created outside Terraform, so the secret never lands
+# in the state (see README.md, "Arquivos").
+
 variable "region" {
   type    = string
   default = "sa-east-1"
@@ -117,6 +134,20 @@ variable "bundle_id" {
   description = "Lightsail plan (small_3_1: 2 vCPU, 2 GB, 60 GB). Changing it replaces the instance."
   type        = string
   default     = "small_3_1"
+}
+
+variable "files_bundle_id" {
+  description = "Lightsail bucket plan (small_1_0: 5 GB, free for 12 months, then US$ 1/month). Can change once per billing cycle."
+  type        = string
+  default     = "small_1_0"
+}
+
+output "files_bucket" {
+  value = aws_lightsail_bucket.files.name
+}
+
+output "files_bucket_region" {
+  value = aws_lightsail_bucket.files.region
 }
 
 output "public_ip" {

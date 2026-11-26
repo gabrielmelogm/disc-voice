@@ -185,6 +185,12 @@ pub mod file {
         pub content_type: String,
         pub size: i64,
         pub created_at: DateTimeUtc,
+        /// Who sent it; null for media copied from Discord.
+        pub owner_id: Option<Uuid>,
+        /// `local` or `s3`.
+        pub storage: String,
+        pub width: Option<i32>,
+        pub height: Option<i32>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
