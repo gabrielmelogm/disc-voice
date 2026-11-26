@@ -68,6 +68,27 @@ export function downloadFile(url: string) {
   void openExternal(target.href);
 }
 
+/**
+ * Files dropped outside a chat would make the webview open them in place of
+ * the app (the native drop handler is off so chats receive drops). Chats
+ * handle their own drops before this runs.
+ */
+export function preventFileNavigation(target: Window = window) {
+  const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes("Files");
+  const block = (event: DragEvent) => {
+    if (!carriesFiles(event) || event.defaultPrevented) return;
+    event.preventDefault();
+    // Outside a chat the cursor shows that nothing happens there.
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+  };
+  target.addEventListener("dragover", block);
+  target.addEventListener("drop", block);
+  return () => {
+    target.removeEventListener("dragover", block);
+    target.removeEventListener("drop", block);
+  };
+}
+
 export function isImage(contentType: string | null | undefined) {
   return /^image\/(png|jpeg|gif|webp|avif)$/.test(contentType || "");
 }
