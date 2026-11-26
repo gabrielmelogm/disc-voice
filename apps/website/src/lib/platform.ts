@@ -6,6 +6,9 @@ export const PLATFORM_ORDER: Platform[] = ["windows", "linux", "mac"];
 
 const RELEASES = "https://github.com/gabrielmelogm/disc-voice/releases/latest";
 
+/** Redirects to a signed link for the latest installer (src/app/download/windows/route.ts). */
+const WINDOWS_INSTALLER = "/download/windows";
+
 /**
  * stable: ready to download. alpha: downloadable, marked as early version.
  * soon: no build yet; the download is shown disabled.
@@ -17,7 +20,7 @@ export const PLATFORMS: Record<Platform, { name: string; detail: string; href: s
   windows: {
     name: "Windows",
     detail: "Windows 10 e 11 · instalador .exe",
-    href: process.env.NEXT_PUBLIC_DOWNLOAD_WINDOWS || RELEASES,
+    href: process.env.NEXT_PUBLIC_DOWNLOAD_WINDOWS || WINDOWS_INSTALLER,
     status: "stable",
   },
   mac: {

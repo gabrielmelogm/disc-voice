@@ -39,6 +39,21 @@ aws lightsail create-bucket-access-key --bucket-name disc-voice-files-4811167073
 
 Guarde `accessKeyId` e `secretAccessKey` nos secrets `FILES_ACCESS_KEY_ID` e `FILES_SECRET_ACCESS_KEY` do repositório. O deploy da API grava os dois no `.env` do servidor, junto com `FILES_BUCKET` e `FILES_REGION`. Sem eles, a API guarda os arquivos no volume `api-uploads` da instância.
 
+## Releases
+
+Ao publicar uma release no GitHub, `.github/workflows/windows.yml` gera o instalador do Windows, anexa o arquivo à release e envia uma cópia para o mesmo bucket, na pasta `releases/`:
+
+- `releases/<tag>/DiscVoice-Setup.exe`: cópia de cada versão.
+- `releases/latest/DiscVoice-Setup.exe`: última release que não é pré-release.
+
+O bucket continua privado. O botão de download do site aponta para `/download/windows` (`apps/website/src/app/download/windows/route.ts`), que redireciona para um link assinado de `releases/latest/DiscVoice-Setup.exe` válido por 5 minutos. O site precisa das variáveis de ambiente `RELEASES_ACCESS_KEY_ID` e `RELEASES_SECRET_ACCESS_KEY` (no Vercel, ou no `.env` do compose). Sem elas, o botão leva para a página de releases do GitHub. Use uma chave de acesso própria do bucket para o site (o Lightsail permite duas por bucket), para revogá-la sem afetar a API:
+
+```powershell
+aws lightsail create-bucket-access-key --bucket-name disc-voice-files-481116707314 --region sa-east-1
+```
+
+O workflow envia os arquivos com os secrets `FILES_ACCESS_KEY_ID` e `FILES_SECRET_ACCESS_KEY`. A tag da release vira a versão do app (`v1.2.3` vira `1.2.3`) e precisa seguir semver.
+
 ## Mudanças de custo
 
 Em push na `main`, o apply só roda sozinho quando o plano não muda o custo mensal estimado (`.github/scripts/terraform-cost.js`, com os preços dos planos do Lightsail). Um recurso novo ou alterado cujo preço o script não conhece também conta como mudança de custo.
