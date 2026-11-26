@@ -12,7 +12,10 @@ pub fn screen_native() -> bool {
 pub mod native {
     use disc_video::{ScreenEngine, ScreenInfo, ScreenRequest};
     use std::time::Duration;
-    use tauri::{ipc::Response, State};
+    use tauri::{
+        ipc::{Channel, InvokeResponseBody, Response},
+        State,
+    };
 
     /// Long enough to avoid busy polling, short enough to notice a stop.
     const FRAME_WAIT: Duration = Duration::from_millis(250);
@@ -56,6 +59,48 @@ pub mod native {
             frame.map(|frame| frame.to_vec()).unwrap_or_default(),
         ))
     }
+
+    /// The computer's audio being shared with the screen (WebView2 calls;
+    /// the Linux call engine captures its own).
+    #[derive(Default)]
+    pub struct ScreenAudio(pub(super) std::sync::Mutex<Option<disc_audio::SystemAudio>>);
+
+    /// 20 ms per message: two capture chunks.
+    const AUDIO_MESSAGE: usize = disc_audio::system::CHUNK_SAMPLES * 2;
+
+    /// Starts capturing the computer's audio, leaving out this app's (so
+    /// the call is never sent back). Each message on `on_audio` is 20 ms of
+    /// 48 kHz stereo, interleaved little-endian `f32`.
+    #[tauri::command]
+    pub async fn screen_audio_start(
+        audio: State<'_, ScreenAudio>,
+        on_audio: Channel<InvokeResponseBody>,
+    ) -> Result<(), String> {
+        let mut pending: Vec<u8> = Vec::with_capacity(AUDIO_MESSAGE * 4);
+        let capture = tauri::async_runtime::spawn_blocking(move || {
+            disc_audio::SystemAudio::start(move |chunk| {
+                pending.extend(chunk.iter().flat_map(|sample| sample.to_le_bytes()));
+                if pending.len() >= AUDIO_MESSAGE * 4 {
+                    let _ = on_audio.send(InvokeResponseBody::Raw(std::mem::take(&mut pending)));
+                    pending.reserve(AUDIO_MESSAGE * 4);
+                }
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        // Replacing an older capture stops it.
+        *audio.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(capture);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn screen_audio_stop(audio: State<'_, ScreenAudio>) -> Result<(), String> {
+        let capture = audio.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Joins the capture thread off the IPC thread.
+        tauri::async_runtime::spawn_blocking(move || drop(capture))
+            .await
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -78,6 +123,14 @@ pub mod native {
     pub fn screen_frame() -> Result<Vec<u8>, String> {
         Err(UNSUPPORTED.into())
     }
+
+    #[tauri::command]
+    pub fn screen_audio_start() -> Result<(), String> {
+        Err("A captura do áudio do computador não está disponível nesta plataforma.".into())
+    }
+
+    #[tauri::command]
+    pub fn screen_audio_stop() {}
 }
 
 /// Registers the native engine.
@@ -94,6 +147,8 @@ pub fn manage(app: &tauri::App) -> Result<(), String> {
         let hwnd = window.hwnd().map_err(|error| error.to_string())?;
         app.manage(disc_video::ScreenEngine::new_for_window(hwnd.0 as isize)?);
     }
+    #[cfg(any(windows, target_os = "linux"))]
+    app.manage(native::ScreenAudio::default());
     #[cfg(not(any(windows, target_os = "linux")))]
     let _ = app;
     Ok(())
@@ -104,5 +159,9 @@ pub fn shutdown(window: &tauri::Window) {
     use tauri::Manager;
     if let Some(engine) = window.try_state::<disc_video::ScreenEngine>() {
         engine.shutdown();
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    if let Some(audio) = window.try_state::<native::ScreenAudio>() {
+        audio.0.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 }

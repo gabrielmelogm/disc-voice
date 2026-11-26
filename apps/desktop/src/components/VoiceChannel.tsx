@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
-  Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Signal, SignalHigh, SignalLow, SignalMedium,
-  SignalZero, Video, Volume2, VolumeX, X, type LucideIcon,
+  Headphones, LoaderCircle, Maximize, MessageSquareText, MicOff, Minimize, MonitorUp, Signal, SignalHigh, SignalLow, SignalMedium,
+  SignalZero, Video, Volume2, VolumeX, X, ZoomIn, ZoomOut, type LucideIcon,
 } from "lucide-react";
 import type { Channel, MemberRole, User, VoiceParticipant } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
-import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
+import { DEFAULT_SCREEN_VOLUME, effectiveVolume, screenLabel, type ScreenFeed, type ScreenVolume, type VideoFeed, type Voice, type VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
 import { ProfileButton } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
@@ -37,7 +37,11 @@ export function CallStatus({ voice, state, serverName, onOpen }: {
 /** A video ends with its sharing; draw errors only mean a frame was skipped. */
 const ignoreFrameError = () => {};
 
-function StreamVideo({ stream, label, mirrored = false }: { stream: MediaStream; label: string; mirrored?: boolean }) {
+export function StreamVideo({ stream, label, mirrored = false, fullscreen = true }: {
+  stream: MediaStream; label: string; mirrored?: boolean;
+  /** Double-click puts the video itself in full screen (screens handle it on their frame). */
+  fullscreen?: boolean;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = ref.current;
@@ -46,7 +50,23 @@ function StreamVideo({ stream, label, mirrored = false }: { stream: MediaStream;
     void video.play?.()?.catch(() => {});
     return () => { video.srcObject = null; };
   }, [stream]);
-  return <video ref={ref} className={mirrored ? "mirrored" : undefined} autoPlay muted playsInline aria-label={label} onDoubleClick={() => void ref.current?.requestFullscreen?.().catch(() => {})} />;
+  return <video ref={ref} className={mirrored ? "mirrored" : undefined} autoPlay muted playsInline aria-label={label}
+    onDoubleClick={fullscreen ? () => void ref.current?.requestFullscreen?.().catch(() => {}) : undefined} />;
+}
+
+/** Whether `element` is in full screen now, following the browser's changes (Esc included). */
+function useFullscreen(element: RefObject<HTMLElement | null>) {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const sync = () => setOn(!!element.current && document.fullscreenElement === element.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, [element]);
+  const toggle = () => {
+    if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
+    else void element.current?.requestFullscreen?.().catch(() => {});
+  };
+  return [on, toggle] as const;
 }
 
 /** A webcam: a media stream (webview) or JPEG frames from a native engine. */
@@ -58,35 +78,78 @@ function CameraVideo({ feed, label, mirrored }: { feed: VideoFeed; label: string
   </div>;
 }
 
-function ScreenVideo({ feed, label, expanded, onToggle }: {
-  feed: ScreenFeed; label: string; expanded: boolean; onToggle: () => void;
+/**
+ * Our own volume for the audio of someone's screen: it changes nothing for
+ * the others, nor that person's voice.
+ */
+function ScreenVolumeControl({ name, setting, onVolume, onMute }: {
+  name: string; setting: ScreenVolume; onVolume: (volume: number) => void; onMute: () => void;
 }) {
-  return <figure className={`call-screen ${expanded ? "expanded" : ""}`}>
-    {"pull" in feed
-      ? <div className="call-screen-frames" onDoubleClick={event => void event.currentTarget.requestFullscreen?.().catch(() => {})}>
-        <NativeFramePreview active pull={feed.pull} label={label} onError={ignoreFrameError} />
-      </div>
-      : <StreamVideo stream={feed} label={label} />}
+  const silent = effectiveVolume(setting) === 0;
+  const percent = Math.round(setting.volume * 100);
+  return <span className="screen-volume">
+    <button className="icon-button on-dark small" aria-pressed={setting.muted}
+      aria-label={setting.muted ? `Ativar o áudio da tela de ${name}` : `Silenciar o áudio da tela de ${name}`}
+      title={setting.muted ? "Ativar o áudio da tela" : "Silenciar o áudio da tela"} onClick={onMute}>
+      {silent ? <VolumeX size={15} /> : <Volume2 size={15} />}
+    </button>
+    <input type="range" min={0} max={100} step={1} value={setting.muted ? 0 : percent}
+      aria-label={`Volume da tela de ${name}`} aria-valuetext={setting.muted ? "Silenciado" : `${percent}%`}
+      title={setting.muted ? "Silenciado" : `${percent}%`}
+      onChange={event => onVolume(Number(event.currentTarget.value) / 100)} />
+  </span>;
+}
+
+function ScreenVideo({ feed, label, detail, expanded, onToggle, audio, volume, paused }: {
+  feed: ScreenFeed; label: string; expanded: boolean; onToggle: () => void;
+  /** What it is sent at ("1080p · 60 fps"), for our own screen. */
+  detail?: string;
+  /** The screen carries the computer's audio. */
+  audio?: boolean;
+  /** Our volume for it (screens received only). */
+  volume?: ReactNode;
+  /** Picture-in-picture draws it meanwhile: stop reading its frames here. */
+  paused?: boolean;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  // The whole frame goes full screen, caption included: the volume stays at hand.
+  const [fullscreen, toggleFullscreen] = useFullscreen(ref);
+  return <figure ref={ref} className={`call-screen ${expanded ? "expanded" : ""}`}>
+    <div className="call-screen-frames" onDoubleClick={toggleFullscreen}>
+      {"pull" in feed
+        ? <NativeFramePreview active={!paused} pull={feed.pull} label={label} onError={ignoreFrameError} />
+        : <StreamVideo stream={feed} label={label} fullscreen={false} />}
+    </div>
     <figcaption><LiveTag /><span>{label}</span>
-      <button className="icon-button on-dark small" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir" : "Ampliar"} onClick={onToggle}><Maximize2 size={15} /></button>
+      {detail && <small className="screen-quality" aria-label={`Qualidade: ${detail}`}>{detail}</small>}
+      {audio && (volume ?? <span className="screen-audio-badge" role="img" aria-label="Com áudio do computador" title="Com áudio do computador"><Volume2 size={15} /></span>)}
+      {!fullscreen && <button className="icon-button on-dark small" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir na chamada" : "Ampliar na chamada"} onClick={onToggle}>{expanded ? <ZoomOut size={15} /> : <ZoomIn size={15} />}</button>}
+      <button className="icon-button on-dark small" aria-label={fullscreen ? `Sair da tela cheia de ${label}` : `Tela cheia de ${label}`} aria-pressed={fullscreen} title={fullscreen ? "Sair da tela cheia (Esc)" : "Tela cheia"} onClick={toggleFullscreen}>{fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}</button>
     </figcaption>
   </figure>;
 }
 
 /** Screens shared in the call: ours (what we send) and the ones received. */
-function CallScreens({ state, participants }: { state: VoiceState; participants: VoiceParticipant[] }) {
+function CallScreens({ voice, state, participants, paused }: { voice: Voice; state: VoiceState; participants: VoiceParticipant[]; paused: boolean }) {
   const [expanded, setExpanded] = useState("");
   const remote = participants.filter(p => p.screen && p.peerId !== state.peerId);
   const local = state.localScreen;
   if (!local && !remote.length && state.screen !== "picking") return null;
-  const toggle = (id: string) => setExpanded(current => (current === id ? "" : id));
+  const toggle = (id: string) => {
+    const next = expanded === id ? "" : id;
+    setExpanded(next);
+    // Picture-in-picture floats the expanded screen (only received ones).
+    voice.focusScreen?.(next && next !== state.peerId ? next : null);
+  };
   return <div className="call-screens" aria-label="Telas compartilhadas">
     {state.screen === "picking" && <div className="call-screen pending" role="status">Escolha uma tela ou janela na janela do sistema.</div>}
-    {local && <ScreenVideo feed={local} label="Sua tela" expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
+    {local && <ScreenVideo feed={local} label="Sua tela" detail={state.screenShare ? screenLabel(state.screenShare) : undefined} audio={state.screenAudio} expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
     {remote.map(p => {
       const feed = state.remoteScreens[p.peerId];
+      const volume = <ScreenVolumeControl name={p.user.name} setting={state.screenVolumes[p.user.id] ?? DEFAULT_SCREEN_VOLUME}
+        onVolume={value => voice.setScreenVolume(p.user.id, value)} onMute={() => voice.toggleScreenMute(p.user.id)} />;
       return feed
-        ? <ScreenVideo key={p.peerId} feed={feed} label={`Tela de ${p.user.name}`} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
+        ? <ScreenVideo key={p.peerId} feed={feed} label={`Tela de ${p.user.name}`} audio={!!p.screenAudio} volume={volume} paused={paused} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
         : <div key={p.peerId} className="call-screen pending" role="status">Recebendo a tela de {p.user.name}…</div>;
     })}
   </div>;
@@ -187,9 +250,11 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
 }
 
 /** `realtime`, `revision`, `self` and `roles` feed the room chat, as in a text channel. */
-export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, roles }: {
+export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, roles, pip = false }: {
   channel: Channel; voice: Voice; state: VoiceState; participants: VoiceParticipant[]; online: boolean;
   realtime: Realtime; revision: number; self?: User; roles?: Record<string, MemberRole>;
+  /** The window floats one screen in picture-in-picture meanwhile. */
+  pip?: boolean;
 }) {
   const active = state.channel?.id === channel.id && state.status !== "error";
   const [chatOpen, setChatOpen] = useState(true);
@@ -221,7 +286,7 @@ export function VoiceChannel({ channel, voice, state, participants, online, real
         </span>
       </header>
 
-      {active && <CallScreens state={state} participants={participants} />}
+      {active && <CallScreens voice={voice} state={state} participants={participants} paused={pip} />}
       {participants.length > 0 && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
         {tiles.map((p, index) => {
           const self = !!state.peerId && p.peerId === state.peerId;

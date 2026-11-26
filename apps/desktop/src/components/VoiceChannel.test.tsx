@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, RealtimeEvent, VoiceParticipant } from "@disc-voice/shared";
 import { api } from "../lib/api";
 import type { Realtime } from "../lib/realtime";
@@ -17,7 +17,8 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
   return {
     status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
-    screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
+    screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
+    shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
     latency: {}, serverLatency: null, ...overrides,
   };
@@ -48,10 +49,21 @@ function voice() {
 }
 
 describe("VoiceChannel screen sharing", () => {
+  beforeEach(() => {
+    // jsdom has no modal dialogs.
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute("open", ""); },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+      configurable: true, value: function (this: HTMLDialogElement) { this.removeAttribute("open"); },
+    });
+  });
+
   it("starts and stops sharing from the app bar call controls", async () => {
     const controls = voice();
     const view = render(<><ScreenButton voice={controls as unknown as Voice} state={state()} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online /></>);
     await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Escolher tela" }));
     expect(controls.startScreen).toHaveBeenCalledOnce();
     view.rerender(<><ScreenButton voice={controls as unknown as Voice} state={state({ screen: "picking" })} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online /></>);
     expect(screen.getByText(/Escolha uma tela ou janela/)).toBeVisible();
@@ -75,10 +87,96 @@ describe("VoiceChannel screen sharing", () => {
     expect(screen.getByLabelText<HTMLVideoElement>("Tela de Bia").srcObject).toBe(stream);
   });
 
+  it("puts a screen in full screen from its button, apart from expanding it in the call", async () => {
+    const requestFullscreen = vi.fn(function (this: HTMLElement) {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: this });
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    });
+    const exitFullscreen = vi.fn(() => {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    });
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exitFullscreen });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+    const stream = {} as MediaStream;
+    render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ remoteScreens: { friend: stream } })} participants={[self, friend]} online />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Tela cheia de Tela de Bia" }));
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    // The whole frame, so the caption (and its volume) stays visible.
+    expect(requestFullscreen.mock.contexts[0]).toBe(screen.getByLabelText("Tela de Bia").closest("figure"));
+    expect(screen.queryByRole("button", { name: "Ampliar Tela de Bia" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Sair da tela cheia de Tela de Bia" }));
+    expect(exitFullscreen).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Ampliar Tela de Bia" })).toBeVisible();
+  });
+
   it("draws screens from the native call engine on a canvas", () => {
     const pull = vi.fn(() => new Promise<ArrayBuffer>(() => {}));
     render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ native: true, remoteScreens: { friend: { pull } } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText("Tela de Bia").tagName).toBe("CANVAS");
+  });
+
+  it("asks for the quality, the frame rate and the audio every time it shares", async () => {
+    const controls = voice();
+    render(<ScreenButton voice={controls as unknown as Voice} state={state({ screenQuality: "720p", screenFrameRate: 60, shareAudio: false })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    expect(controls.startScreen).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Compartilhar tela" });
+    // Starts from the last choices.
+    expect(within(dialog).getByRole("radio", { name: /720p/ })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /^60 fps/ })).toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ })).not.toBeChecked();
+    expect(within(dialog).getAllByRole("radio").map(radio => (radio as HTMLInputElement).value)).toEqual(["360p", "720p", "1080p", "30", "60"]);
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /1080p/ }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^30 fps/ }));
+    await userEvent.click(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Escolher tela" }));
+    expect(controls.startScreen).toHaveBeenCalledWith({ quality: "1080p", frameRate: 30, audio: true });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancelling the share dialog shares nothing", async () => {
+    const controls = voice();
+    render(<ScreenButton voice={controls as unknown as Voice} state={state()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(controls.startScreen).not.toHaveBeenCalled();
+  });
+
+  it("shows the quality being shared", () => {
+    const stream = {} as MediaStream;
+    const live = state({ screen: "live", localScreen: stream, screenAudio: true, screenShare: { quality: "720p", frameRate: 60 } });
+    render(<><ScreenButton voice={voice() as unknown as Voice} state={live} /><VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={live} participants={[self, friend]} online /></>);
+    expect(screen.getByLabelText("Qualidade: 720p · 60 fps")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Parar compartilhamento de tela (720p · 60 fps, com áudio)" })).toBeVisible();
+  });
+
+  it("marks screens with audio and sets each one's volume locally", async () => {
+    const controls = { ...voice(), setScreenVolume: vi.fn(), toggleScreenMute: vi.fn() };
+    const withAudio = { ...friend, screenAudio: true };
+    const stream = {} as MediaStream;
+    const view = render(<VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice}
+      state={state({ participants: [self, withAudio], remoteScreens: { friend: stream }, screenVolumes: { "user-2": { volume: 0.4, muted: false } } })}
+      participants={[self, withAudio]} online />);
+    const slider = screen.getByRole("slider", { name: "Volume da tela de Bia" });
+    expect(slider).toHaveValue("40");
+    fireEvent.change(slider, { target: { value: "75" } });
+    expect(controls.setScreenVolume).toHaveBeenCalledWith("user-2", 0.75);
+    await userEvent.click(screen.getByRole("button", { name: "Silenciar o áudio da tela de Bia" }));
+    expect(controls.toggleScreenMute).toHaveBeenCalledWith("user-2");
+
+    // Without audio: no volume control. Our own screen only shows that it has audio.
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice}
+      state={state({ localScreen: stream, screen: "live", screenAudio: true, remoteScreens: { friend: stream } })}
+      participants={[self, friend]} online />);
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(screen.getByRole("img", { name: "Com áudio do computador" })).toBeVisible();
   });
 });
 

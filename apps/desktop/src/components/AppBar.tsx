@@ -5,19 +5,31 @@ import {
 } from "lucide-react";
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
 import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
-import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
+import { CAMERA_QUALITIES, screenLabel, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
+import { ScreenShareDialog } from "./ScreenShareDialog";
 import { Avatar, Badge, unreadLabel } from "./ui";
 
+/**
+ * Shares the screen in the call. Each time, a dialog asks for the quality,
+ * the frame rate and whether the computer's audio goes with it.
+ */
 export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
+  const [asking, setAsking] = useState(false);
   if (!state.screenSupported) {
     return <button className="bar-button" disabled aria-label="Compartilhar tela (indisponível)" title="O compartilhamento de tela está disponível somente no aplicativo para Windows e Linux."><MonitorUp size={20} /></button>;
   }
   const active = state.screen !== "idle";
-  const label = state.screen === "picking" ? "Cancelar escolha da tela" : active ? "Parar compartilhamento de tela" : "Compartilhar tela";
-  return <button className={`bar-button ${state.screen === "live" ? "current" : ""}`} aria-label={label} aria-pressed={active} title={label}
-    disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : void voice.startScreen())}>
-    {active ? <MonitorOff size={20} /> : <MonitorUp size={20} />}
-  </button>;
+  const sharing = state.screenShare ? ` (${screenLabel(state.screenShare)}${state.screenAudio ? ", com áudio" : ""})` : "";
+  const label = state.screen === "picking" ? "Cancelar escolha da tela" : active ? `Parar compartilhamento de tela${sharing}` : "Compartilhar tela";
+  return <>
+    <button className={`bar-button ${state.screen === "live" ? "current" : ""}`} aria-label={label} aria-pressed={active} title={label}
+      disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : setAsking(true))}>
+      {active ? <MonitorOff size={20} /> : <MonitorUp size={20} />}
+    </button>
+    {asking && <ScreenShareDialog initial={{ quality: state.screenQuality, frameRate: state.screenFrameRate, audio: state.shareAudio }}
+      onClose={() => setAsking(false)}
+      onShare={options => { setAsking(false); void voice.startScreen(options); }} />}
+  </>;
 }
 
 /**

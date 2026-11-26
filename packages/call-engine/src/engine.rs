@@ -1,7 +1,7 @@
 //! The engine the app manages: at most one call at a time, driven by the UI.
 
 use crate::{
-    audio::{Capture, Levels, Mixer, Playback},
+    audio::{Capture, Levels, Mixer, Playback, ScreenCapture},
     frames::{self, Frames},
     hub::{EncodedFrame, Kind, MediaHub},
     peer::{self, PeerCommand, PeerHandle},
@@ -155,7 +155,10 @@ pub(crate) struct Shared {
     alive: AtomicBool,
     events: EventSink,
     pub hub: MediaHub,
+    /// Everyone's voice.
     pub mixer: Mixer,
+    /// The audio of the screens shared with us, each at its local volume.
+    pub screen_mixer: Mixer,
     pub levels: Levels,
     pub frames: Frames,
     /// Set when a new peer connects or one lost a picture: the next screen
@@ -193,6 +196,7 @@ impl Shared {
             events,
             hub: MediaHub::default(),
             mixer: Mixer::default(),
+            screen_mixer: Mixer::default(),
             levels: Levels::default(),
             frames: Frames::default(),
             screen_keyframe: AtomicBool::new(true),
@@ -214,6 +218,7 @@ struct Session {
     playback: Option<Playback>,
     screen: Option<VideoSender>,
     camera: Option<VideoSender>,
+    screen_audio: Option<ScreenCapture>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -230,6 +235,7 @@ impl Session {
         // Stopping the threads first keeps them from feeding closing peers.
         self.screen = None;
         self.camera = None;
+        self.screen_audio = None;
         self.capture = None;
         self.playback = None;
         for (_, peer) in self.peers.drain() {
@@ -287,6 +293,7 @@ impl CallEngine {
             events,
             hub: MediaHub::default(),
             mixer: Mixer::default(),
+            screen_mixer: Mixer::default(),
             levels: Levels::default(),
             frames: Frames::default(),
             screen_keyframe: AtomicBool::new(true),
@@ -314,6 +321,7 @@ impl CallEngine {
             playback: Some(playback),
             screen: None,
             camera: None,
+            screen_audio: None,
             tasks,
         });
         Ok(id)
@@ -394,6 +402,7 @@ impl CallEngine {
             session.shared.deafened.store(deafened, Ordering::Relaxed);
             if deafened {
                 session.shared.mixer.clear();
+                session.shared.screen_mixer.clear();
             }
         }
     }
@@ -455,6 +464,35 @@ impl CallEngine {
     pub fn stop_video(&self, source: VideoSource) {
         if let Some(session) = self.session().as_mut() {
             *session.video(source) = None;
+            if source == VideoSource::Screen {
+                session.screen_audio = None;
+            }
+        }
+    }
+
+    /// Sends the computer's audio with our screen, leaving out what this
+    /// app plays (so nobody hears the call back).
+    pub fn start_screen_audio(&self) -> Result<(), String> {
+        let mut current = self.session();
+        let session = current
+            .as_mut()
+            .ok_or("Entre em um canal de voz para compartilhar a tela.")?;
+        session.screen_audio = None;
+        session.screen_audio = Some(ScreenCapture::start(session.encoded.clone())?);
+        Ok(())
+    }
+
+    pub fn stop_screen_audio(&self) {
+        if let Some(session) = self.session().as_mut() {
+            session.screen_audio = None;
+        }
+    }
+
+    /// The local volume of a peer's screen audio, from 0 (muted) to 1. It
+    /// changes nothing for the others, nor the peer's voice.
+    pub fn set_screen_volume(&self, peer_id: &str, volume: f32) {
+        if let Some(session) = &*self.session() {
+            session.shared.screen_mixer.set_gain(peer_id, volume);
         }
     }
 

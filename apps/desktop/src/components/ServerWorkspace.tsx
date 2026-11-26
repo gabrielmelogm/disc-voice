@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react";
 import type { Channel, DiscordAccount, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
+import { usePictureInPicture } from "../lib/pip";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useDiscordCallPresence } from "../lib/discordPresence";
 import { useActivities } from "../hooks/useActivities";
@@ -19,6 +20,7 @@ import { MembersDialog } from "./Members";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { DirectMessages, DirectMessagesSidebar, DirectProfilePanel, NewMessageDialog } from "./DirectMessages";
 import { FilesDrawer } from "./FilesDrawer";
+import { PipView } from "./PipView";
 import { FriendsPage, friendshipWith } from "./Friends";
 import { DiscordImportDialog } from "./DiscordImportDialog";
 import { DiscordOnboarding } from "./DiscordOnboarding";
@@ -60,6 +62,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const activities = useActivities(realtime.client, realtime.revision);
   const [discordOpen, setDiscordOpen] = useState(false);
   const { voice, state: voiceState } = useVoice(realtime.client);
+  const pip = usePictureInPicture(voiceState);
   const [participants, setParticipants] = useState<Record<string, VoiceParticipant[]>>({});
   // Latest profile of each user seen in a profile update, for the profile cards.
   const [profiles, setProfiles] = useState<Record<string, User>>({});
@@ -322,7 +325,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} memberCount={members.members.length} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
           roles={roles} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
-        : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"}
+        : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"} pip={pip.active}
           realtime={realtime.client} revision={realtime.revision} self={user} roles={roles}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
@@ -371,6 +374,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         setChannels(current => current.some(c => c.id === next.id) ? current : [...current, next]); setChannelId(next.id);
       }
     }} />}
+    {pip.active && pip.screen && <PipView voice={voice} state={voiceState} screen={pip.screen} />}
   </div></ProfileCardProvider>;
 }
 

@@ -16,6 +16,8 @@ pub(crate) enum Kind {
     Audio,
     Screen,
     Camera,
+    /// The computer's audio, sent with the screen.
+    ScreenAudio,
 }
 
 /// An Opus packet or an H.264 access unit (Annex B).
@@ -39,6 +41,7 @@ pub(crate) struct PeerSinks {
     pub audio: Option<Sink>,
     pub screen: Option<Sink>,
     pub camera: Option<Sink>,
+    pub screen_audio: Option<Sink>,
 }
 
 impl PeerSinks {
@@ -47,6 +50,7 @@ impl PeerSinks {
             Kind::Audio => self.audio.as_ref(),
             Kind::Screen => self.screen.as_ref(),
             Kind::Camera => self.camera.as_ref(),
+            Kind::ScreenAudio => self.screen_audio.as_ref(),
         }
     }
 }

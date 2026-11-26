@@ -458,6 +458,8 @@ export interface VoiceParticipant {
   screen: boolean;
   /** Webcam on; the video arrives over the peer connection. Absent from older servers. */
   camera?: boolean;
+  /** The shared screen carries the computer's audio. Absent from older servers. */
+  screenAudio?: boolean;
 }
 
 /**
@@ -514,7 +516,7 @@ export type RealtimeCommand =
   | { type: "server.watch"; serverId: string | null }
   | { type: "voice.join"; channelId: string; muted: boolean; deafened: boolean }
   | { type: "voice.leave" }
-  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean }
+  | { type: "voice.state"; muted: boolean; deafened: boolean; screen: boolean; camera: boolean; screenAudio?: boolean }
   | { type: "voice.signal"; peerId: string; data: SignalPayload }
   | { type: "typing.start"; channelId: string }
   | { type: "presence.set"; status: ChosenStatus };

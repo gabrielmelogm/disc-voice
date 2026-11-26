@@ -103,26 +103,30 @@ pub mod native {
     }
 
     /// Sends what the screen engine captures (after `screen_start`) to the
-    /// call. The call reads the uncompressed frames; the UI keeps drawing
-    /// our preview from the JPEG ones (`screen_frame`).
+    /// call, at most `bitrate` bits per second for each peer (the chosen
+    /// quality's). The call reads the uncompressed frames; the UI keeps
+    /// drawing our preview from the JPEG ones (`screen_frame`).
     #[tauri::command]
     pub async fn call_screen_start(
         engine: State<'_, CallEngine>,
         screen: State<'_, ScreenEngine>,
         frame_rate: u32,
+        bitrate: Option<u32>,
     ) -> Result<(), String> {
         let screen = screen.inner().clone();
+        let bitrate = bitrate.filter(|&bits| bits > 0).unwrap_or(SCREEN_BITRATE);
         blocking(&engine, move |engine| {
             engine.start_video(
                 VideoSource::Screen,
                 Box::new(move |timeout| screen.next_raw_frame(timeout)),
                 frame_rate,
-                SCREEN_BITRATE,
+                bitrate,
             )
         })
         .await
     }
 
+    /// Stops our screen, and its audio with it.
     #[tauri::command]
     pub async fn call_screen_stop(engine: State<'_, CallEngine>) -> Result<(), String> {
         blocking(&engine, |engine| {
@@ -130,6 +134,27 @@ pub mod native {
             Ok(())
         })
         .await
+    }
+
+    /// Sends the computer's audio (minus this app's) with our screen.
+    #[tauri::command]
+    pub async fn call_screen_audio_start(engine: State<'_, CallEngine>) -> Result<(), String> {
+        blocking(&engine, |engine| engine.start_screen_audio()).await
+    }
+
+    #[tauri::command]
+    pub async fn call_screen_audio_stop(engine: State<'_, CallEngine>) -> Result<(), String> {
+        blocking(&engine, |engine| {
+            engine.stop_screen_audio();
+            Ok(())
+        })
+        .await
+    }
+
+    /// Our local volume (0 to 1) for the audio of a peer's screen.
+    #[tauri::command]
+    pub fn call_screen_volume(engine: State<'_, CallEngine>, peer_id: String, volume: f32) {
+        engine.set_screen_volume(&peer_id, volume);
     }
 
     /// Sends what the camera engine captures (after `camera_start_call`) to
@@ -227,6 +252,17 @@ pub mod native {
 
     #[tauri::command]
     pub fn call_screen_stop() {}
+
+    #[tauri::command]
+    pub fn call_screen_audio_start() -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    #[tauri::command]
+    pub fn call_screen_audio_stop() {}
+
+    #[tauri::command]
+    pub fn call_screen_volume() {}
 
     #[tauri::command]
     pub fn call_camera_start() -> Result<(), String> {

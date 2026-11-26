@@ -798,7 +798,24 @@ async fn accounts_invites_channels_and_authorization() {
     );
     emit(
         &mut guest_ws,
-        json!({ "type": "voice.state", "muted": false, "deafened": false, "screen": true, "camera": true }),
+        json!({ "type": "voice.state", "muted": false, "deafened": false, "screen": true, "camera": true, "screenAudio": true }),
+    )
+    .await;
+    loop {
+        let state = event(&mut owner_ws, "voice.participants").await;
+        if state["participants"].as_array().unwrap().iter().any(|p| {
+            p["peerId"] == guest_peer
+                && p["screen"] == true
+                && p["camera"] == true
+                && p["screenAudio"] == true
+        }) {
+            break;
+        }
+    }
+    // Screen audio without a shared screen is not reported.
+    emit(
+        &mut guest_ws,
+        json!({ "type": "voice.state", "muted": false, "deafened": false, "screen": false, "camera": true, "screenAudio": true }),
     )
     .await;
     loop {
@@ -807,7 +824,7 @@ async fn accounts_invites_channels_and_authorization() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p["peerId"] == guest_peer && p["screen"] == true && p["camera"] == true)
+            .any(|p| p["peerId"] == guest_peer && p["screen"] == false && p["screenAudio"] == false)
         {
             break;
         }
@@ -826,6 +843,7 @@ async fn accounts_invites_channels_and_authorization() {
                 && p["deafened"] == true
                 && p["screen"] == false
                 && p["camera"] == false
+                && p["screenAudio"] == false
         }) {
             break;
         }

@@ -420,10 +420,22 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .call-screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; width: 100%; max-width: 1100px; margin: 16px auto 0; }
 .call-screen { position: relative; margin: 0; overflow: hidden; border-radius: var(--radius-lg); background: #000; aspect-ratio: 16 / 9; }
 .call-screen.expanded { grid-column: 1 / -1; }
+.call-screen:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
 .call-screen video, .call-screen-frames canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 .call-screen-frames { width: 100%; height: 100%; }
 .call-screen figcaption { position: absolute; inset: auto 0 0 0; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; background: linear-gradient(transparent, var(--video-scrim)); color: var(--on-video); font-size: 13px; font-weight: 700; }
 .call-screen figcaption span:not(.live-tag):not(.live-dot) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-screen figcaption .screen-quality { flex: none; padding: 2px 6px; border-radius: var(--radius-sm); background: rgba(0, 0, 0, .45); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Picture-in-picture: the whole (small, floating) window shows one screen. */
+.pip-view { position: fixed; inset: 0; z-index: 1000; display: grid; background: #000; color: var(--on-video); overflow: hidden; }
+.pip-screen { position: absolute; inset: 0; }
+.pip-screen video, .pip-screen canvas { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.pip-label { position: absolute; inset: 0 0 auto 0; margin: 0; padding: 8px 12px 16px; background: linear-gradient(var(--video-scrim), transparent); font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pip-controls { position: absolute; inset: auto 0 0 0; display: flex; justify-content: center; gap: 8px; padding: 16px 8px 10px; background: linear-gradient(transparent, var(--video-scrim)); opacity: 0; transition: opacity .15s; }
+.pip-view:hover .pip-controls, .pip-controls:focus-within { opacity: 1; }
+.screen-audio-badge { display: inline-flex; align-items: center; color: var(--on-video); }
+.screen-volume { display: inline-flex; align-items: center; gap: 4px; }
+.screen-volume input[type="range"] { width: 84px; accent-color: var(--on-video); cursor: pointer; }
 .call-screen.pending { display: grid; place-items: center; padding: 16px; background: var(--video-surface); color: var(--on-video-muted); text-align: center; }
 .call-grid.compact { display: flex; flex-wrap: wrap; justify-content: center; flex: none; gap: 8px; padding: 12px 0 0; }
 .call-grid.compact .call-tile { width: 180px; aspect-ratio: 16 / 9; }
@@ -449,6 +461,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .action-dialog[open] { display: flex; flex-direction: column; gap: 16px; }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .dialog-heading h2 { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+.dialog-fieldset { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
+.dialog-fieldset legend { margin-bottom: 8px; padding: 0; font-size: 13px; font-weight: 700; color: var(--ink-muted); }
+.screen-share-dialog .radio-cards { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.screen-share-dialog .radio-cards label { min-height: 52px; padding: 8px 12px; }
+.screen-share-dialog .radio-cards input { flex: none; }
+.choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; line-height: 1.2; }
+.choice-text strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.choice-text small { font-size: 12px; font-weight: 500; color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.radio-cards label.checked .choice-text small { color: inherit; opacity: .8; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-empty { color: var(--ink-muted); font-size: 13px; }
 .channel-type { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0; padding: 0; border: 0; }
 .channel-type legend { margin-bottom: 8px; }

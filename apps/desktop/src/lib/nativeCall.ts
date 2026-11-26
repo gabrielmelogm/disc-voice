@@ -63,8 +63,14 @@ export const nativeCall = {
   setOutput: (outputId: string) => invoke<void>("call_set_output", { outputId }),
   devices: () => invoke<{ inputs: CallDevice[]; outputs: CallDevice[] }>("call_devices"),
   /** Sends what the screen engine captures (after its picker) to the call. */
-  startScreen: (frameRate: number) => invoke<void>("call_screen_start", { frameRate }),
+  startScreen: (frameRate: number, bitrate: number) => invoke<void>("call_screen_start", { frameRate, bitrate }),
+  /** Stops our screen and its audio. */
   stopScreen: () => invoke<void>("call_screen_stop"),
+  /** Sends the computer's audio (minus this app's) with our screen. */
+  startScreenAudio: () => invoke<void>("call_screen_audio_start"),
+  stopScreenAudio: () => invoke<void>("call_screen_audio_stop"),
+  /** Our local volume (0 to 1) for the audio of a peer's screen. */
+  setScreenVolume: (peerId: string, volume: number) => invoke<void>("call_screen_volume", { peerId, volume }),
   /** Sends what the camera engine captures (after `startForCall`) to the call. */
   startCamera: (frameRate: number, bitrate: number) => invoke<void>("call_camera_start", { frameRate, bitrate }),
   stopCamera: () => invoke<void>("call_camera_stop"),

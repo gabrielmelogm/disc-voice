@@ -113,7 +113,8 @@ fn opus() -> RTCRtpCodec {
         mime_type: MIME_OPUS.to_owned(),
         clock_rate: 48_000,
         channels: 2,
-        sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+        // Stereo for the screen's audio; voice stays mono inside it.
+        sdp_fmtp_line: "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1".to_owned(),
         rtcp_feedback: vec![],
     }
 }
@@ -187,10 +188,18 @@ fn ssrc() -> u32 {
     (random as u32).max(1)
 }
 
+/// Our tracks, as `(stream, track)` IDs. The screen's audio shares the
+/// screen's stream, so receivers know what it is and play it in sync.
+const AUDIO: (&str, &str) = ("disc-call-audio", "disc-call-audio-track");
+const SCREEN: (&str, &str) = ("disc-call-screen", "disc-call-screen-track");
+const CAMERA: (&str, &str) = ("disc-call-camera", "disc-call-camera-track");
+const SCREEN_AUDIO: (&str, &str) = ("disc-call-screen", "disc-call-screen-audio");
+const OUR_TRACKS: [(&str, &str); 4] = [AUDIO, SCREEN, CAMERA, SCREEN_AUDIO];
+
 async fn add_track(
     pc: &Arc<dyn PeerConnection>,
     kind: RtpCodecKind,
-    stream: &str,
+    (stream, id): (&str, &str),
     codec: RTCRtpCodec,
 ) -> webrtc::error::Result<LocalTrack> {
     let ssrc = ssrc();
@@ -198,8 +207,8 @@ async fn add_track(
         Instant::now(),
         MediaStreamTrack::new(
             stream.to_owned(),
-            format!("{stream}-track"),
-            stream.to_owned(),
+            id.to_owned(),
+            id.to_owned(),
             kind,
             vec![RTCRtpEncodingParameters {
                 rtp_coding_parameters: RTCRtpCodingParameters {
@@ -224,6 +233,7 @@ struct Connection {
     audio: LocalTrack,
     screen: LocalTrack,
     camera: LocalTrack,
+    screen_audio: LocalTrack,
     /// Round trip in ms, from the peer's RTCP reports.
     rtt: Arc<AtomicU32>,
 }
@@ -273,14 +283,16 @@ async fn connect(
         .build()
         .await?;
     let pc: Arc<dyn PeerConnection> = Arc::new(pc);
-    let audio = add_track(&pc, RtpCodecKind::Audio, "disc-call-audio", opus()).await?;
-    let screen = add_track(&pc, RtpCodecKind::Video, "disc-call-screen", h264()).await?;
-    let camera = add_track(&pc, RtpCodecKind::Video, "disc-call-camera", h264()).await?;
+    let audio = add_track(&pc, RtpCodecKind::Audio, AUDIO, opus()).await?;
+    let screen = add_track(&pc, RtpCodecKind::Video, SCREEN, h264()).await?;
+    let camera = add_track(&pc, RtpCodecKind::Video, CAMERA, h264()).await?;
+    let screen_audio = add_track(&pc, RtpCodecKind::Audio, SCREEN_AUDIO, opus()).await?;
     Ok(Connection {
         pc,
         audio,
         screen,
         camera,
+        screen_audio,
         rtt,
     })
 }
@@ -299,9 +311,17 @@ fn state_name(state: RTCPeerConnectionState) -> &'static str {
 
 /// Whether a local description already sends all of our tracks.
 fn carries_our_tracks(sdp: &str) -> bool {
-    ["disc-call-audio", "disc-call-screen", "disc-call-camera"]
-        .iter()
-        .all(|stream| sdp.contains(&format!("a=msid:{stream} ")))
+    OUR_TRACKS.iter().all(|(stream, track)| {
+        sdp.lines()
+            .any(|line| line.trim_end() == format!("a=msid:{stream} {track}"))
+    })
+}
+
+/// Whether a peer's audio track is its screen's audio rather than its
+/// voice: it travels in the screen's stream, which browsers name in their
+/// signaling and native peers call `disc-call-screen`.
+fn is_screen_audio(stream: &str, named: Option<VideoSource>) -> bool {
+    named == Some(VideoSource::Screen) || stream == SCREEN_AUDIO.0
 }
 
 /// The ICE username fragment a session description uses.
@@ -464,6 +484,7 @@ impl Peer {
             audio: self.conn.audio.sink().await,
             screen: self.conn.screen.sink().await,
             camera: self.conn.camera.sink().await,
+            screen_audio: self.conn.screen_audio.sink().await,
         };
         self.shared.hub.set(&self.id, sinks);
     }
@@ -507,7 +528,14 @@ impl Peer {
         let shared = self.shared.clone();
         let id = self.id.clone();
         let task = match track.kind().await {
-            RtpCodecKind::Audio => tokio::spawn(receive_audio(id, track, shared)),
+            RtpCodecKind::Audio => {
+                let stream = track.stream_id().await;
+                if is_screen_audio(&stream, self.streams.get(&stream).copied()) {
+                    tokio::spawn(receive_screen_audio(id, track, shared))
+                } else {
+                    tokio::spawn(receive_audio(id, track, shared))
+                }
+            }
             RtpCodecKind::Video => {
                 let stream = track.stream_id().await;
                 let source = VideoSource::of_stream(&stream, self.streams.get(&stream).copied());
@@ -525,6 +553,7 @@ impl Peer {
         }
         self.shared.hub.remove(&self.id);
         self.shared.mixer.remove(&self.id);
+        self.shared.screen_mixer.forget(&self.id);
         self.shared.levels.remove(&self.id);
         for source in [VideoSource::Screen, VideoSource::Camera] {
             if self
@@ -566,6 +595,31 @@ async fn receive_audio(peer: String, track: Arc<dyn TrackRemote>, shared: Arc<Sh
     }
     shared.mixer.remove(&peer);
     shared.levels.remove(&peer);
+}
+
+/// The audio of a peer's shared screen: played at its own local volume, and
+/// never counted as the peer speaking.
+async fn receive_screen_audio(peer: String, track: Arc<dyn TrackRemote>, shared: Arc<Shared>) {
+    let Ok(mut decoder) = Decoder::new() else {
+        return;
+    };
+    while let Some(event) = track.poll().await {
+        match event {
+            TrackRemoteEvent::OnRtpPacket(packet) => {
+                if packet.payload.is_empty() {
+                    continue;
+                }
+                if let Some(pcm) = decoder.decode(&packet.payload) {
+                    if !shared.deafened.load(Ordering::Relaxed) {
+                        shared.screen_mixer.push(&peer, pcm);
+                    }
+                }
+            }
+            TrackRemoteEvent::OnEnded => break,
+            _ => {}
+        }
+    }
+    shared.screen_mixer.remove(&peer);
 }
 
 async fn run(
@@ -700,17 +754,29 @@ mod tests {
     fn recognizes_a_description_with_our_tracks() {
         let sdp = "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-audio disc-call-audio-track\r\n\
                    m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-screen disc-call-screen-track\r\n\
-                   m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-camera disc-call-camera-track\r\n";
+                   m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-camera disc-call-camera-track\r\n\
+                   m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-screen disc-call-screen-audio\r\n";
         assert!(carries_our_tracks(sdp));
-        // A description from before the camera track still needs an offer.
+        // A description from before the screen audio track still needs an offer.
         assert!(!carries_our_tracks(
             &sdp[..sdp
-                .find("m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=msid:disc-call-camera")
+                .find("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-screen")
                 .unwrap()]
         ));
         assert!(!carries_our_tracks(
             "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=msid:disc-call-audio x\r\n"
         ));
+    }
+
+    #[test]
+    fn tells_screen_audio_from_voice() {
+        // Native peers send it in the screen's stream.
+        assert!(is_screen_audio("disc-call-screen", None));
+        assert!(!is_screen_audio("disc-call-audio", None));
+        // Browsers name their screen's stream; their microphone's is unnamed.
+        assert!(is_screen_audio("{s}", Some(VideoSource::Screen)));
+        assert!(!is_screen_audio("{mic}", None));
+        assert!(!is_screen_audio("{cam}", Some(VideoSource::Camera)));
     }
 
     #[test]
@@ -854,6 +920,40 @@ mod tests {
                     .next(&frames::slot("a", source), Duration::from_secs(1))
                     .expect("a decoded picture");
                 assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+            }
+
+            // a's screen audio reaches b's screen mixer, not its voice mixer,
+            // and plays at the volume b chose for a's screen.
+            let mut stereo =
+                opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+            let music: Vec<f32> = tone.iter().flat_map(|&value| [value, value]).collect();
+            b.screen_mixer.set_gain("a", 0.0);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            let mut ticker = tokio::time::interval(Duration::from_millis(20));
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let size = stereo.encode_float(&music, &mut packet).unwrap();
+                        let _ = frames_a.send(EncodedFrame {
+                            kind: Kind::ScreenAudio,
+                            data: Bytes::copy_from_slice(&packet[..size]),
+                            duration: Duration::from_millis(20),
+                        });
+                        let mut muted = [0.0_f32; 480];
+                        b.screen_mixer.mix(&mut muted);
+                        if muted.iter().any(|&sample| sample != 0.0) {
+                            panic!("a's screen played although b muted it");
+                        }
+                        b.screen_mixer.set_gain("a", 1.0);
+                        let mut out = [0.0_f32; 480];
+                        b.screen_mixer.mix(&mut out);
+                        b.screen_mixer.set_gain("a", 0.0);
+                        if out.iter().any(|&sample| sample.abs() > 0.01) {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep_until(deadline) => panic!("b never heard a's screen audio"),
+                }
             }
 
             // b's reports on a's audio echo a's sender reports: a learns

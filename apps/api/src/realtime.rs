@@ -53,6 +53,18 @@ struct Voice {
     screen: bool,
     /// Webcam on: the video arrives over the peer connections.
     camera: bool,
+    /// The shared screen carries the computer's audio (only while `screen`).
+    screen_audio: bool,
+}
+
+/// What a participant turned on or off in the call (`voice.state`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Controls {
+    pub muted: bool,
+    pub deafened: bool,
+    pub screen: bool,
+    pub camera: bool,
+    pub screen_audio: bool,
 }
 
 pub(crate) struct Hub {
@@ -107,7 +119,7 @@ impl Hub {
     fn participants(clients: &HashMap<Uuid, Client>, channel: Uuid) -> Vec<Value> {
         let mut members: Vec<_> = clients.iter().filter_map(|(id, c)| {
             let voice = c.voice.as_ref().filter(|v| v.channel == channel)?;
-            Some(json!({ "peerId": id, "user": c.user, "muted": voice.muted, "deafened": voice.deafened, "screen": voice.screen, "camera": voice.camera }))
+            Some(json!({ "peerId": id, "user": c.user, "muted": voice.muted, "deafened": voice.deafened, "screen": voice.screen, "camera": voice.camera, "screenAudio": voice.screen_audio }))
         }).collect();
         members.sort_by_key(|m| m["peerId"].as_str().unwrap_or_default().to_owned());
         members
@@ -362,6 +374,7 @@ impl Hub {
             deafened,
             screen: false,
             camera: false,
+            screen_audio: false,
         };
         clients.get_mut(&id).unwrap().voice = Some(voice.clone());
         self.direct(
@@ -386,13 +399,15 @@ impl Hub {
         }
     }
 
-    fn update(&self, id: Uuid, muted: bool, deafened: bool, screen: bool, camera: bool) {
+    fn update(&self, id: Uuid, controls: Controls) {
         let mut clients = self.clients.lock().unwrap();
         if let Some(voice) = clients.get_mut(&id).and_then(|c| c.voice.as_mut()) {
-            voice.muted = muted;
-            voice.deafened = deafened;
-            voice.screen = screen;
-            voice.camera = camera;
+            voice.muted = controls.muted;
+            voice.deafened = controls.deafened;
+            voice.screen = controls.screen;
+            voice.camera = controls.camera;
+            // Audio only travels with a shared screen.
+            voice.screen_audio = controls.screen && controls.screen_audio;
             let voice = voice.clone();
             self.changed(&clients, &voice);
         }
@@ -489,6 +504,9 @@ enum Command {
         /// Absent in clients without webcam video.
         #[serde(default)]
         camera: bool,
+        /// Absent in clients without screen audio.
+        #[serde(default, rename = "screenAudio")]
+        screen_audio: bool,
     },
     #[serde(rename = "voice.signal", rename_all = "camelCase")]
     Signal { peer_id: Uuid, data: Value },
@@ -558,7 +576,17 @@ async fn command(state: &AppState, id: Uuid, user: &UserView, command: Command) 
             deafened,
             screen,
             camera,
-        } => state.realtime.update(id, muted, deafened, screen, camera),
+            screen_audio,
+        } => state.realtime.update(
+            id,
+            Controls {
+                muted,
+                deafened,
+                screen,
+                camera,
+                screen_audio,
+            },
+        ),
         Command::Signal { peer_id, data } => state.realtime.signal(id, peer_id, data)?,
         Command::Typing { channel_id } => {
             // Access is checked once per connection and channel: typing is chatty.
