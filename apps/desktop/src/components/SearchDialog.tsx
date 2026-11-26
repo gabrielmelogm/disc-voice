@@ -116,14 +116,14 @@ export function SearchDialog({ onClose, onPick }: { onClose: () => void; onPick:
 
       {!!results?.people.length && <div role="group" aria-label="Pessoas"><h3 className="eyebrow">Pessoas</h3>
         {results.people.map(user => option(index++, <>
-          <Avatar name={user.name} src={user.avatar} size="sm" />
+          <Avatar name={user.name} src={user.avatar} still={user.avatarStill} size="sm" />
           <div><strong>{highlight(user.name, q)}</strong>{user.pronouns && <small>{user.pronouns}</small>}</div>
         </>, `Perfil de ${user.name}`))}
       </div>}
 
       {!!results?.messages.length && <div role="group" aria-label="Mensagens"><h3 className="eyebrow">Mensagens</h3>
         {results.messages.map(item => option(index++, <>
-          <Avatar name={item.author.name} src={item.author.avatar} size="sm" />
+          <Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} size="sm" />
           <div>
             <small><strong>{item.author.name}</strong> em #{item.channelName} · {item.serverName} · {messageTime(item.createdAt)}</small>
             <span className="result-snippet">{highlight(item.content, q)}</span>

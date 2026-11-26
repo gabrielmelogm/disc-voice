@@ -1,12 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { initials } from "../lib/display";
+import { motionSrc, useReducedMotion } from "../lib/motion";
 
 export type Presence = "online" | "idle" | "dnd" | "offline";
 
-export function Avatar({ name, src, size = "md", status, speaking = false, square = false, className = "" }: {
+export function Avatar({ name, src, still, size = "md", status, speaking = false, square = false, className = "" }: {
   name: string;
   /** Profile photo; the initials show while it is missing or fails to load. */
   src?: string | null;
+  /** Still frame of a GIF photo, shown instead when the user prefers reduced motion. */
+  still?: string | null;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
   status?: Presence;
   speaking?: boolean;
@@ -14,7 +17,9 @@ export function Avatar({ name, src, size = "md", status, speaking = false, squar
   className?: string;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
-  const photo = src && failed !== src ? src : null;
+  const reduced = useReducedMotion();
+  const shown = src ? motionSrc(src, still, reduced) : null;
+  const photo = shown && failed !== shown ? shown : null;
   return <span className={`avatar avatar-${size} ${square ? "avatar-square" : ""} ${speaking ? "is-speaking" : ""} ${className}`} aria-hidden="true">
     {photo
       // Google photos refuse requests that carry a Referer from other sites.

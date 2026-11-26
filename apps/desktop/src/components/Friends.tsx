@@ -72,7 +72,7 @@ export function FriendsPage({ friends, selfId, onMessage }: {
           : "Você ainda não tem amigos por aqui. Adicione pessoas dos seus servidores."}</p>}
         <ul className="friend-list" aria-label="Amigos">
           {shown.map(({ user, status }) => <li key={user.id} className="friend-row">
-            <Avatar name={user.name} src={user.avatar} status={status} />
+            <Avatar name={user.name} src={user.avatar} still={user.avatarStill} status={status} />
             <div><strong>{user.name}</strong><small>{STATUS_LABELS[status]}</small></div>
             {confirming === user.id ? <span className="friend-actions">
               <span className="muted">Remover {user.name}?</span>
@@ -93,7 +93,7 @@ export function FriendsPage({ friends, selfId, onMessage }: {
         {!!friends.incoming.length && <h2 className="eyebrow">Recebidos — {friends.incoming.length}</h2>}
         <ul className="friend-list" aria-label="Pedidos recebidos">
           {friends.incoming.map(({ user }) => <li key={user.id} className="friend-row">
-            <Avatar name={user.name} src={user.avatar} />
+            <Avatar name={user.name} src={user.avatar} still={user.avatarStill} />
             <div><strong>{user.name}</strong><small>Quer ser seu amigo</small></div>
             <span className="friend-actions">
               <button className="icon-button" aria-label={`Aceitar pedido de ${user.name}`} title="Aceitar" disabled={!!busy}
@@ -106,7 +106,7 @@ export function FriendsPage({ friends, selfId, onMessage }: {
         {!!friends.outgoing.length && <h2 className="eyebrow">Enviados — {friends.outgoing.length}</h2>}
         <ul className="friend-list" aria-label="Pedidos enviados">
           {friends.outgoing.map(({ user }) => <li key={user.id} className="friend-row">
-            <Avatar name={user.name} src={user.avatar} />
+            <Avatar name={user.name} src={user.avatar} still={user.avatarStill} />
             <div><strong>{user.name}</strong><small>Pedido enviado</small></div>
             <span className="friend-actions">
               <button className="icon-button" aria-label={`Cancelar pedido para ${user.name}`} title="Cancelar pedido" disabled={!!busy}
@@ -159,7 +159,7 @@ function AddFriend({ friends, selfId, busy, run }: {
       {people.map(person => {
         const relation = friendshipWith(friends, person.id);
         return <li key={person.id} className="friend-row">
-          <Avatar name={person.name} src={person.avatar} />
+          <Avatar name={person.name} src={person.avatar} still={person.avatarStill} />
           <div><strong>{person.name}</strong>{person.pronouns && <small>{person.pronouns}</small>}</div>
           <span className="friend-actions">
             {relation === "friends" ? <span className="muted">Já são amigos</span>

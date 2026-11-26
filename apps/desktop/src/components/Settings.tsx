@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
-import type { BannerColor, DiscordStatus, User } from "@disc-voice/shared";
+import type { BannerColor, DiscordStatus, GifChoice, ProfileUpdate, User } from "@disc-voice/shared";
 import { DeviceSettings } from "../DeviceSettings";
 import { api, message } from "../lib/api";
 import { maskEmail } from "../lib/display";
@@ -14,7 +14,8 @@ import {
   addTheme, fetchTheme, MAX_THEME_BYTES, parseTheme, removeTheme, resolveTheme, THEME_EXAMPLE, THEME_TOKENS, ThemeError,
   themeById, themeTemplate, useAppearance, useThemes, type Appearance, type CustomTheme,
 } from "../lib/theme";
-import { BANNER_COLORS, bannerColor, ProfileSummary } from "./ProfileCard";
+import { GifPicker } from "./GifPicker";
+import { BANNER_COLORS, ProfileBanner, ProfileSummary } from "./ProfileCard";
 import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
 
 export type SettingsPage = "overview" | "voice" | "profile" | "connections" | "themes";
@@ -117,9 +118,9 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
   const traySupported = useTraySupported();
   return <>
     <section className="account-card">
-      <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
+      <ProfileBanner user={user} />
       <div className="account-identity">
-        <Avatar name={user.name} src={user.avatar} size="xl" status="online" className="profile-avatar" />
+        <Avatar name={user.name} src={user.avatar} still={user.avatarStill} size="xl" status="online" className="profile-avatar" />
         <div><strong>{user.name}</strong><span>{user.email}</span></div>
         <button className="button primary small" onClick={onEditProfile}>Editar perfil</button>
       </div>
@@ -186,17 +187,28 @@ function Profile({ user, onUserChange }: { user: User; onUserChange: (user: User
   const [pronouns, setPronouns] = useState(saved.pronouns);
   const [bio, setBio] = useState(saved.bio);
   const [banner, setBanner] = useState<BannerColor>(saved.banner);
+  // A GIF chosen for the avatar or banner; null removes it, undefined keeps it.
+  const [avatarGif, setAvatarGif] = useState<GifChoice | null | undefined>(undefined);
+  const [bannerGif, setBannerGif] = useState<GifChoice | null | undefined>(undefined);
+  const [picking, setPicking] = useState<"avatar" | "banner" | null>(null);
+  const closePicker = useCallback(() => setPicking(null), []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [touched, setTouched] = useState(false);
   const errors = profileErrors(name, pronouns, bio);
   const invalid = Object.keys(errors).length > 0;
-  const changed = collapse(name) !== saved.name || collapse(pronouns) !== saved.pronouns || bio.trim() !== saved.bio || banner !== saved.banner;
+  const changed = collapse(name) !== saved.name || collapse(pronouns) !== saved.pronouns || bio.trim() !== saved.bio || banner !== saved.banner
+    || avatarGif !== undefined || bannerGif !== undefined;
   const discard = () => {
     setName(saved.name); setPronouns(saved.pronouns); setBio(saved.bio); setBanner(saved.banner);
+    setAvatarGif(undefined); setBannerGif(undefined); setPicking(null);
     setError(""); setTouched(false);
   };
+  const gifAvatar = avatarGif !== undefined ? !!avatarGif : user.avatarSource === "gif";
+  const gifBanner = bannerGif !== undefined ? !!bannerGif : !!user.bannerGif;
+  // Clicking the button of the open picker closes it instead of reopening it.
+  const keepOpen = (which: "avatar" | "banner") => (event: { stopPropagation: () => void }) => { if (picking === which) event.stopPropagation(); };
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -204,9 +216,13 @@ function Profile({ user, onUserChange }: { user: User; onUserChange: (user: User
     if (invalid || !changed || saving) return;
     setSaving(true); setError(""); setDone(false);
     try {
-      const next = await api.updateProfile({ name: collapse(name), pronouns: collapse(pronouns), bio: bio.trim(), banner });
+      const changes: ProfileUpdate = { name: collapse(name), pronouns: collapse(pronouns), bio: bio.trim(), banner };
+      if (avatarGif !== undefined) changes.avatarGif = avatarGif;
+      if (bannerGif !== undefined) changes.bannerGif = bannerGif;
+      const next = await api.updateProfile(changes);
       onUserChange(next);
       setName(next.name); setPronouns(next.pronouns || ""); setBio(next.bio || ""); setBanner(next.banner || "brand");
+      setAvatarGif(undefined); setBannerGif(undefined);
       setTouched(false); setDone(true);
     } catch (cause) { setError(message(cause)); }
     finally { setSaving(false); }
@@ -214,6 +230,9 @@ function Profile({ user, onUserChange }: { user: User; onUserChange: (user: User
 
   const show = (field: keyof typeof errors) => (touched || field !== "name") && errors[field];
   const preview: User = { ...user, name: collapse(name) || user.name, pronouns: collapse(pronouns), bio: bio.trim(), banner };
+  if (avatarGif) Object.assign(preview, { avatar: avatarGif.url, avatarStill: avatarGif.still, avatarSource: "gif" });
+  else if (avatarGif === null && user.avatarSource === "gif") Object.assign(preview, { avatar: null, avatarStill: null, avatarSource: null });
+  if (bannerGif !== undefined) Object.assign(preview, { bannerGif: bannerGif?.url ?? null, bannerStill: bannerGif?.still ?? null });
   return <div className="profile-layout">
     <form className="stack-form" noValidate onSubmit={save} onChange={() => setDone(false)}>
       <div className="field"><label htmlFor="profile-name">Nome de exibição</label>
@@ -224,13 +243,32 @@ function Profile({ user, onUserChange }: { user: User; onUserChange: (user: User
         <input id="profile-pronouns" maxLength={60} placeholder="ela/dela, ele/dele…" value={pronouns} aria-invalid={!!show("pronouns")} onChange={e => setPronouns(e.target.value)} />
         {show("pronouns") && <small className="field-error">{errors.pronouns}</small>}
       </div>
-      {/* Avatar upload and the unique username: issue #7. */}
-      <div className="field"><span className="field-label">Avatar <SoonTag /></span><div className="button-row"><button type="button" className="button primary small" disabled>Trocar avatar</button><button type="button" className="link-button" disabled>Remover</button></div></div>
+      {/* Uploading a photo and the unique username: issue #7. */}
+      <div className="field gif-field"><span className="field-label">Avatar</span>
+        <div className="button-row">
+          <button type="button" className="button primary small" aria-haspopup="dialog" aria-expanded={picking === "avatar"} onPointerDown={keepOpen("avatar")}
+            onClick={() => setPicking(picking === "avatar" ? null : "avatar")}>{gifAvatar ? "Trocar GIF" : "Escolher GIF"}</button>
+          {gifAvatar && <button type="button" className="link-button" onClick={() => { setAvatarGif(null); setDone(false); }}>Remover GIF</button>}
+        </div>
+        {picking === "avatar" && <GifPicker label="GIF do avatar" confirmLabel="Usar como avatar" onClose={closePicker}
+          onPick={gif => { setAvatarGif(gif); setPicking(null); setDone(false); }} />}
+        <small>Um GIF do Klipy no lugar da foto. Sem ele, fica a foto do Google ou do Discord.</small>
+      </div>
       <fieldset className="field color-field"><legend className="field-label">Cor do banner</legend>
         <div className="color-swatches">{BANNER_COLORS.map(color => <label key={color.id} title={color.name} style={{ background: color.value }} className={banner === color.id ? "checked" : ""}>
           <input type="radio" name="banner" className="sr-only" checked={banner === color.id} onChange={() => setBanner(color.id)} /><span className="sr-only">{color.name}</span>
         </label>)}</div>
       </fieldset>
+      <div className="field gif-field"><span className="field-label">GIF do banner</span>
+        <div className="button-row">
+          <button type="button" className="button secondary small" aria-haspopup="dialog" aria-expanded={picking === "banner"} onPointerDown={keepOpen("banner")}
+            onClick={() => setPicking(picking === "banner" ? null : "banner")}>{gifBanner ? "Trocar GIF" : "Escolher GIF"}</button>
+          {gifBanner && <button type="button" className="link-button" onClick={() => { setBannerGif(null); setDone(false); }}>Remover GIF</button>}
+        </div>
+        {picking === "banner" && <GifPicker label="GIF do banner" confirmLabel="Usar no banner" onClose={closePicker}
+          onPick={gif => { setBannerGif(gif); setPicking(null); setDone(false); }} />}
+        <small>Aparece sobre a cor do banner no seu perfil.</small>
+      </div>
       <div className="field"><label htmlFor="profile-bio">Sobre mim</label>
         <textarea id="profile-bio" rows={4} maxLength={190} value={bio} aria-invalid={!!show("bio")} onChange={e => setBio(e.target.value)} />
         {show("bio") ? <small className="field-error">{errors.bio}</small> : <small className="counter">{[...bio].length}/190</small>}

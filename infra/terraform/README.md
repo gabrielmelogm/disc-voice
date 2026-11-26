@@ -25,6 +25,7 @@ Em seguida, configure no repositório:
 - Variáveis `AWS_ROLE_ARN` e `AWS_PLAN_ROLE_ARN`: os outputs `github_role_arn` e `github_plan_role_arn`.
 - Variáveis `LIGHTSAIL_HOST` (IP estático), `PUBLIC_URL` (`https://discvoice.devgabrielmelo.shop`) e `LIGHTSAIL_KNOWN_HOSTS` (chave do host SSH).
 - Secret `LIGHTSAIL_SSH_KEY`: chave privada de deploy, cuja chave pública está em `~ubuntu/.ssh/authorized_keys` no servidor.
+- Secret `KLIPY_TOKEN`: chave da API do Klipy (GIFs). O deploy da API grava o valor no `.env` do servidor; o Terraform não guarda segredos da aplicação.
 
 ## Mudanças de custo
 

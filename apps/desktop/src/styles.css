@@ -776,3 +776,46 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .members-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); overflow-y: auto; }
 .member-group { display: flex; flex-direction: column; gap: 10px; }
 .members-dialog .people-list li .button { flex: none; }
+
+/* ---------- GIFs (Klipy) ---------- */
+.composer { position: relative; }
+.gif-button { width: auto; min-width: 34px; padding: 0 8px; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+.gif-button.active { background: var(--brand-soft); color: var(--brand-text); }
+.room-input { display: flex; align-items: flex-end; gap: 6px; }
+.room-input textarea { flex: 1; min-width: 0; }
+.room-input .gif-button { height: 44px; border-radius: var(--radius-lg); }
+.gif-picker { position: absolute; right: 8px; bottom: calc(100% + 8px); z-index: 20; display: flex; flex-direction: column; width: min(420px, calc(100vw - 32px)); height: min(460px, 70vh); padding: 10px; border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-md), 0 0 0 1px var(--line); color: var(--ink); }
+.gif-picker.narrow { right: 0; left: 0; width: auto; }
+.gif-picker > header, .gif-preview > header { display: flex; align-items: center; gap: 8px; }
+.gif-search { display: flex; flex: 1; align-items: center; gap: 8px; padding: 0 10px; border-radius: var(--radius-md); background: var(--surface-sunken); color: var(--ink-subtle); }
+.gif-search input { flex: 1; min-width: 0; padding: 8px 0; border: 0; background: none; box-shadow: none; }
+.gif-search:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.gif-heading { margin: 8px 2px 6px; color: var(--ink-subtle); font-size: 12px; font-weight: 700; }
+.gif-results { flex: 1; min-height: 0; overflow-y: auto; }
+.gif-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.gif-tile { display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; border: 0; border-radius: var(--radius-sm); background: var(--surface-sunken); cursor: pointer; }
+.gif-tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.gif-tile:hover, .gif-tile:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.gif-status { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 8px; color: var(--ink-muted); font-size: 13px; text-align: center; }
+.gif-status[role="alert"] { color: var(--danger-text); }
+.gif-more { display: block; margin: 10px auto 4px; }
+.gif-picker > footer { display: flex; justify-content: flex-end; padding-top: 8px; }
+.klipy-attribution { color: var(--ink-subtle); font-size: 11px; }
+.klipy-attribution strong { color: var(--ink-muted); letter-spacing: .06em; }
+.gif-preview { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; }
+.gif-preview > header strong { flex: 1; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.gif-preview-image { flex: 1; min-height: 0; display: grid; place-items: center; border-radius: var(--radius-md); background: var(--surface-sunken); }
+.gif-preview-image img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.gif-image { position: relative; display: block; }
+.gif-image img { display: block; }
+.gif-open { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.gif-play { position: absolute; right: 6px; bottom: 6px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-full); background: var(--video-scrim); color: var(--on-video); cursor: pointer; }
+.gif-play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.message-gif { max-width: min(400px, 100%); margin: 6px 0 0; overflow: hidden; border-radius: var(--radius-md); background: var(--surface-sunken); }
+.message-gif img { width: 100%; height: auto; max-height: 300px; object-fit: contain; }
+.pending-message .message-gif { max-width: 220px; }
+.profile-banner { position: relative; overflow: hidden; }
+.profile-banner-gif { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.gif-field { position: relative; }
+/* In the settings, the picker opens in the form's flow instead of floating. */
+.gif-field .gif-picker { position: static; width: 100%; max-width: 460px; height: 400px; margin-top: 8px; }

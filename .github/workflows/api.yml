@@ -91,6 +91,18 @@ jobs:
         run: |
           docker save "$IMAGE" | gzip -1 | ssh "ubuntu@$HOST" 'gunzip | docker load'
           scp infra/docker/prod/compose.yaml infra/docker/prod/Caddyfile "ubuntu@$HOST:/opt/disc-voice/"
+      # The .env only exists on the server; secrets kept in GitHub are written
+      # into it here. The value goes through stdin, never on a command line.
+      - name: Sync secrets to the server .env
+        env:
+          KLIPY_TOKEN: ${{ secrets.KLIPY_TOKEN }}
+        run: |
+          if [ -z "$KLIPY_TOKEN" ]; then
+            echo "::warning::Secret KLIPY_TOKEN is not set; the server keeps its current value (GIFs may be off)."
+            exit 0
+          fi
+          # Single quotes: everything runs on the server, reading the value from stdin.
+          printf '%s' "$KLIPY_TOKEN" | ssh "ubuntu@$HOST" 'set -euo pipefail; value=$(cat); cd /opt/disc-voice; umask 077; touch .env; { grep -v "^KLIPY_TOKEN=" .env || true; printf "KLIPY_TOKEN=%s\n" "$value"; } > .env.tmp; mv .env.tmp .env'
       - name: Switch to the new version
         run: |
           ssh "ubuntu@$HOST" IMAGE="$IMAGE" bash -s <<'EOF'

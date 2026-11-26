@@ -122,6 +122,41 @@ describe("profile editing", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Escolha uma das cores de banner disponíveis.");
     expect(screen.getByLabelText("Pronomes")).toHaveValue("ela/dela");
   });
+
+  it("sets GIFs from Klipy as the avatar and the banner", async () => {
+    const gif = {
+      id: "1", slug: "oi-1", title: "Oi", width: 320, height: 240,
+      url: "https://static.klipy.com/ii/1/md.webp", thumbnail: "https://static.klipy.com/ii/1/sm.webp", still: "https://static.klipy.com/ii/1/md.jpg",
+    };
+    const fetch = mockApi((path, init) => {
+      if (path.startsWith("/api/gifs?")) return { body: { results: [gif], page: 1, hasNext: false } };
+      if (path.endsWith("/me") && init?.method === "PATCH") {
+        const changes = JSON.parse(String(init.body));
+        return { body: { ...account, avatar: changes.avatarGif.url, avatarSource: "gif", avatarStill: changes.avatarGif.still, bannerGif: changes.bannerGif.url } };
+      }
+    });
+    const user = await openSettings("Perfil");
+    await user.click(screen.getAllByRole("button", { name: "Escolher GIF" })[0]);
+    await user.click(await screen.findByRole("button", { name: "GIF: Oi" }));
+    // Escape only goes back from the preview: the settings stay open.
+    await user.keyboard("{Escape}");
+    expect(settings()).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "GIF: Oi" }));
+    await user.click(screen.getByRole("button", { name: "Usar como avatar" }));
+    await user.click(screen.getByRole("button", { name: "Escolher GIF" }));
+    await user.click(await screen.findByRole("button", { name: "GIF: Oi" }));
+    await user.click(screen.getByRole("button", { name: "Usar no banner" }));
+
+    const preview = screen.getByRole("complementary", { name: "Prévia do perfil" });
+    expect(preview.querySelector(".profile-banner-gif")).toHaveAttribute("src", gif.url);
+    expect(preview.querySelector(".avatar-photo")).toHaveAttribute("src", gif.url);
+    await user.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await within(settings()).findByRole("status")).toHaveTextContent("Perfil salvo.");
+    const choice = { slug: "oi-1", title: "Oi", url: gif.url, still: gif.still, width: 320, height: 240 };
+    const patch = fetch.mock.calls.find(([, init]) => init?.method === "PATCH")!;
+    expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ avatarGif: choice, bannerGif: choice });
+    expect(screen.getAllByRole("button", { name: "Remover GIF" })).toHaveLength(2);
+  });
 });
 
 describe("custom themes", () => {

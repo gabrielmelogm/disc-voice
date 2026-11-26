@@ -16,8 +16,14 @@ pub mod user {
         pub google_sub: Option<String>,
         pub avatar_url: Option<String>,
         pub created_at: DateTimeUtc,
-        /// `google` or `discord`: the account the photo follows.
+        /// `google` or `discord`: the account the photo follows; `gif` for
+        /// a GIF from Klipy.
         pub avatar_source: Option<String>,
+        /// Still frame of a GIF avatar (reduced motion).
+        pub avatar_still: Option<String>,
+        /// A GIF from Klipy shown as the banner, and its still frame.
+        pub banner_gif: Option<String>,
+        pub banner_still: Option<String>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

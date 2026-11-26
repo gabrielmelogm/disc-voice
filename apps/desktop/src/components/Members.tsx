@@ -45,7 +45,7 @@ function withSelf(members: ServerMember[], self: User, selfStatus: ChosenStatus)
 
 function MemberRow({ member, room, selfId }: { member: ServerMember; room?: RoomPresence[string]; selfId: string }) {
   return <li className={member.status === "offline" ? "is-offline" : undefined}>
-    <Avatar name={member.user.name} src={member.user.avatar} status={member.status} />
+    <Avatar name={member.user.name} src={member.user.avatar} still={member.user.avatarStill} status={member.status} />
     <MemberDetails member={member} room={room} selfId={selfId} />
   </li>;
 }
@@ -95,7 +95,7 @@ export function PeoplePanel({ self, selfStatus, members, loading, error, rooms, 
       : <div className="offline-group">
         <span className="offline-label">Offline · {offline.length}</span>
         <div className="offline-stack" aria-hidden="true">
-          {offline.slice(0, OFFLINE_PREVIEW).map(m => <Avatar key={m.user.id} name={m.user.name} src={m.user.avatar} size="sm" />)}
+          {offline.slice(0, OFFLINE_PREVIEW).map(m => <Avatar key={m.user.id} name={m.user.name} src={m.user.avatar} still={m.user.avatarStill} size="sm" />)}
           {offline.length > OFFLINE_PREVIEW && <span className="avatar avatar-sm more-count">+{offline.length - OFFLINE_PREVIEW}</span>}
         </div>
         <button className="link-button" onClick={onShowAll}>Ver todos</button>
@@ -155,7 +155,7 @@ export function MembersDialog({ server, self, selfStatus, members, rooms, onClos
       <h3 className="eyebrow">{group.title} · {group.list.length}</h3>
       <ul className="people-list">
         {group.list.map(m => <li key={m.user.id} className={m.status === "offline" ? "is-offline" : undefined}>
-          <Avatar name={m.user.name} src={m.user.avatar} status={m.status} />
+          <Avatar name={m.user.name} src={m.user.avatar} still={m.user.avatarStill} status={m.status} />
           <MemberDetails member={m} room={rooms[m.user.id]} selfId={self.id} />
           {isOwner && m.role !== "owner" && <button className="button secondary small" disabled={busy === m.user.id} onClick={() => void changeRole(m)}>
             {m.role === "moderator" ? "Remover moderador" : "Tornar moderador"}

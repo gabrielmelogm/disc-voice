@@ -173,7 +173,7 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
     {video
       // Our own camera is mirrored, as in any video call; others see it as is.
       ? <CameraVideo feed={feed} label={self ? "Sua câmera" : `Câmera de ${name}`} mirrored={self} />
-      : <Avatar name={name} src={participant.user.avatar} size="xl" />}
+      : <Avatar name={name} src={participant.user.avatar} still={participant.user.avatarStill} size="xl" />}
     {ping !== undefined && <SignalBadge ms={ping} self={self} />}
     {camera && !feed && <span className="tile-loading" role="status"><Video size={14} />Carregando câmera…</span>}
     {participant.screen && <span className="tile-badge"><MonitorUp size={14} aria-label="Compartilhando a tela" /></span>}

@@ -410,6 +410,8 @@ fn row(message: &Value, channels: &HashMap<String, String>) -> Option<Value> {
                 width: a["width"].as_u64().and_then(|w| u32::try_from(w).ok()),
                 height: a["height"].as_u64().and_then(|h| u32::try_from(h).ok()),
                 unavailable: false,
+                provider: None,
+                still: None,
             })
         })
         .collect();

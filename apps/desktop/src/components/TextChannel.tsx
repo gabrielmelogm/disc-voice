@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { Channel, ChatMessage, MemberRole, User } from "@disc-voice/shared";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import type { Channel, ChatMessage, GifChoice, MemberRole, User } from "@disc-voice/shared";
 import { History, MessageSquareText, Plus, SendHorizontal, Smile } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import type { Realtime } from "../lib/realtime";
+import { GifImage, GifPicker } from "./GifPicker";
 import { Attachments, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
 import { RoleBadge } from "./Members";
 import { ProfileButton } from "./ProfileCard";
@@ -18,7 +19,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
   return [...unique.values()].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
 }
 
-interface Pending { clientId: string; content: string; error: string; sending: boolean }
+interface Pending { clientId: string; content: string; gif?: GifChoice; error: string; sending: boolean }
 
 function focused() {
   return typeof document.hasFocus === "function" ? document.hasFocus() : true;
@@ -81,6 +82,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   };
 
   const [viewing, setViewing] = useState<Media | null>(null);
+  const [gifOpen, setGifOpen] = useState(false);
+  const closeGifs = useCallback(() => setGifOpen(false), []);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   // Imported from Discord: messages arrive in batches as the import advances.
   const importedCount = useRef<number | null>(null);
   useEffect(() => realtime.onEvent(event => {
@@ -172,7 +176,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     if (inFlight.current.has(item.clientId)) return;
     inFlight.current.add(item.clientId);
     setPending(current => current.map(p => p.clientId === item.clientId ? { ...p, sending: true, error: "" } : p));
-    try { accept([await api.sendMessage(channel.id, item.clientId, item.content)]); }
+    try {
+      const sent = item.gif ? api.sendMessage(channel.id, item.clientId, item.content, item.gif) : api.sendMessage(channel.id, item.clientId, item.content);
+      accept([await sent]);
+    }
     catch (cause) {
       setPending(current => current.map(p => p.clientId === item.clientId ? { ...p, sending: false, error: message(cause) } : p));
     } finally { inFlight.current.delete(item.clientId); }
@@ -188,6 +195,16 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     // The next message starts a new announcement right away.
     lastTyping.current = 0;
     void send(item);
+  }
+
+  /** Sends the GIF chosen in the picker on its own; the text being typed stays. */
+  function sendGif(gif: GifChoice) {
+    setGifOpen(false);
+    const item: Pending = { clientId: crypto.randomUUID(), content: "", gif, sending: true, error: "" };
+    setPending(current => [...current, item]);
+    pinBottom.current = true;
+    void send(item);
+    textarea.current?.focus();
   }
 
   function type(value: string) {
@@ -209,6 +226,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       event.preventDefault(); event.currentTarget.form?.requestSubmit();
     }
   };
+  const gifButton = <button type="button" className={`icon-button gif-button ${gifOpen ? "active" : ""}`} aria-label="Enviar um GIF" title="GIFs"
+    aria-haspopup="dialog" aria-expanded={gifOpen} onPointerDown={event => { if (gifOpen) event.stopPropagation(); }}
+    onClick={() => setGifOpen(open => !open)}>GIF</button>;
+  const gifPicker = gifOpen && <GifPicker className={room ? "narrow" : ""} label="Enviar um GIF" onPick={sendGif} onClose={closeGifs} />;
   return <section className={`text-chat ${room ? "room" : ""}`} aria-label={room ? `Mensagens da sala ${channel.name}` : peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`}>
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
@@ -222,7 +243,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         ? <div className="chat-welcome room-welcome"><MessageSquareText size={26} /><p>Compartilhe links e converse sem microfone. As mensagens ficam na sala para quem entrar depois.</p></div>
         : importing
         ? <div className="chat-welcome"><span className="welcome-icon"><History size={28} /></span><h2>#{channel.name} vem do Discord</h2><p>As mensagens aparecem aqui conforme a importação avança.</p></div>
-        : peer ? <div className="chat-welcome"><Avatar name={peer.name} src={peer.avatar} size="xl" /><h2>{peer.name}</h2><p>Esse é o começo da sua conversa com {peer.name}.</p></div>
+        : peer ? <div className="chat-welcome"><Avatar name={peer.name} src={peer.avatar} still={peer.avatarStill} size="xl" /><h2>{peer.name}</h2><p>Esse é o começo da sua conversa com {peer.name}.</p></div>
         : <div className="chat-welcome"><span className="welcome-icon"><MessageSquareText size={28} /></span><h2>Bem-vindo a #{channel.name}</h2><p>Esse é o começo da conversa. Diga oi para sua comunidade.</p></div>)}
       {messages.map((item, index) => {
         const previous = messages[index - 1];
@@ -232,7 +253,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         return <Fragment key={item.id}>
           {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
           <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
-            {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} /></ProfileButton>}
+            {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} /></ProfileButton>}
             <div className="message-body">
               {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><RoleBadge role={roles?.[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
               {item.content ? <MessageText text={item.content} /> : !item.attachments?.length && <p className="muted"><em>Mensagem sem texto</em></p>}
@@ -243,30 +264,38 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         </Fragment>;
       })}
       {pending.map(item => <article className="chat-message pending-message" key={item.clientId}>
-        <Avatar name={self?.name || "Você"} src={self?.avatar} />
+        <Avatar name={self?.name || "Você"} src={self?.avatar} still={self?.avatarStill} />
         <div className="message-body">
-          <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div><MessageText text={item.content} />
+          <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div>
+          {item.content && <MessageText text={item.content} />}
+          {item.gif && <figure className="message-gif"><GifImage url={item.gif.url} still={item.gif.still} alt={item.gif.title || "GIF"} /></figure>}
           {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}
         </div>
       </article>)}
     </div>
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
     {room ? <form className="composer room-composer" onSubmit={submit}>
+      {gifPicker}
       {/* Who is typing shows above the field, which stays a single line. */}
       <span className="composer-hint" aria-live="polite">{typingIndicator}</span>
       <label className="sr-only" htmlFor="room-message">Mensagem para o chat da sala</label>
-      <textarea id="room-message" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-        onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
+      <div className="room-input">
+        <textarea ref={textarea} id="room-message" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
+          onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
+        {gifButton}
+      </div>
       <button className="sr-only" type="submit" disabled={!content.trim()}>Enviar mensagem</button>
     </form>
     : importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
+      {gifPicker}
       <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
-      <textarea id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
+      <textarea ref={textarea} id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
         onChange={event => type(event.target.value)} onKeyDown={enterToSend} />
       <div className="composer-actions">
         {/* Attachments and emoji are designed but not implemented yet. */}
         <button type="button" className="icon-button" disabled aria-label="Anexar arquivo (em breve)" title="Anexos em breve"><Plus size={18} /></button>
         <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
+        {gifButton}
         {/* Who is typing takes the hint's place, so the composer never jumps. */}
         <span className="composer-hint" aria-live="polite">{typingIndicator || "Enter para enviar · Shift+Enter para nova linha"}</span>
         <button className="button primary small" type="submit" disabled={!content.trim()} aria-label="Enviar mensagem"><SendHorizontal size={16} />Enviar</button>

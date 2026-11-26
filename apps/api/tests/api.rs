@@ -7,6 +7,7 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use disc_api::{
     google::{GoogleConfig, OAuthClient},
+    klipy::KlipyConfig,
     migration::Migrator,
     router,
     turn::CloudflareTurnConfig,
@@ -3630,6 +3631,233 @@ async fn voice_config_uses_cloudflare_turn_and_falls_back() {
         .starts_with("stun:"));
     assert!(!body.to_string().contains("cloudflare"));
 
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM users WHERE id = $1",
+        [Uuid::parse_str(&user_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
+}
+
+/// A fake Klipy API with one GIF, checking the key in the path.
+async fn fake_klipy() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let rendition = |name: &str| json!({ "url": format!("https://static.klipy.com/ii/abc/{name}"), "width": 320, "height": 240, "size": 1 });
+    let body = json!({ "result": true, "data": {
+        "data": [{ "id": 7, "slug": "oi-7", "title": "Oi", "type": "gif", "file": {
+            "md": { "gif": rendition("md.gif"), "webp": rendition("md.webp"), "jpg": rendition("md.jpg") },
+            "sm": { "webp": rendition("sm.webp") }
+        } }],
+        "current_page": 1, "per_page": 24, "has_next": false
+    }});
+    let page = axum::routing::get(move || {
+        let body = body.clone();
+        async move { Json(body) }
+    });
+    tokio::spawn(async move {
+        let app = Router::new()
+            .route("/api/v1/klipy-key/gifs/trending", page.clone())
+            .route("/api/v1/klipy-key/gifs/search", page)
+            .route(
+                "/api/v1/limited/gifs/trending",
+                axum::routing::get(|| async { StatusCode::TOO_MANY_REQUESTS }),
+            );
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}")
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn gifs_from_klipy_in_messages_and_profiles() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let klipy = fake_klipy().await;
+    let state = |api_key: &str| {
+        let (db, api_key, api_url) = (db.clone(), api_key.to_owned(), klipy.clone());
+        async move {
+            AppState::new(db, "https://discvoice.example".into(), fake_google().await)
+                .with_klipy(KlipyConfig { api_key, api_url })
+        }
+    };
+    let app = router(state("klipy-key").await, vec![]);
+    let (token, user_id) = register(&app, "Gif").await;
+
+    // Without the key configured, the picker says so.
+    let plain = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
+        vec![],
+    );
+    assert_eq!(
+        call(&plain, "GET", "/gifs", Some(&token), None).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        call(&app, "GET", "/gifs", None, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let (status, page) = call(&app, "GET", "/gifs?q=oi", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let gif = &page["results"][0];
+    assert_eq!(gif["url"], "https://static.klipy.com/ii/abc/md.webp");
+    assert_eq!(gif["still"], "https://static.klipy.com/ii/abc/md.jpg");
+    assert_eq!(page["hasNext"], false);
+    assert!(!page.to_string().contains("klipy-key"));
+
+    let limited = router(state("limited").await, vec![]);
+    let (status, body) = call(&limited, "GET", "/gifs", Some(&token), None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body["error"].as_str().unwrap().contains("GIF"));
+
+    // A GIF message, with no text.
+    let server = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&token),
+        Some(json!({ "name": "Gifs" })),
+    )
+    .await
+    .1;
+    let server_id = server["server"]["id"].as_str().unwrap().to_owned();
+    let channel = call(
+        &app,
+        "POST",
+        &format!("/servers/{server_id}/channels"),
+        Some(&token),
+        Some(json!({ "name": "geral" })),
+    )
+    .await
+    .1;
+    let path = format!("/channels/{}/messages", channel["id"].as_str().unwrap());
+    let choice = json!({ "slug": "oi-7", "title": "Oi", "url": gif["url"], "still": gif["still"], "width": 320, "height": 240 });
+    let client_id = Uuid::new_v4();
+    let (status, sent) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&token),
+        Some(json!({ "clientId": client_id, "content": "", "gif": choice })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let attachment = &sent["attachments"][0];
+    assert_eq!(attachment["provider"], "klipy");
+    assert_eq!(attachment["url"], "https://static.klipy.com/ii/abc/md.webp");
+    assert_eq!(attachment["contentType"], "image/webp");
+    assert_eq!(
+        attachment["still"],
+        "https://static.klipy.com/ii/abc/md.jpg"
+    );
+    let history = call(&app, "GET", &path, Some(&token), None).await.1;
+    assert_eq!(history["messages"][0]["attachments"][0]["id"], "klipy:oi-7");
+    // Retrying the same send is idempotent; a different GIF under the same id is not.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            Some(json!({ "clientId": client_id, "gif": choice }))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let other = json!({ "url": "https://static.klipy.com/ii/abc/other.gif" });
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            Some(json!({ "clientId": client_id, "gif": other }))
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    // Only Klipy's CDN, and something must be sent.
+    for invalid in [
+        json!({ "clientId": Uuid::new_v4(), "gif": { "url": "https://evil.example/x.gif" } }),
+        json!({ "clientId": Uuid::new_v4(), "gif": { "url": "http://static.klipy.com/x.gif" } }),
+        json!({ "clientId": Uuid::new_v4(), "content": "  " }),
+    ] {
+        assert_eq!(
+            call(&app, "POST", &path, Some(&token), Some(invalid))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // GIF avatar and banner, then removed.
+    let (status, me) = call(
+        &app,
+        "PATCH",
+        "/me",
+        Some(&token),
+        Some(json!({ "avatarGif": choice, "bannerGif": choice })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["avatar"], "https://static.klipy.com/ii/abc/md.webp");
+    assert_eq!(me["avatarSource"], "gif");
+    assert_eq!(me["avatarStill"], "https://static.klipy.com/ii/abc/md.jpg");
+    assert_eq!(me["bannerGif"], "https://static.klipy.com/ii/abc/md.webp");
+    assert_eq!(me["banner"], "brand");
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            "/me",
+            Some(&token),
+            Some(json!({ "bannerGif": { "url": "https://evil.example/b.gif" } }))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    // Another field alone leaves the GIFs as they are.
+    let me = call(
+        &app,
+        "PATCH",
+        "/me",
+        Some(&token),
+        Some(json!({ "bio": "gifs!" })),
+    )
+    .await
+    .1;
+    assert_eq!(me["avatarSource"], "gif");
+    let me = call(
+        &app,
+        "PATCH",
+        "/me",
+        Some(&token),
+        Some(json!({ "avatarGif": null, "bannerGif": null })),
+    )
+    .await
+    .1;
+    assert_eq!(me["avatar"], Value::Null);
+    assert_eq!(me["avatarSource"], Value::Null);
+    assert!(me.get("avatarStill").is_none() && me.get("bannerGif").is_none());
+
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM servers WHERE id = $1",
+        [Uuid::parse_str(&server_id).unwrap().into()],
+    ))
+    .await
+    .unwrap();
     db.execute(Statement::from_sql_and_values(
         DbBackend::Postgres,
         "DELETE FROM users WHERE id = $1",

@@ -88,9 +88,10 @@ Sem TURN da Cloudflare nem `TURN_URLS`, o cliente usa apenas STUN/conexões dire
 
 - `POST /api/servers/:id/channels`: `{ "name": "geral", "type": "text" | "voice" }`. A omissão de `type` assume `text` por compatibilidade.
 - `GET /api/channels/:id/messages?before=<id>&limit=50`: histórico anterior. Para recuperar mensagens novas, use `after=<id>`, sem `before`. Limite máximo: 100.
-- `POST /api/channels/:id/messages`: `{ "clientId": "<uuid>", "content": "Olá!" }`. De 1 a 4000 caracteres; repetir o mesmo envio retorna a mesma mensagem.
+- `POST /api/channels/:id/messages`: `{ "clientId": "<uuid>", "content": "Olá!" }`. De 1 a 4000 caracteres; repetir o mesmo envio retorna a mesma mensagem. Com `"gif": { "slug", "title", "url", "still", "width", "height" }` (um resultado de `/api/gifs`), o texto é opcional e o GIF vira um anexo com `provider: "klipy"`.
+- `GET /api/gifs?q=<texto>&page=1`: GIFs do Klipy (busca; sem `q`, os mais populares), 24 por página, com `hasNext`. Veja [GIFs do Klipy](#gifs-do-klipy).
 - `GET /api/voice/config`: configuração ICE autorizada para a sessão.
-- `PATCH /api/me`: `{ "name": "Ana", "pronouns": "ela/dela", "bio": "Sobre mim", "banner": "brand" }`. Todos os campos são opcionais; só os enviados mudam. Nome de 1 a 32 caracteres (mesma regra do cadastro), pronomes até 40, “Sobre mim” até 190 (aceita quebras de linha) e `banner` entre `brand`, `green`, `amber`, `red` e `graphite`. A mudança é enviada como `user.updated` pelo tempo real para os membros dos mesmos servidores e para os outros dispositivos da conta; as salas de voz recebem um novo `voice.participants` com o nome atualizado.
+- `PATCH /api/me`: `{ "name": "Ana", "pronouns": "ela/dela", "bio": "Sobre mim", "banner": "brand" }`. Todos os campos são opcionais; só os enviados mudam. Nome de 1 a 32 caracteres (mesma regra do cadastro), pronomes até 40, “Sobre mim” até 190 (aceita quebras de linha) e `banner` entre `brand`, `green`, `amber`, `red` e `graphite`. `avatarGif` e `bannerGif` recebem um GIF do Klipy (mesmo formato do envio de mensagem) para a foto e o banner, ou `null` para removê-lo. A mudança é enviada como `user.updated` pelo tempo real para os membros dos mesmos servidores e para os outros dispositivos da conta; as salas de voz recebem um novo `voice.participants` com o nome atualizado.
 - `GET /api/search?q=<texto>&before=<id>`: busca global (Ctrl+K). Retorna `channels` (canais e salas pelo nome), `people` (pessoas que compartilham algum servidor com você) e `messages` (conteúdo, com índice de texto completo `messages_search` e busca por prefixo), sempre restritos aos servidores de que você participa. As mensagens vêm da mais nova para a mais antiga, 20 por página; passe `nextCursor` como `before` para a próxima página (que traz só mensagens). `q` deve ter de 1 a 100 caracteres.
 
 Todos exigem sessão; operações nos canais exigem associação ao servidor e o tipo correto de canal.
@@ -262,6 +263,20 @@ DISCORD_BOT_TOKEN=...
 ```
 
 Sem essas três variáveis a integração fica desativada e a interface avisa. A API mantém uma única conexão de gateway; rode só uma instância da API com o bot configurado.
+
+### GIFs do Klipy
+
+O botão **GIF** do campo de mensagem (canais de texto, mensagens diretas e chat das salas de voz) abre a busca do [Klipy](https://klipy.com), com os GIFs em alta e uma prévia antes de enviar. Em **Configurações → Perfil**, o mesmo seletor escolhe um GIF para o avatar e outro para o banner, que aparecem animados no cartão de perfil.
+
+```dotenv
+KLIPY_TOKEN=<chave-da-api-do-klipy>
+```
+
+- A chave (criada em [partner.klipy.com](https://partner.klipy.com/api-keys)) fica só na API: o app chama `GET /api/gifs`, e a API consulta o Klipy. Nem o bundle do desktop nem as requisições do cliente contêm a chave, e a API nunca registra a URL do Klipy (a chave vai no caminho).
+- Os resultados mantêm a ordem do Klipy. Cada página fica 5 minutos em memória, compartilhada entre os usuários, porque uma chave de teste aceita só 100 requisições por hora. Limites (429) e falhas aparecem no seletor com **Tentar novamente**, sem afetar o campo de mensagem.
+- As mídias carregam direto da CDN do Klipy (`static.klipy.com`, `static1` e `static2`), como os termos pedem. Mensagens e perfis guardam só o link, e a API recusa links de outros domínios.
+- Com **Reduzir movimento** ativo no sistema, GIFs aparecem parados (o quadro estático do Klipy) com um botão para reproduzir, e avatares e banners ficam parados.
+- Sem `KLIPY_TOKEN`, o seletor avisa que os GIFs não estão disponíveis neste servidor.
 
 Canais de texto e de voz podem ter o mesmo nome (ex.: `geral` de texto e `geral` de voz); dois canais do mesmo tipo, não.
 
