@@ -1,42 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Check, ChevronUp, Cloud, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
-  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, Volume2, VolumeX,
+  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX,
 } from "lucide-react";
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
 import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
-import { CAMERA_QUALITIES, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
+import { CAMERA_QUALITIES, screenLabel, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
+import { ScreenShareDialog } from "./ScreenShareDialog";
 import { Avatar, Badge, unreadLabel } from "./ui";
 
 /**
- * Shares the screen in the call. The arrow chooses whether the computer's
- * audio goes with it; that applies the next time sharing starts.
+ * Shares the screen in the call. Each time, a dialog asks for the quality,
+ * the frame rate and whether the computer's audio goes with it.
  */
-export function ScreenButton({ voice, state, menuOpen = false, onMenu = () => {} }: {
-  voice: Voice; state: VoiceState; menuOpen?: boolean; onMenu?: () => void;
-}) {
+export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
+  const [asking, setAsking] = useState(false);
   if (!state.screenSupported) {
     return <button className="bar-button" disabled aria-label="Compartilhar tela (indisponível)" title="O compartilhamento de tela está disponível somente no aplicativo para Windows e Linux."><MonitorUp size={20} /></button>;
   }
   const active = state.screen !== "idle";
-  const label = state.screen === "picking" ? "Cancelar escolha da tela" : active ? "Parar compartilhamento de tela" : "Compartilhar tela";
-  return <div className="split-button">
+  const sharing = state.screenShare ? ` (${screenLabel(state.screenShare)}${state.screenAudio ? ", com áudio" : ""})` : "";
+  const label = state.screen === "picking" ? "Cancelar escolha da tela" : active ? `Parar compartilhamento de tela${sharing}` : "Compartilhar tela";
+  return <>
     <button className={`bar-button ${state.screen === "live" ? "current" : ""}`} aria-label={label} aria-pressed={active} title={label}
-      disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : void voice.startScreen())}>
+      disabled={!active && state.status !== "connected"} onClick={() => (active ? voice.stopScreen() : setAsking(true))}>
       {active ? <MonitorOff size={20} /> : <MonitorUp size={20} />}
     </button>
-    <div className="menu-anchor">
-      <button className="bar-button narrow" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Opções do compartilhamento de tela" title="Opções do compartilhamento" onClick={onMenu}><ChevronUp size={16} /></button>
-      {menuOpen && <div className="popover-menu" role="menu" aria-label="Opções do compartilhamento de tela">
-        <button role="menuitemcheckbox" aria-checked={state.shareAudio} onClick={() => voice.setShareAudio(!state.shareAudio)}>
-          <span className="menu-icon">{state.shareAudio ? <Volume2 size={16} /> : <VolumeX size={16} />}</span>
-          <span className="menu-text"><span>Incluir áudio do computador</span><small>Sem o áudio da chamada, para ninguém ouvir eco.</small></span>
-          {state.shareAudio && <Check size={16} />}
-        </button>
-        {state.screen === "live" && state.shareAudio !== state.screenAudio && <p className="menu-empty">Vale a partir do próximo compartilhamento.</p>}
-      </div>}
-    </div>
-  </div>;
+    {asking && <ScreenShareDialog initial={{ quality: state.screenQuality, frameRate: state.screenFrameRate, audio: state.shareAudio }}
+      onClose={() => setAsking(false)}
+      onShare={options => { setAsking(false); void voice.startScreen(options); }} />}
+  </>;
 }
 
 /**
@@ -105,7 +98,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   /** Opens the drawer with the user's files in the cloud. */
   onFiles?: () => void;
 }) {
-  const [menu, setMenu] = useState<"servers" | "call" | "camera" | "screen" | "account" | null>(null);
+  const [menu, setMenu] = useState<"servers" | "call" | "camera" | "account" | null>(null);
   const ref = useRef<HTMLElement>(null);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
 
@@ -145,7 +138,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
       <div role="toolbar" aria-label="Controles da chamada" className="bar-group">
         <button className={`bar-button ${voiceState.muted || voiceState.deafened ? "off" : ""}`} aria-pressed={voiceState.muted} aria-label={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} title={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} onClick={voice.toggleMute}>{voiceState.muted || voiceState.deafened ? <MicOff size={20} /> : <Mic size={20} />}</button>
         <CameraButton voice={voice} state={voiceState} menuOpen={menu === "camera"} onMenu={() => setMenu(menu === "camera" ? null : "camera")} onPicked={() => setMenu(null)} />
-        <ScreenButton voice={voice} state={voiceState} menuOpen={menu === "screen"} onMenu={() => setMenu(menu === "screen" ? null : "screen")} />
+        <ScreenButton voice={voice} state={voiceState} />
         <div className="menu-anchor">
           <button className="bar-button" aria-haspopup="menu" aria-expanded={menu === "call"} aria-label="Mais opções da chamada" title="Mais opções" onClick={() => setMenu(menu === "call" ? null : "call")}><MoreHorizontal size={20} /></button>
           {menu === "call" && <div className="popover-menu" role="menu" aria-label="Opções da chamada">

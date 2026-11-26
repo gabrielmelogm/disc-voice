@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import type { Channel, MemberRole, User, VoiceParticipant } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
-import { DEFAULT_SCREEN_VOLUME, effectiveVolume, type ScreenFeed, type ScreenVolume, type VideoFeed, type Voice, type VoiceState } from "../lib/voice";
+import { DEFAULT_SCREEN_VOLUME, effectiveVolume, screenLabel, type ScreenFeed, type ScreenVolume, type VideoFeed, type Voice, type VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
 import { ProfileButton } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
@@ -80,8 +80,10 @@ function ScreenVolumeControl({ name, setting, onVolume, onMute }: {
   </span>;
 }
 
-function ScreenVideo({ feed, label, expanded, onToggle, audio, volume }: {
+function ScreenVideo({ feed, label, detail, expanded, onToggle, audio, volume }: {
   feed: ScreenFeed; label: string; expanded: boolean; onToggle: () => void;
+  /** What it is sent at ("1080p · 60 fps"), for our own screen. */
+  detail?: string;
   /** The screen carries the computer's audio. */
   audio?: boolean;
   /** Our volume for it (screens received only). */
@@ -94,6 +96,7 @@ function ScreenVideo({ feed, label, expanded, onToggle, audio, volume }: {
       </div>
       : <StreamVideo stream={feed} label={label} />}
     <figcaption><LiveTag /><span>{label}</span>
+      {detail && <small className="screen-quality" aria-label={`Qualidade: ${detail}`}>{detail}</small>}
       {audio && (volume ?? <span className="screen-audio-badge" role="img" aria-label="Com áudio do computador" title="Com áudio do computador"><Volume2 size={15} /></span>)}
       <button className="icon-button on-dark small" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir" : "Ampliar"} onClick={onToggle}><Maximize2 size={15} /></button>
     </figcaption>
@@ -109,7 +112,7 @@ function CallScreens({ voice, state, participants }: { voice: Voice; state: Voic
   const toggle = (id: string) => setExpanded(current => (current === id ? "" : id));
   return <div className="call-screens" aria-label="Telas compartilhadas">
     {state.screen === "picking" && <div className="call-screen pending" role="status">Escolha uma tela ou janela na janela do sistema.</div>}
-    {local && <ScreenVideo feed={local} label="Sua tela" audio={state.screenAudio} expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
+    {local && <ScreenVideo feed={local} label="Sua tela" detail={state.screenShare ? screenLabel(state.screenShare) : undefined} audio={state.screenAudio} expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
     {remote.map(p => {
       const feed = state.remoteScreens[p.peerId];
       const volume = <ScreenVolumeControl name={p.user.name} setting={state.screenVolumes[p.user.id] ?? DEFAULT_SCREEN_VOLUME}

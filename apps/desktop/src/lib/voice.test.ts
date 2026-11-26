@@ -316,6 +316,33 @@ describe("screen sharing in a call", () => {
     voice.dispose();
   });
 
+  it("shares at the chosen quality and frame rate, and remembers them", async () => {
+    const { voice, start } = await inCall();
+    await voice.startScreen({ quality: "720p", frameRate: 60, audio: false });
+    expect(start).toHaveBeenLastCalledWith({ maxWidth: 1280, maxHeight: 720, frameRate: 60, cursor: true });
+    const [peer] = ScreenPeer.all;
+    await vi.waitFor(() => expect(peer.senders.find(sender => sender.track === share.track)!.setParameters)
+      .toHaveBeenCalledWith({ encodings: [{ maxBitrate: 2_500_000 }] }));
+    expect(voice.getSnapshot()).toMatchObject({ screenShare: { quality: "720p", frameRate: 60 }, screenQuality: "720p", screenFrameRate: 60, shareAudio: false });
+    voice.stopScreen();
+    expect(voice.getSnapshot().screenShare).toBeNull();
+
+    // Without options: the saved ones.
+    await voice.startScreen();
+    expect(start).toHaveBeenLastCalledWith({ maxWidth: 1280, maxHeight: 720, frameRate: 60, cursor: true });
+    voice.dispose();
+    expect(setup().voice.getSnapshot()).toMatchObject({ screenQuality: "720p", screenFrameRate: 60, shareAudio: false });
+  });
+
+  it("defaults to 1080p at 30 fps", async () => {
+    const { voice, start } = await inCall();
+    await voice.startScreen();
+    expect(start).toHaveBeenLastCalledWith({ maxWidth: 1920, maxHeight: 1080, frameRate: 30, cursor: true });
+    await vi.waitFor(() => expect(ScreenPeer.all[0].senders.find(sender => sender.track === share.track)!.setParameters)
+      .toHaveBeenCalledWith({ encodings: [{ maxBitrate: 2_500_000 }] }));
+    voice.dispose();
+  });
+
   it("returns to idle when the picker is dismissed", async () => {
     const { voice, start } = await inCall();
     start.mockResolvedValueOnce(null);
@@ -718,9 +745,8 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     vi.spyOn(nativeScreen, "start").mockResolvedValue(info);
     const stop = vi.spyOn(nativeScreen, "stop").mockResolvedValue(undefined);
     const { voice, send, event, engine } = await inNativeCall();
-    voice.setShareAudio(false);
-    await voice.startScreen();
-    expect(engine.startScreen).toHaveBeenCalledWith(30);
+    await voice.startScreen({ quality: "1080p", frameRate: 60, audio: false });
+    expect(engine.startScreen).toHaveBeenCalledWith(30, 4_000_000);
     expect(engine.startScreenAudio).not.toHaveBeenCalled();
     const local = voice.getSnapshot().localScreen as { pull: () => Promise<ArrayBuffer> };
     expect(local.pull).toBe(nativeScreen.frame);

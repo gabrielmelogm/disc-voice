@@ -103,21 +103,24 @@ pub mod native {
     }
 
     /// Sends what the screen engine captures (after `screen_start`) to the
-    /// call. The call reads the uncompressed frames; the UI keeps drawing
-    /// our preview from the JPEG ones (`screen_frame`).
+    /// call, at most `bitrate` bits per second for each peer (the chosen
+    /// quality's). The call reads the uncompressed frames; the UI keeps
+    /// drawing our preview from the JPEG ones (`screen_frame`).
     #[tauri::command]
     pub async fn call_screen_start(
         engine: State<'_, CallEngine>,
         screen: State<'_, ScreenEngine>,
         frame_rate: u32,
+        bitrate: Option<u32>,
     ) -> Result<(), String> {
         let screen = screen.inner().clone();
+        let bitrate = bitrate.filter(|&bits| bits > 0).unwrap_or(SCREEN_BITRATE);
         blocking(&engine, move |engine| {
             engine.start_video(
                 VideoSource::Screen,
                 Box::new(move |timeout| screen.next_raw_frame(timeout)),
                 frame_rate,
-                SCREEN_BITRATE,
+                bitrate,
             )
         })
         .await

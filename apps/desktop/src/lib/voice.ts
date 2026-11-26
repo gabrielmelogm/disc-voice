@@ -10,10 +10,37 @@ import type { Realtime } from "./realtime";
 import { opusStereo, screenAudio, type ScreenAudio } from "./screenAudio";
 import { screenTrack, type ScreenTrack } from "./screenTrack";
 
-/** What a call shares: sharp enough for text, light enough for a P2P mesh. */
-export const CALL_SCREEN: ScreenRequest = { maxWidth: 1920, maxHeight: 1080, frameRate: 30, cursor: true };
-/** Upload per participant; every peer gets its own copy of the screen. */
-const SCREEN_BITRATE = 2_500_000;
+export type ScreenQuality = "360p" | "720p" | "1080p";
+export type ScreenFrameRate = 30 | 60;
+
+/**
+ * Screen sizes a call offers, with the upload for each frame rate. Every peer
+ * gets its own copy (P2P mesh), so the upload is that times the others.
+ */
+export const SCREEN_QUALITIES: Record<ScreenQuality, { width: number; height: number; bitrate: Record<ScreenFrameRate, number>; label: string }> = {
+  "360p": { width: 640, height: 360, bitrate: { 30: 800_000, 60: 1_200_000 }, label: "usa menos internet" },
+  "720p": { width: 1280, height: 720, bitrate: { 30: 1_500_000, 60: 2_500_000 }, label: "equilibrada" },
+  "1080p": { width: 1920, height: 1080, bitrate: { 30: 2_500_000, 60: 4_000_000 }, label: "mais nítida" },
+};
+export const SCREEN_FRAME_RATES: ScreenFrameRate[] = [30, 60];
+
+/** What we choose when sharing the screen. */
+export interface ScreenOptions {
+  quality: ScreenQuality;
+  frameRate: ScreenFrameRate;
+  /** Send the computer's audio with it. */
+  audio: boolean;
+}
+
+export function screenBitrate(quality: ScreenQuality, frameRate: ScreenFrameRate) {
+  return SCREEN_QUALITIES[quality].bitrate[frameRate];
+}
+
+/** "1080p · 60 fps", for what we are sharing. */
+export function screenLabel(share: { quality: ScreenQuality; frameRate: number }) {
+  return `${share.quality} · ${share.frameRate} fps`;
+}
+
 /** The screen's audio: music and movies, in stereo. */
 const SCREEN_AUDIO_BITRATE = 128_000;
 const SCREEN_TAKEN = "O teste de compartilhamento de tela assumiu a captura.";
@@ -84,6 +111,11 @@ export interface VoiceState {
   remoteScreens: Record<string, ScreenFeed>;
   /** Include the computer's audio when we share the screen (saved). */
   shareAudio: boolean;
+  /** Quality and frame rate for the next share (saved). */
+  screenQuality: ScreenQuality;
+  screenFrameRate: ScreenFrameRate;
+  /** What our screen is being sent at, while we share it. */
+  screenShare: { quality: ScreenQuality; frameRate: ScreenFrameRate } | null;
   /** The screen we share carries the computer's audio right now. */
   screenAudio: boolean;
   /** Our volume for each person's screen audio, by user ID (saved). */
@@ -134,6 +166,15 @@ function savePreference(key: string, value: string) {
 function savedQuality(): CameraQuality {
   const saved = preference("cameraQuality");
   return saved in CAMERA_QUALITIES ? saved as CameraQuality : "360p";
+}
+
+function savedScreenQuality(): ScreenQuality {
+  const saved = preference("screenQuality");
+  return saved in SCREEN_QUALITIES ? saved as ScreenQuality : "1080p";
+}
+
+function savedScreenFrameRate(): ScreenFrameRate {
+  return preference("screenFrameRate") === "60" ? 60 : 30;
 }
 
 function savedScreenVolumes(): Record<string, ScreenVolume> {
@@ -229,6 +270,7 @@ export class Voice {
     speaking: [], devices: [], inputId: preference("input"), outputId: preference("output"), playbackBlocked: false, deviceBusy: false,
     peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
     shareAudio: preference("screenAudio") !== "off", screenAudio: false, screenVolumes: savedScreenVolumes(),
+    screenQuality: savedScreenQuality(), screenFrameRate: savedScreenFrameRate(), screenShare: null,
     cameraSupported: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
     camera: "idle", cameraId: preference("camera"), cameraQuality: savedQuality(), cameras: [], localCamera: null, remoteCameras: {},
     latency: {}, serverLatency: null,
@@ -248,6 +290,8 @@ export class Voice {
   private offStatus?: () => void;
   private wasConnected = false;
   private share?: ScreenTrack;
+  /** Upload cap of our screen for each peer, from the chosen quality. */
+  private shareBitrate = screenBitrate("1080p", 30);
   /** The computer's audio, sent with `share` in the webview's connections. */
   private shareAudio?: ScreenAudio;
   private screenClaim?: ScreenClaim;
@@ -455,10 +499,21 @@ export class Voice {
   /**
    * Opens the system picker and sends what the user chose to everyone in
    * the call, as a video track on the existing peer connections (adding it
-   * renegotiates them). Peers that join later get it too.
+   * renegotiates them). Peers that join later get it too. The choices are
+   * saved for the next time; without them, the saved ones are used.
    */
-  startScreen = async (request: ScreenRequest = CALL_SCREEN) => {
+  startScreen = async (options?: Partial<ScreenOptions>) => {
     if (!this.joined || this.state.screen !== "idle") return;
+    const quality = options?.quality && options.quality in SCREEN_QUALITIES ? options.quality : this.state.screenQuality;
+    const frameRate: ScreenFrameRate = options?.frameRate === 60 || options?.frameRate === 30 ? options.frameRate : this.state.screenFrameRate;
+    const audio = options?.audio ?? this.state.shareAudio;
+    savePreference("screenQuality", quality);
+    savePreference("screenFrameRate", String(frameRate));
+    savePreference("screenAudio", audio ? "on" : "off");
+    this.update({ screenQuality: quality, screenFrameRate: frameRate, shareAudio: audio });
+    const size = SCREEN_QUALITIES[quality];
+    const request: ScreenRequest = { maxWidth: size.width, maxHeight: size.height, frameRate, cursor: true };
+    const bitrate = screenBitrate(quality, frameRate);
     const generation = this.generation;
     const attempt = ++this.screenAttempt;
     const claim: ScreenClaim = nativeScreen.claim(() => {
@@ -484,12 +539,12 @@ export class Voice {
         // The engine encodes the capture's raw frames; our preview is
         // drawn from its JPEG ones, like the settings test.
         this.nativeShare = true;
-        await nativeCall.startScreen(info.frameRate);
+        await nativeCall.startScreen(info.frameRate, bitrate);
         if (!current()) { void nativeCall.stopScreen().catch(() => {}); return; }
-        this.update({ screen: "live", screenInfo: info, localScreen: { pull: nativeScreen.frame } });
+        this.update({ screen: "live", screenInfo: info, localScreen: { pull: nativeScreen.frame }, screenShare: { quality, frameRate } });
         this.syncControls();
         playScreenSound();
-        if (this.state.shareAudio) void this.startNativeScreenAudio(current);
+        if (audio) void this.startNativeScreenAudio(current);
         return;
       }
       const share: ScreenTrack = screenTrack(nativeScreen.frame, info.frameRate, error => {
@@ -498,11 +553,12 @@ export class Voice {
         this.update({ error });
       });
       this.share = share;
+      this.shareBitrate = bitrate;
       this.peers.forEach(peer => this.sendScreen(peer));
-      this.update({ screen: "live", screenInfo: info, localScreen: share.stream });
+      this.update({ screen: "live", screenInfo: info, localScreen: share.stream, screenShare: { quality, frameRate } });
       this.syncControls();
       playScreenSound();
-      if (this.state.shareAudio) void this.startScreenAudio(share);
+      if (audio) void this.startScreenAudio(share);
     } catch (error) {
       if (!current()) return;
       this.nativeShare = false;
@@ -576,14 +632,14 @@ export class Voice {
     });
     audio?.stop();
     share?.stop();
-    if (this.state.screen !== "idle" || this.state.localScreen || this.state.screenAudio) {
-      this.update({ screen: "idle", screenInfo: null, localScreen: null, screenAudio: false });
+    if (this.state.screen !== "idle" || this.state.localScreen || this.state.screenAudio || this.state.screenShare) {
+      this.update({ screen: "idle", screenInfo: null, localScreen: null, screenAudio: false, screenShare: null });
     }
   }
 
   private sendScreen(peer: Peer) {
     if (!this.share || peer.screenSender) return;
-    peer.screenSender = this.sendVideo(peer, this.share, SCREEN_BITRATE);
+    peer.screenSender = this.sendVideo(peer, this.share, this.shareBitrate);
     this.sendScreenAudio(peer);
   }
 

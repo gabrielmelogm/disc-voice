@@ -424,6 +424,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .call-screen-frames { width: 100%; height: 100%; }
 .call-screen figcaption { position: absolute; inset: auto 0 0 0; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; background: linear-gradient(transparent, var(--video-scrim)); color: var(--on-video); font-size: 13px; font-weight: 700; }
 .call-screen figcaption span:not(.live-tag):not(.live-dot) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-screen figcaption .screen-quality { flex: none; padding: 2px 6px; border-radius: var(--radius-sm); background: rgba(0, 0, 0, .45); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .screen-audio-badge { display: inline-flex; align-items: center; color: var(--on-video); }
 .screen-volume { display: inline-flex; align-items: center; gap: 4px; }
 .screen-volume input[type="range"] { width: 84px; accent-color: var(--on-video); cursor: pointer; }
@@ -452,6 +453,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .action-dialog[open] { display: flex; flex-direction: column; gap: 16px; }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .dialog-heading h2 { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+.dialog-fieldset { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
+.dialog-fieldset legend { margin-bottom: 8px; padding: 0; font-size: 13px; font-weight: 700; color: var(--ink-muted); }
+.screen-share-dialog .radio-cards { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-empty { color: var(--ink-muted); font-size: 13px; }
 .channel-type { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0; padding: 0; border: 0; }
 .channel-type legend { margin-bottom: 8px; }

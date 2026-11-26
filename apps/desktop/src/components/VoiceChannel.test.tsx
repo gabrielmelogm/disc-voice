@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, RealtimeEvent, VoiceParticipant } from "@disc-voice/shared";
 import { api } from "../lib/api";
 import type { Realtime } from "../lib/realtime";
@@ -18,7 +18,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
     status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
     screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
-    shareAudio: true, screenAudio: false, screenVolumes: {},
+    shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
     latency: {}, serverLatency: null, ...overrides,
   };
@@ -49,10 +49,21 @@ function voice() {
 }
 
 describe("VoiceChannel screen sharing", () => {
+  beforeEach(() => {
+    // jsdom has no modal dialogs.
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute("open", ""); },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+      configurable: true, value: function (this: HTMLDialogElement) { this.removeAttribute("open"); },
+    });
+  });
+
   it("starts and stops sharing from the app bar call controls", async () => {
     const controls = voice();
     const view = render(<><ScreenButton voice={controls as unknown as Voice} state={state()} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state()} participants={[self, friend]} online /></>);
     await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Escolher tela" }));
     expect(controls.startScreen).toHaveBeenCalledOnce();
     view.rerender(<><ScreenButton voice={controls as unknown as Voice} state={state({ screen: "picking" })} /><VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice} state={state({ screen: "picking" })} participants={[self, friend]} online /></>);
     expect(screen.getByText(/Escolha uma tela ou janela/)).toBeVisible();
@@ -82,20 +93,41 @@ describe("VoiceChannel screen sharing", () => {
     expect(screen.getByLabelText("Tela de Bia").tagName).toBe("CANVAS");
   });
 
-  it("chooses whether the computer's audio goes with the screen", async () => {
-    const controls = { ...voice(), setShareAudio: vi.fn() };
-    const onMenu = vi.fn();
-    const view = render(<ScreenButton voice={controls as unknown as Voice} state={state()} onMenu={onMenu} />);
-    await userEvent.click(screen.getByRole("button", { name: "Opções do compartilhamento de tela" }));
-    expect(onMenu).toHaveBeenCalledOnce();
-    view.rerender(<ScreenButton voice={controls as unknown as Voice} state={state()} menuOpen onMenu={onMenu} />);
-    const option = screen.getByRole("menuitemcheckbox", { name: /Incluir áudio do computador/ });
-    expect(option).toHaveAttribute("aria-checked", "true");
-    await userEvent.click(option);
-    expect(controls.setShareAudio).toHaveBeenCalledWith(false);
-    // Changing it while sharing applies next time.
-    view.rerender(<ScreenButton voice={controls as unknown as Voice} state={state({ screen: "live", shareAudio: false, screenAudio: true })} menuOpen onMenu={onMenu} />);
-    expect(screen.getByText(/próximo compartilhamento/)).toBeVisible();
+  it("asks for the quality, the frame rate and the audio every time it shares", async () => {
+    const controls = voice();
+    render(<ScreenButton voice={controls as unknown as Voice} state={state({ screenQuality: "720p", screenFrameRate: 60, shareAudio: false })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    expect(controls.startScreen).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Compartilhar tela" });
+    // Starts from the last choices.
+    expect(within(dialog).getByRole("radio", { name: /720p/ })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: "60 fps" })).toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ })).not.toBeChecked();
+    expect(within(dialog).getAllByRole("radio").map(radio => (radio as HTMLInputElement).value)).toEqual(["360p", "720p", "1080p", "30", "60"]);
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /1080p/ }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "30 fps" }));
+    await userEvent.click(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Escolher tela" }));
+    expect(controls.startScreen).toHaveBeenCalledWith({ quality: "1080p", frameRate: 30, audio: true });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancelling the share dialog shares nothing", async () => {
+    const controls = voice();
+    render(<ScreenButton voice={controls as unknown as Voice} state={state()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(controls.startScreen).not.toHaveBeenCalled();
+  });
+
+  it("shows the quality being shared", () => {
+    const stream = {} as MediaStream;
+    const live = state({ screen: "live", localScreen: stream, screenAudio: true, screenShare: { quality: "720p", frameRate: 60 } });
+    render(<><ScreenButton voice={voice() as unknown as Voice} state={live} /><VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={live} participants={[self, friend]} online /></>);
+    expect(screen.getByLabelText("Qualidade: 720p · 60 fps")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Parar compartilhamento de tela (720p · 60 fps, com áudio)" })).toBeVisible();
   });
 
   it("marks screens with audio and sets each one's volume locally", async () => {
