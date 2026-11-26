@@ -23,6 +23,9 @@ concurrency:
 
 jobs:
   postgres:
+    # A PR de versão (`release(...)`, da skill /release) só muda a versão:
+    # não testa nem faz deploy. O deploy depende deste job e é pulado junto.
+    if: ${{ !startsWith(github.event.head_commit.message, 'release(') }}
     runs-on: ubuntu-latest
     services:
       postgres:

@@ -13,6 +13,11 @@ O fluxo tem duas fases, porque `main` só recebe mudanças por PR:
 
 Ao rodar a skill, o script detecta em qual fase o projeto está (`pendingOnMain`).
 
+O merge da PR de versão não dispara CI: os jobs de `api.yml`, `website.yml` e `windows.yml`
+são pulados quando o commit de push começa com `release(`. Por isso o título da PR (que vira
+a mensagem do squash) precisa seguir exatamente esse formato. O CI só roda quando a release
+é publicada.
+
 Publicar uma release dispara o job `release` de `.github/workflows/windows.yml`, que gera o
 instalador do Windows a partir da tag, anexa à release e envia ao bucket. Releases `stable`
 também substituem o `releases/latest/` que o botão de download do site usa. Por isso,

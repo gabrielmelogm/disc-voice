@@ -32,6 +32,9 @@ env:
 
 jobs:
   desktop:
+    # No push da PR de versão (`release(...)`, da skill /release) não roda: o
+    # build vem quando a release é publicada, e aí este job roda de novo.
+    if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:
