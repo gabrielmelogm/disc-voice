@@ -265,6 +265,8 @@ async fn apply_choices(
             let mut active: user::ActiveModel = row.into();
             active.avatar_url = Set(url);
             active.avatar_source = Set(source);
+            // Replaces a GIF avatar, if there was one.
+            active.avatar_still = Set(None);
             let view = UserView::from(active.update(&state.db).await?);
             crate::profile::broadcast(state, &view).await?;
         }
@@ -905,6 +907,7 @@ async fn login(state: &AppState, discord: &Discord, code: &str) -> ApiResult<Str
                     avatar_url: Set(None),
                     avatar_source: Set(None),
                     created_at: Set(Utc::now()),
+                    ..Default::default()
                 }
                 .insert(&state.db)
                 .await?

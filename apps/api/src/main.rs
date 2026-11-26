@@ -1,5 +1,5 @@
 use disc_api::{
-    discord::DiscordConfig, google::GoogleConfig, migration::Migrator, router,
+    discord::DiscordConfig, google::GoogleConfig, klipy::KlipyConfig, migration::Migrator, router,
     turn::CloudflareTurnConfig, AppState,
 };
 use sea_orm::{ConnectOptions, Database};
@@ -89,6 +89,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Nenhum TURN configurado: a voz só conecta quando os participantes alcançam um ao outro direto. \
              Defina CLOUDFLARE_TURN_KEY_ID/CLOUDFLARE_TURN_API_TOKEN ou TURN_URLS/TURN_SECRET."
         ),
+    }
+    match KlipyConfig::from_env() {
+        Some(config) => {
+            tracing::info!("GIFs do Klipy ativos");
+            state = state.with_klipy(config);
+        }
+        None => tracing::warn!("GIFs desativados: defina KLIPY_TOKEN com a chave da API do Klipy."),
     }
     let app = router(state, origins).fallback_service(
         ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html"))),

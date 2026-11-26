@@ -18,7 +18,74 @@ impl MigratorTrait for Migrator {
             Box::new(Friendships),
             Box::new(MemberRoles),
             Box::new(DiscordLogin),
+            Box::new(GifProfiles),
         ]
+    }
+}
+
+struct GifProfiles;
+
+impl MigrationName for GifProfiles {
+    fn name(&self) -> &str {
+        "m20261129_000013_gif_profiles"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for GifProfiles {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- A GIF from Klipy as the photo (avatar_source = 'gif') or the
+            -- banner. Only Klipy's links are kept, with a still frame for
+            -- people who prefer reduced motion.
+            ALTER TABLE users
+                DROP CONSTRAINT IF EXISTS users_avatar_source_check,
+                ADD CONSTRAINT users_avatar_source_check
+                    CHECK (avatar_source IN ('google', 'discord', 'gif')),
+                ADD COLUMN avatar_still varchar(2048),
+                ADD COLUMN banner_gif varchar(2048),
+                ADD COLUMN banner_still varchar(2048);
+            -- A GIF can be sent without text.
+            ALTER TABLE messages
+                DROP CONSTRAINT messages_content_check,
+                ADD CONSTRAINT messages_content_check CHECK (
+                    length(content) <= 4000
+                    AND (discord_id IS NOT NULL
+                        OR length(trim(content)) >= 1
+                        OR jsonb_array_length(attachments) > 0));
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            UPDATE messages SET content = 'GIF'
+                WHERE discord_id IS NULL AND length(trim(content)) = 0;
+            ALTER TABLE messages
+                DROP CONSTRAINT messages_content_check,
+                ADD CONSTRAINT messages_content_check CHECK (
+                    length(content) <= 4000
+                    AND (discord_id IS NOT NULL OR length(trim(content)) >= 1));
+            UPDATE users SET avatar_url = NULL, avatar_source = NULL WHERE avatar_source = 'gif';
+            ALTER TABLE users
+                DROP COLUMN banner_still,
+                DROP COLUMN banner_gif,
+                DROP COLUMN avatar_still,
+                DROP CONSTRAINT IF EXISTS users_avatar_source_check,
+                ADD CONSTRAINT users_avatar_source_check
+                    CHECK (avatar_source IN ('google', 'discord'));
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

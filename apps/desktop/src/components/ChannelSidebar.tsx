@@ -56,7 +56,7 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
           <button className="room-title" aria-pressed={channelId === item.id} onClick={() => onSelect(item)}><Volume2 size={17} /><span>{item.name}</span>{people.some(p => p.screen) && <LiveTag />}</button>
           <div className="room-meta">
             {people.length > 0 ? <span className="avatar-stack" aria-label={people.map(p => p.user.name).join(", ")}>
-              {people.slice(0, 4).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} size="xs" speaking={voiceState.speaking.includes(p.peerId)} />)}
+              {people.slice(0, 4).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} still={p.user.avatarStill} size="xs" speaking={voiceState.speaking.includes(p.peerId)} />)}
             </span> : null}
             <span className="room-count">{people.length ? `${people.length} na sala` : "Ninguém por aqui"}</span>
             {here ? <span className="room-here">Você está aqui</span> : <button className="link-button" aria-label={`Entrar em ${item.name}`} onClick={() => onJoin(item)}>Entrar</button>}

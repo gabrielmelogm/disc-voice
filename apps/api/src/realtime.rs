@@ -803,6 +803,7 @@ mod tests {
                     avatar: None,
                     avatar_source: None,
                     discord: None,
+                    ..Default::default()
                 },
                 session: id.to_string(),
                 watching: None,

@@ -58,7 +58,7 @@ export function ChannelDetails({ user, selfStatus, members, voiceChannels, parti
   return <aside className="details-panel" aria-label="Detalhes da conversa">
     {live && <section className="live-room">
       <div className="live-room-heading"><h2>{live.name} agora</h2>{sharer && <LiveTag />}</div>
-      <div className="live-room-people">{people.slice(0, 5).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} speaking={voiceState.speaking.includes(p.peerId)} />)}</div>
+      <div className="live-room-people">{people.slice(0, 5).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} still={p.user.avatarStill} speaking={voiceState.speaking.includes(p.peerId)} />)}</div>
       <p>{sharer ? `${sharer.user.name} está compartilhando a tela` : people.length === 1 ? `${people[0].user.name} está na sala` : `${people.length} pessoas conversando`}</p>
       {connectedId === live.id
         ? <button className="button on-dark full" onClick={() => onJoin(live)}><Headphones size={17} />Voltar para a chamada</button>

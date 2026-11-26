@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { Gamepad2, MessageCircle } from "lucide-react";
 import type { Activity, BannerColor, User } from "@disc-voice/shared";
 import { activityDetail, activityLabel } from "../lib/activity";
+import { motionSrc, useReducedMotion } from "../lib/motion";
 import { Avatar } from "./ui";
 
 const ActivityContext = createContext<Record<string, Activity>>({});
@@ -33,6 +34,16 @@ export function bannerColor(banner: BannerColor | undefined) {
   return (BANNER_COLORS.find(color => color.id === banner) || BANNER_COLORS[0]).value;
 }
 
+/** The banner color, with the user's GIF over it (a still frame under reduced motion). */
+export function ProfileBanner({ user }: { user: Pick<User, "banner" | "bannerGif" | "bannerStill"> }) {
+  const reduced = useReducedMotion();
+  const [failed, setFailed] = useState<string | null>(null);
+  const gif = user.bannerGif ? motionSrc(user.bannerGif, user.bannerStill, reduced) : null;
+  return <div className="profile-banner" style={{ background: bannerColor(user.banner) }}>
+    {gif && gif !== failed && <img className="profile-banner-gif" src={gif} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(gif)} />}
+  </div>;
+}
+
 /** Banner, avatar, name, pronouns and "Sobre mim". */
 export function ProfileSummary({ user, subtitle }: { user: User; subtitle?: string }) {
   const activity = useActivity(user.id);
@@ -40,15 +51,15 @@ export function ProfileSummary({ user, subtitle }: { user: User; subtitle?: stri
   if (user.discord) {
     return <>
       <div className="profile-banner" style={{ background: bannerColor("graphite") }} />
-      <Avatar name={user.name} src={user.avatar} size="xl" className="profile-avatar" />
+      <Avatar name={user.name} src={user.avatar} still={user.avatarStill} size="xl" className="profile-avatar" />
       <strong>{user.name}</strong>
       <span>@{user.discord} · Discord</span>
       <div className="detail-card"><p className="muted">Pessoa das mensagens importadas do Discord. Quando ela vincular a conta do Discord ao Disc Voice, as mensagens passam a mostrar o perfil dela.</p></div>
     </>;
   }
   return <>
-    <div className="profile-banner" style={{ background: bannerColor(user.banner) }} />
-    <Avatar name={user.name} src={user.avatar} size="xl" status="online" className="profile-avatar" />
+    <ProfileBanner user={user} />
+    <Avatar name={user.name} src={user.avatar} still={user.avatarStill} size="xl" status="online" className="profile-avatar" />
     <strong>{user.name}</strong>
     {(subtitle ?? user.pronouns) && <span>{subtitle ?? user.pronouns}</span>}
     {activity && <div className="detail-card"><h3 className="eyebrow">Agora</h3><ActivityLine activity={activity} /></div>}

@@ -90,10 +90,15 @@ export interface User {
   pronouns?: string;
   bio?: string;
   banner?: BannerColor;
-  /** Profile photo URL (from Google or Discord), or null for initials. */
+  /** Profile photo URL (from Google or Discord, or a GIF from Klipy), or null for initials. */
   avatar?: string | null;
-  /** The account the photo follows. */
-  avatarSource?: "google" | "discord" | null;
+  /** The account the photo follows, or `gif` for a GIF from Klipy. */
+  avatarSource?: "google" | "discord" | "gif" | null;
+  /** Still frame of a GIF avatar, shown when the user prefers reduced motion. */
+  avatarStill?: string | null;
+  /** A GIF from Klipy shown as the banner, over the banner color. */
+  bannerGif?: string | null;
+  bannerStill?: string | null;
   /** Discord username of an author known only from imported Discord messages. */
   discord?: string;
 }
@@ -202,7 +207,7 @@ export interface DiscordServer {
   imports: DiscordImport[];
 }
 
-/** A file attached to a message (for now, media imported from Discord). */
+/** A file attached to a message: media imported from Discord, or a GIF from Klipy. */
 export interface Attachment {
   id: string;
   filename: string;
@@ -214,9 +219,42 @@ export interface Attachment {
   contentType: string | null;
   width: number | null;
   height: number | null;
+  /** `klipy` for a GIF sent from the picker. */
+  provider?: "klipy";
+  /** Still frame of an animated image, for reduced motion. */
+  still?: string | null;
 }
 
-export type ProfileUpdate = Partial<Pick<User, "name" | "pronouns" | "bio" | "banner">>;
+/** A GIF in the Klipy picker. */
+export interface Gif {
+  id: string;
+  slug: string;
+  title: string;
+  /** Animated, for messages and the preview. */
+  url: string;
+  /** Animated and small, for the picker grid. */
+  thumbnail: string;
+  /** Still frame, for reduced motion. */
+  still: string | null;
+  width: number;
+  height: number;
+}
+
+export interface GifPage {
+  results: Gif[];
+  page: number;
+  hasNext: boolean;
+}
+
+/** A GIF chosen in the picker, as the API keeps it. */
+export type GifChoice = Pick<Gif, "slug" | "title" | "url" | "still" | "width" | "height">;
+
+export type ProfileUpdate = Partial<Pick<User, "name" | "pronouns" | "bio" | "banner">> & {
+  /** A GIF as the photo, or null to remove it. */
+  avatarGif?: GifChoice | null;
+  /** A GIF as the banner, or null to go back to the color. */
+  bannerGif?: GifChoice | null;
+};
 
 export interface ChannelHit {
   id: string;

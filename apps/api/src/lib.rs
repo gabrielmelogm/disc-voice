@@ -5,6 +5,7 @@ mod entities;
 mod files;
 mod friends;
 pub mod google;
+pub mod klipy;
 mod members;
 mod messages;
 pub mod migration;
@@ -46,6 +47,8 @@ pub struct AppState {
     discord: Option<Arc<discord::Discord>>,
     /// Present when Cloudflare's managed TURN is configured.
     turn: Option<Arc<turn::CloudflareTurn>>,
+    /// Present when GIFs from Klipy are configured.
+    klipy: Option<Arc<klipy::Klipy>>,
     /// Where stored files live (see [`files`]).
     uploads: std::path::PathBuf,
 }
@@ -64,6 +67,7 @@ impl AppState {
             realtime: Arc::new(realtime::Hub::new()),
             discord: None,
             turn: None,
+            klipy: None,
             uploads: std::env::temp_dir().join("disc-voice-files"),
         }
     }
@@ -86,6 +90,12 @@ impl AppState {
             config,
             self.http.clone(),
         )));
+        self
+    }
+
+    /// Serves GIF search and trending from Klipy on `/gifs`.
+    pub fn with_klipy(mut self, config: klipy::KlipyConfig) -> Self {
+        self.klipy = Some(Arc::new(klipy::Klipy::new(config, self.http.clone())));
         self
     }
 }
@@ -122,6 +132,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/friends/{id}", axum::routing::delete(friends::remove))
         .route("/users/{id}/profile", get(friends::profile))
         .route("/voice/config", get(realtime::ice_config))
+        .route("/gifs", get(klipy::list))
         .route("/activities", get(activity::list))
         .route("/discord", get(discord::routes::status))
         .route("/discord/link", post(discord::routes::link_account))
@@ -244,7 +255,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserView {
     pub id: Uuid,
@@ -255,8 +266,17 @@ pub struct UserView {
     pub banner: String,
     /// Profile photo URL (from Google or Discord), or null to show initials.
     pub avatar: Option<String>,
-    /// `google` or `discord`: the account the photo follows.
+    /// `google` or `discord`: the account the photo follows; `gif` for a GIF
+    /// from Klipy.
     pub avatar_source: Option<String>,
+    /// Still frame of a GIF avatar, for people who prefer reduced motion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_still: Option<String>,
+    /// A GIF from Klipy over the banner color.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner_gif: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner_still: Option<String>,
     /// Discord username of an author known only from imported messages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<String>,
@@ -273,6 +293,9 @@ impl From<user::Model> for UserView {
             banner: user.banner,
             avatar: user.avatar_url,
             avatar_source: user.avatar_source,
+            avatar_still: user.avatar_still,
+            banner_gif: user.banner_gif,
+            banner_still: user.banner_still,
             discord: None,
         }
     }
@@ -398,8 +421,9 @@ async fn google_login(
         .one(&state.db)
         .await?;
     // The photo follows the Google account (refreshed on every sign-in)
-    // unless the user chose their Discord photo.
-    let follows_google = |user: &user::Model| user.avatar_source.as_deref() != Some("discord");
+    // unless the user chose their Discord photo or a GIF.
+    let follows_google =
+        |user: &user::Model| !matches!(user.avatar_source.as_deref(), Some("discord" | "gif"));
     let google_source = claims.picture.as_ref().map(|_| "google".to_owned());
     let user = match existing {
         Some(user) if follows_google(&user) && user.avatar_url != claims.picture => {
@@ -445,6 +469,7 @@ async fn google_login(
                     avatar_url: Set(claims.picture.clone()),
                     avatar_source: Set(google_source),
                     created_at: Set(Utc::now()),
+                    ..Default::default()
                 }
                 .insert(&state.db)
                 .await?

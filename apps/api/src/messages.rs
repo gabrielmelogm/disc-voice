@@ -32,6 +32,7 @@ impl DiscordAuthor {
             avatar: self.avatar.clone(),
             avatar_source: None,
             discord: Some(self.username.clone()),
+            ..Default::default()
         }
     }
 }
@@ -52,6 +53,46 @@ pub(crate) struct Attachment {
     /// `url` still points to Discord and may not open.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unavailable: bool,
+    /// `klipy` for a GIF sent from the picker: `url` is on Klipy's CDN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Still frame of an animated image, for people who prefer reduced motion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub still: Option<String>,
+}
+
+impl Attachment {
+    /// A GIF chosen in the Klipy picker. It stays on Klipy's CDN, as their
+    /// terms ask: the API keeps only the link.
+    fn gif(gif: crate::klipy::GifChoice) -> Self {
+        let webp = gif
+            .url
+            .split('?')
+            .next()
+            .unwrap_or_default()
+            .ends_with(".webp");
+        let title = if gif.title.is_empty() {
+            "GIF"
+        } else {
+            &gif.title
+        };
+        Self {
+            id: if gif.slug.is_empty() {
+                "klipy".into()
+            } else {
+                format!("klipy:{}", gif.slug)
+            },
+            filename: format!("{title}.{}", if webp { "webp" } else { "gif" }),
+            content_type: Some(if webp { "image/webp" } else { "image/gif" }.into()),
+            url: gif.url,
+            size: 0,
+            width: (gif.width > 0).then_some(gif.width),
+            height: (gif.height > 0).then_some(gif.height),
+            unavailable: false,
+            provider: Some("klipy".into()),
+            still: gif.still,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -212,7 +253,10 @@ pub(crate) async fn list(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SendMessage {
     client_id: Uuid,
+    #[serde(default)]
     content: String,
+    /// A GIF from the Klipy picker; the text is then optional.
+    gif: Option<crate::klipy::GifChoice>,
 }
 
 pub(crate) async fn send(
@@ -236,11 +280,19 @@ pub(crate) async fn send(
         ));
     }
     let content = input.content.trim();
-    if content.is_empty() || content.chars().count() > 4000 || content.contains('\0') {
+    let attachments = match input.gif {
+        Some(gif) => vec![Attachment::gif(gif.validate()?)],
+        None => Vec::new(),
+    };
+    if (content.is_empty() && attachments.is_empty())
+        || content.chars().count() > 4000
+        || content.contains('\0')
+    {
         return Err(ApiError::bad(
             "A mensagem deve ter entre 1 e 4000 caracteres.",
         ));
     }
+    let attachments = serde_json::to_value(&attachments).map_err(ApiError::internal)?;
     let tx = state.db.begin().await?;
     lock_channel(&tx, id).await?;
     let existing = message::Entity::find()
@@ -249,7 +301,10 @@ pub(crate) async fn send(
         .one(&tx)
         .await?;
     let row = if let Some(existing) = existing {
-        if existing.channel_id != id || existing.content != content {
+        if existing.channel_id != id
+            || existing.content != content
+            || existing.attachments != attachments
+        {
             return Err(ApiError(
                 StatusCode::CONFLICT,
                 "Identificador de envio já utilizado.".into(),
@@ -263,7 +318,7 @@ pub(crate) async fn send(
             client_id: Set(input.client_id),
             content: Set(content.into()),
             created_at: Set(Utc::now()),
-            attachments: Set(serde_json::json!([])),
+            attachments: Set(attachments),
             ..Default::default()
         }
         .insert(&tx)

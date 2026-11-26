@@ -1,6 +1,6 @@
 import type {
   Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
-  GoogleConfig, GoogleLogin, Invite,
+  GifChoice, GifPage, GoogleConfig, GoogleLogin, Invite,
   Friends, MemberRole, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
 
@@ -122,8 +122,11 @@ export const api = {
   createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
   messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>
     request<MessagePage>(`/channels/${channelId}/messages?${new URLSearchParams(cursor)}`, { signal }),
-  sendMessage: (channelId: string, clientId: string, content: string) =>
-    request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: { clientId, content } }),
+  sendMessage: (channelId: string, clientId: string, content: string, gif?: GifChoice) =>
+    request<ChatMessage>(`/channels/${channelId}/messages`, { method: "POST", body: gif ? { clientId, content, gif } : { clientId, content } }),
+  /** GIFs from Klipy, through the API (which holds the key): trending without `q`. */
+  gifs: (q: string, page = 1, signal?: AbortSignal) =>
+    request<GifPage>(`/gifs?${new URLSearchParams(q ? { q, page: String(page) } : { page: String(page) })}`, { signal }),
   reads: (signal?: AbortSignal) => request<ReadState[]>("/reads", { signal }),
   markRead: (channelId: string, messageId: string) =>
     request<{ channelId: string; lastReadId: string }>(`/channels/${channelId}/read`, { method: "POST", body: { messageId } }),

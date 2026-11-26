@@ -146,7 +146,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
     <span className="bar-divider" />
     <div className="menu-anchor">
       <button className="bar-avatar" aria-haspopup="menu" aria-expanded={menu === "account"} aria-label="Sua conta e configurações" title={`Sua conta · ${STATUS_LABELS[status]}`}
-        onClick={() => setMenu(menu === "account" ? null : "account")}><Avatar name={user.name} src={user.avatar} status={status} /></button>
+        onClick={() => setMenu(menu === "account" ? null : "account")}><Avatar name={user.name} src={user.avatar} still={user.avatarStill} status={status} /></button>
       {menu === "account" && <div className="popover-menu align-end" role="menu" aria-label="Sua conta">
         <span className="menu-label">Status</span>
         {CHOSEN_STATUSES.map(option => <button key={option.value} role="menuitemradio" aria-checked={option.value === chosenStatus} onClick={pick(() => onStatus(option.value))}>

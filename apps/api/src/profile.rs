@@ -1,4 +1,5 @@
 use super::*;
+use crate::klipy::GifChoice;
 
 pub(crate) const DEFAULT_BANNER: &str = "brand";
 /// Banner colors from the design system palette; the client maps them to tokens.
@@ -11,6 +12,21 @@ pub(crate) struct ProfileInput {
     pronouns: Option<String>,
     bio: Option<String>,
     banner: Option<String>,
+    /// A GIF from Klipy as the photo, or null to remove it.
+    #[serde(default, rename = "avatarGif", deserialize_with = "present")]
+    avatar_gif: Option<Option<GifChoice>>,
+    /// A GIF from Klipy over the banner color, or null to remove it.
+    #[serde(default, rename = "bannerGif", deserialize_with = "present")]
+    banner_gif: Option<Option<GifChoice>>,
+}
+
+/// Tells a field sent as null (`Some(None)`) from a missing one (`None`).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 fn pronouns(value: &str) -> ApiResult<String> {
@@ -61,6 +77,29 @@ pub(crate) async fn update(
     }
     if let Some(value) = input.banner {
         row.banner = Set(banner(&value)?);
+        changed = true;
+    }
+    match input.avatar_gif {
+        Some(Some(gif)) => {
+            let gif = gif.validate()?;
+            row.avatar_url = Set(Some(gif.url));
+            row.avatar_source = Set(Some("gif".into()));
+            row.avatar_still = Set(gif.still);
+            changed = true;
+        }
+        // Back to initials; the next Google sign-in brings its photo.
+        Some(None) if current.avatar_source.as_deref() == Some("gif") => {
+            row.avatar_url = Set(None);
+            row.avatar_source = Set(None);
+            row.avatar_still = Set(None);
+            changed = true;
+        }
+        _ => {}
+    }
+    if let Some(gif) = input.banner_gif {
+        let gif = gif.map(GifChoice::validate).transpose()?;
+        row.banner_still = Set(gif.as_ref().and_then(|g| g.still.clone()));
+        row.banner_gif = Set(gif.map(|g| g.url));
         changed = true;
     }
     if !changed {

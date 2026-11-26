@@ -56,7 +56,7 @@ export function DirectMessagesSidebar({ conversations, selectedId, selfId, unrea
         const count = selected ? 0 : unread[conversation.channel.id] || 0;
         return <button key={conversation.channel.id} className={`channel-item dm-item ${selected ? "selected" : ""} ${count ? "unread" : ""}`}
           aria-pressed={selected} onClick={() => onSelect(conversation)}>
-          <Avatar name={conversation.user.name} src={conversation.user.avatar} size="sm" status={presence[conversation.user.id]} />
+          <Avatar name={conversation.user.name} src={conversation.user.avatar} still={conversation.user.avatarStill} size="sm" status={presence[conversation.user.id]} />
           <span className="dm-text"><span className="dm-name">{conversation.user.name}</span><small className="dm-preview">{previewText(conversation, selfId)}</small></span>
           <Badge count={count} label={unreadLabel(count)} />
         </button>;
@@ -87,7 +87,7 @@ export function DirectMessages({ conversation, realtime, revision, self, onRead,
   const { channel, user } = conversation;
   return <main className="channel-main">
     <header className="channel-header">
-      <Avatar name={user.name} src={user.avatar} size="sm" />
+      <Avatar name={user.name} src={user.avatar} still={user.avatarStill} size="sm" />
       <div><h1>{user.name}</h1><p>Mensagem direta</p></div>
     </header>
     <TextChannel key={channel.id} channel={channel} peer={user} realtime={realtime} revision={revision} self={self}
@@ -135,7 +135,7 @@ export function DirectProfilePanel({ user, friendship, status, onAddFriend }: {
   return <aside className="details-panel dm-profile" aria-label={`Perfil de ${user.name}`}>
     <div className="profile-preview">
       <div className="profile-banner" style={{ background: bannerColor(person.banner) }} />
-      <Avatar name={person.name} src={person.avatar} size="xl" status={status} className="profile-avatar" />
+      <Avatar name={person.name} src={person.avatar} still={person.avatarStill} size="xl" status={status} className="profile-avatar" />
       <strong>{person.name}</strong>
       {person.pronouns && <span>{person.pronouns}</span>}
       <div className="detail-card"><h3 className="eyebrow">Sobre mim</h3><p className="profile-bio">{person.bio || "Ainda não escreveu nada por aqui."}</p></div>
@@ -206,7 +206,7 @@ export function NewMessageDialog({ selfId, onPick, onClose }: {
     {!searching && query.trim() && !people.length && !error && <p className="dialog-empty">Ninguém encontrado nos seus servidores.</p>}
     <ul className="person-list" aria-label="Pessoas">
       {people.map(person => <li key={person.id}><button className="channel-item dm-item" disabled={busy} onClick={() => void pick(person)}>
-        <Avatar name={person.name} src={person.avatar} size="sm" /><span>{person.name}</span>
+        <Avatar name={person.name} src={person.avatar} still={person.avatarStill} size="sm" /><span>{person.name}</span>
       </button></li>)}
     </ul>
   </dialog>;

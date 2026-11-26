@@ -3,6 +3,7 @@ import { ExternalLink, FileText, X } from "lucide-react";
 import type { Attachment } from "@disc-voice/shared";
 import { mediaUrl } from "../lib/api";
 import { openExternal } from "../lib/external";
+import { GifImage } from "./GifPicker";
 
 /** Something shown in the media viewer. */
 export interface Media {
@@ -142,9 +143,22 @@ export function ImageThumb({ url, name, width, height, onView }: { url: string; 
   </button>;
 }
 
+/** A GIF sent from the Klipy picker: plays inline (paused under reduced motion). */
+export function GifAttachment({ file, onView }: { file: Attachment; onView: (media: Media) => void }) {
+  const [failed, setFailed] = useState(false);
+  const name = file.filename.replace(/\.(gif|webp)$/i, "") || "GIF";
+  if (failed) return <p className="muted"><em>Não foi possível carregar o GIF.</em></p>;
+  return <figure className="message-gif" style={thumbStyle(file.width, file.height)}>
+    <GifImage url={file.url} still={file.still} alt={name} onError={() => setFailed(true)}
+      onOpen={() => onView({ url: file.url, name, kind: "image" })} openLabel={`Ver GIF ${name}`} />
+    <figcaption className="sr-only">GIF via KLIPY</figcaption>
+  </figure>;
+}
+
 export function Attachments({ files, onView }: { files: Attachment[]; onView: (media: Media) => void }) {
   return <div className="attachment-list" aria-label="Anexos">
     {files.map(file => {
+      if (file.provider === "klipy") return <GifAttachment key={file.id} file={file} onView={onView} />;
       const url = mediaUrl(file.url);
       const kind = mediaKind(file);
       if (kind === "image") return <ImageThumb key={file.id} url={url} name={file.filename} width={file.width} height={file.height} onView={onView} />;
