@@ -174,3 +174,38 @@ describe("files gallery", () => {
     expect(screen.getByRole("meter", { name: "Espaço usado" })).toHaveAttribute("aria-valuenow", "0");
   });
 });
+
+describe("dropping files on the window", () => {
+  const drag = (type: string, types: string[], handled = false) => {
+    const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, "dataTransfer", { value: { types, dropEffect: "copy" } });
+    if (handled) event.preventDefault();
+    return event;
+  };
+
+  it("never lets a file dropped outside a chat replace the app", () => {
+    const stop = files.preventFileNavigation(window);
+    const outside = drag("drop", ["Files"]);
+    window.dispatchEvent(outside);
+    expect(outside.defaultPrevented).toBe(true);
+    const over = drag("dragover", ["Files"]);
+    window.dispatchEvent(over);
+    expect(over.dataTransfer!.dropEffect).toBe("none");
+    // A chat that took the drop keeps its "copy" cursor.
+    const chat = drag("dragover", ["Files"], true);
+    window.dispatchEvent(chat);
+    expect(chat.dataTransfer!.dropEffect).toBe("copy");
+    // Dragging text is left alone.
+    const text = drag("drop", ["text/plain"]);
+    window.dispatchEvent(text);
+    expect(text.defaultPrevented).toBe(false);
+    stop();
+  });
+
+  it("lets the webview, not the native window, receive dropped files", async () => {
+    const { readFileSync } = await import("node:fs");
+    const config = JSON.parse(readFileSync(`${process.cwd()}/src-tauri/tauri.conf.json`, "utf8"));
+    // With Tauri's native drop handler on, WebView2 never fires `drop` with the files.
+    expect(config.app.windows[0].dragDropEnabled).toBe(false);
+  });
+});
