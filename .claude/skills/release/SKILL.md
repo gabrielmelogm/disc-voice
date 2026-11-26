@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README e, depois do merge, publica a release com as notas agrupadas por tipo. Use quando pedirem para criar, publicar ou lançar uma release/versão.
+description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o envia ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
 argument-hint: "[alpha|beta|stable]"
 ---
 
@@ -8,15 +8,31 @@ argument-hint: "[alpha|beta|stable]"
 
 O fluxo tem duas fases, porque `main` só recebe mudanças por PR:
 
-1. **PR de versão**: `release(<estágio>): v<versão>`, só com a versão nova nos manifestos e no README.
-2. **Release**: depois do merge, a release é criada no commit de `main` que já tem a versão.
+1. **PR de versão**: `release(<estágio>): v<versão>`, só com a versão nova nos manifestos e
+   no README. A skill abre a PR e **espera** o usuário revisar e dar merge.
+2. **Release**: assim que a PR é mergeada, a skill cria a release no commit do merge.
 
-Ao rodar a skill, o script detecta em qual fase o projeto está (`pendingOnMain`).
+Se a sessão acabar antes do merge, rodar `/release` de novo retoma: o script detecta que a
+versão já está em `main` sem release (`pendingOnMain`) e vai direto para a fase 2.
 
-Publicar uma release dispara o job `release` de `.github/workflows/windows.yml`, que gera o
-instalador do Windows a partir da tag, anexa à release e envia ao bucket. Releases `stable`
-também substituem o `releases/latest/` que o botão de download do site usa. Por isso,
-**nada é enviado ao GitHub (push, PR ou release) sem a confirmação explícita do usuário**.
+O que roda no GitHub em cada passo:
+
+- **Merge da PR de versão** (push em `main` com commit `release(`): só os **testes** de
+  `api.yml`, `website.yml` e `windows.yml`. O deploy da API e a imagem do site são pulados.
+  Por isso o título da PR (que vira a mensagem do squash) precisa começar com `release(`.
+- **Release publicada** (pela skill ou à mão na aba Releases): o job `release` de
+  `windows.yml` roda os testes de novo e depois:
+  - gera o instalador e o anexa à release como `DiscVoice_<versão>_x64-setup.exe`, junto com
+    um `SHA256SUMS`;
+  - envia o instalador ao bucket em `releases/v<versão>/`;
+  - atualiza `releases/latest/`, que o botão de download do site usa, quando a release é
+    stable ou quando ainda não existe nenhuma stable (fase alpha), e nunca com uma versão mais
+    antiga que a mais nova;
+  - acrescenta às notas a seção "Qual arquivo baixar?", com a tabela de downloads e o hash.
+
+**Antes de abrir a PR, peça a confirmação explícita do usuário.** O merge da PR, feito por ele,
+é a aprovação para publicar a release. Não é preciso perguntar de novo, a não ser que a fase
+2 comece numa nova execução de `/release`.
 
 ## 1. Calcular a versão
 
@@ -98,27 +114,50 @@ git push -u origin release/v<versão>
 gh pr create --base main --head release/v<versão> --title "release(<estágio>): v<versão>" --body-file "<scratchpad>\release-notes.md"
 ```
 
-Passe o link da PR ao usuário e avise que, depois do merge, basta rodar `/release` de novo
-para publicar a release.
+Passe o link da PR ao usuário e diga que a skill está esperando ele revisar e dar merge.
+
+**Esperar o merge.** Rode em segundo plano (`run_in_background: true`). O comando termina
+quando a PR deixa de estar aberta, e a sessão é avisada nesse momento:
+
+```powershell
+do { Start-Sleep 60; $s = gh pr view <número> --json state -q .state } while ($s -eq 'OPEN'); $s
+```
+
+- `MERGED`: siga para a fase 2 sem perguntar de novo, porque o merge foi a aprovação.
+- `CLOSED`: a PR foi fechada sem merge. Não publique nada. Avise o usuário e, se ele quiser,
+  apague a branch `release/v<versão>`.
+- Se o comando parar sem resposta (por exemplo, porque a sessão foi encerrada), o usuário
+  retoma rodando `/release` depois do merge.
+
+Não acompanhe os checks de CI do merge: eles só testam. A release roda os testes de novo
+antes de gerar o instalador.
 
 ## 3. Fase 2: publicar a release (versão já em `main`)
 
-Use a `tag`, o `channel` e as notas que o script calculou para `pendingOnMain`. Mostre-os ao
-usuário e pergunte com `AskUserQuestion` se pode publicar. As opções são "Publicar", "Criar
+Rode `git fetch origin --tags --quiet` e o `next-version.mjs` de novo (com `--notes-out`). Use
+a `tag`, o `channel` e as `notes` de `pendingOnMain`: os commits `release(...)` ficam de fora
+das notas, e o link de comparação já aponta para a nova tag.
+
+Se a fase 2 começou numa nova execução de `/release` (e não logo depois da espera do merge),
+mostre a tag e as notas e pergunte com `AskUserQuestion`. As opções são "Publicar", "Criar
 como rascunho" e "Cancelar".
 
+Crie a tag no commit do merge da PR de versão, e não num `main` que pode ter andado:
+
 ```powershell
-gh release create v<versão> --target main --title v<versão> --notes-file "<scratchpad>\release-notes.md" <flags>
+$sha = gh pr view <número> --json mergeCommit -q .mergeCommit.oid   # ou: git log -1 --format=%H --grep '^release(' origin/main
+gh release create v<versão> --target $sha --title v<versão> --notes-file "<scratchpad>\release-notes.md" <flags>
 ```
 
 - alpha ou beta: `--prerelease`
 - stable: `--latest`
 - rascunho: acrescente `--draft`. O workflow só roda quando a release for publicada.
 
-Antes de criar, confira se `git rev-parse origin/main` é o commit do merge da PR de versão. O
-`gh` cria a tag nesse commit.
+Não escreva a seção de downloads nas notas: o workflow a acrescenta depois de anexar o
+instalador.
 
-Depois, passe ao usuário o link da release e o run do workflow:
+Depois, passe ao usuário o link da release e o run do workflow, sem ficar acompanhando o
+build:
 
 ```powershell
 gh run list --workflow windows.yml --event release --limit 1

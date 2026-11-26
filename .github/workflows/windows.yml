@@ -1,9 +1,12 @@
 name: Windows
 
-# Pushes to main (or a manual run) only run lint + tests. The installer is
-# built only when a GitHub release is published: it is attached to the release
-# and uploaded to the private Lightsail bucket under releases/; the website's
-# download button signs a link to releases/latest/DiscVoice-Setup.exe.
+# Pushes to main (or a manual run) only run lint + tests, including the merge
+# of a version PR `release(...)` from the /release skill. The installer is
+# built only when a GitHub release is published (by the skill or by hand in
+# the Releases tab): it is attached to the release with SHA256SUMS, uploaded
+# to the private Lightsail bucket under releases/, and the release notes get a
+# "Qual arquivo baixar?" section. The website's download button signs a link
+# to releases/latest/DiscVoice-Setup.exe.
 on:
   push:
     branches: [main]
@@ -102,15 +105,56 @@ jobs:
       - run: npm ci
       - run: npm run build:windows
 
-      - name: Attach installer to the release
+      # Asset names without spaces (GitHub would turn "Disc Voice_..." into
+      # "Disc.Voice_..."), plus SHA256SUMS so a download can be checked.
+      - name: Attach installer and checksums to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
           if (-not $exe) { throw 'No installer found in target/release/bundle/nsis.' }
-          gh release upload $env:TAG $exe.FullName --clobber
-          "INSTALLER=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $version = $env:TAG -replace '^v', ''
+          $dist = New-Item -ItemType Directory -Force dist
+          $installer = Join-Path $dist "DiscVoice_${version}_x64-setup.exe"
+          Copy-Item $exe.FullName $installer
+
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          $sums = Join-Path $dist 'SHA256SUMS'
+          # sha256sum format (two spaces), LF, no BOM: `sha256sum -c` reads it.
+          [IO.File]::WriteAllText($sums, "$hash  $(Split-Path $installer -Leaf)`n")
+
+          gh release upload $env:TAG $installer $sums --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Upload to the release failed.' }
+          "INSTALLER=$installer" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_SHA256=$hash" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # The website's download button signs releases/latest/. It gets this
+      # release when it is stable, or a prerelease while no stable exists yet
+      # (the project is in alpha), and never an older version than the newest.
+      - name: Decide whether the website gets this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = gh release list --limit 200 --exclude-drafts --json tagName,isPrerelease | ConvertFrom-Json
+          $hasStable = @($releases | Where-Object { -not $_.isPrerelease }).Count -gt 0
+          $latest = ($env:PRERELEASE -ne 'true') -or (-not $hasStable)
+
+          # Newest semver release (tags that are not semver, like "Alpha", are ignored).
+          $semver = '^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$'
+          $newest = $releases | Where-Object { $_.tagName -match $semver } | ForEach-Object {
+            $null = $_.tagName -match $semver
+            # A stable sorts after its prereleases (alpha, beta, rc); numbers are
+            # padded so alpha.10 > alpha.9.
+            $pre = if ($Matches[4]) { $Matches[4] -replace '\d+', { '{0:D6}' -f [int]$_.Value } } else { 'zzzzzz' }
+            [pscustomobject]@{ Tag = $_.tagName; Key = '{0:D6}.{1:D6}.{2:D6}-{3}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $pre }
+          } | Sort-Object Key -Descending | Select-Object -First 1
+          if ($newest -and $newest.Tag -ne $env:TAG) {
+            "$env:TAG is not the newest release ($($newest.Tag)); the website keeps its download." >> $env:GITHUB_STEP_SUMMARY
+            $latest = $false
+          }
+          "UPDATE_LATEST=$($latest.ToString().ToLower())" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       # Same access key the API uses (see infra/terraform/README.md, "Releases").
       - name: Upload installer to the bucket
@@ -130,9 +174,47 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
           "Uploaded $base/$env:TAG/$name" >> $env:GITHUB_STEP_SUMMARY
 
-          # Key the website's download button signs; prereleases never replace it.
-          if ($env:PRERELEASE -ne 'true') {
+          if ($env:UPDATE_LATEST -eq 'true') {
             aws s3 cp $env:INSTALLER "$base/latest/$name" --content-type $type
             if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
-            "Uploaded $base/latest/$name" >> $env:GITHUB_STEP_SUMMARY
+            "Uploaded $base/latest/$name (website download)" >> $env:GITHUB_STEP_SUMMARY
           }
+
+      # Appends "Qual arquivo baixar?" to the notes, whether the release came
+      # from the /release skill or was written by hand in the Releases tab.
+      # Re-running the job replaces the section instead of repeating it.
+      - name: Add the download section to the release notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE: https://get-discvoice.devgabrielmelo.shop
+        run: |
+          $marker = '<!-- downloads -->'
+          $body = gh release view $env:TAG --json body -q .body
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the release.' }
+          $body = (($body -join "`n") -split [regex]::Escape($marker))[0].TrimEnd()
+
+          $file = Split-Path $env:INSTALLER -Leaf
+          $site = if ($env:UPDATE_LATEST -eq 'true') {
+            "O botão de download do [site]($env:SITE) já entrega esta versão."
+          } else {
+            "Esta versão não substitui o download do [site]($env:SITE): baixe o instalador aqui."
+          }
+          $section = @(
+            $marker,
+            '## Qual arquivo baixar?',
+            '',
+            '| Sistema | Download |',
+            '| --- | --- |',
+            "| Windows 10/11 (x64) | ``$file``, o instalador |",
+            "| Linux, macOS | Sem app nativo: use a versão web em [$($env:SITE -replace '^https://', '')]($env:SITE) |",
+            '',
+            "$site Atualizar pelo instalador mantém sua conta e suas configurações.",
+            '',
+            "Para conferir o download: ``sha256sum -c --ignore-missing SHA256SUMS`` ou, no PowerShell, ``(Get-FileHash '$file').Hash`` (SHA-256: ``$env:INSTALLER_SHA256``)."
+          ) -join "`n"
+
+          $notes = Join-Path $env:RUNNER_TEMP 'notes.md'
+          [IO.File]::WriteAllText($notes, ($(if ($body) { "$body`n`n" } else { '' }) + $section + "`n"))
+          gh release edit $env:TAG --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update the release notes.' }
