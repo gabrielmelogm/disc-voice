@@ -65,7 +65,7 @@ export function Switch({ id, checked, onChange, disabled, label, description }: 
 export function RadioCards<T extends string>({ name, value, options, onChange, disabled }: {
   name: string;
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: ReactNode }[];
   onChange?: (value: T) => void;
   disabled?: boolean;
 }) {

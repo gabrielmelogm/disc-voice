@@ -128,12 +128,12 @@ describe("VoiceChannel screen sharing", () => {
     const dialog = screen.getByRole("dialog", { name: "Compartilhar tela" });
     // Starts from the last choices.
     expect(within(dialog).getByRole("radio", { name: /720p/ })).toBeChecked();
-    expect(within(dialog).getByRole("radio", { name: "60 fps" })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /^60 fps/ })).toBeChecked();
     expect(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ })).not.toBeChecked();
     expect(within(dialog).getAllByRole("radio").map(radio => (radio as HTMLInputElement).value)).toEqual(["360p", "720p", "1080p", "30", "60"]);
 
     await userEvent.click(within(dialog).getByRole("radio", { name: /1080p/ }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: "30 fps" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^30 fps/ }));
     await userEvent.click(within(dialog).getByRole("switch", { name: /Compartilhar o áudio do computador/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Escolher tela" }));
     expect(controls.startScreen).toHaveBeenCalledWith({ quality: "1080p", frameRate: 30, audio: true });

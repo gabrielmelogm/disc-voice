@@ -6,8 +6,8 @@ import {
 import { RadioCards, Switch } from "./ui";
 
 const FRAME_RATE_HINTS: Record<ScreenFrameRate, string> = {
-  30: "Bom para textos e apresentações",
-  60: "Mais fluido, para vídeos e jogos",
+  30: "textos e slides",
+  60: "vídeos e jogos",
 };
 
 /**
@@ -39,13 +39,19 @@ export function ScreenShareDialog({ initial, onShare, onClose }: {
     <fieldset className="dialog-fieldset">
       <legend>Qualidade</legend>
       <RadioCards name="screen-quality" value={quality} onChange={setQuality}
-        options={(Object.keys(SCREEN_QUALITIES) as ScreenQuality[]).map(value => ({ value, label: `${value} · ${SCREEN_QUALITIES[value].label}` }))} />
+        options={(Object.keys(SCREEN_QUALITIES) as ScreenQuality[]).map(value => ({
+          value,
+          label: <span className="choice-text"><strong>{value}</strong><small>{SCREEN_QUALITIES[value].label}</small></span>,
+        }))} />
     </fieldset>
     <fieldset className="dialog-fieldset">
       <legend>Taxa de quadros</legend>
       <RadioCards name="screen-frame-rate" value={String(frameRate)} onChange={value => setFrameRate(Number(value) as ScreenFrameRate)}
-        options={SCREEN_FRAME_RATES.map(rate => ({ value: String(rate), label: `${rate} fps` }))} />
-      <p className="field-help">{FRAME_RATE_HINTS[frameRate]}. Qualidade e quadros maiores usam mais internet.</p>
+        options={SCREEN_FRAME_RATES.map(rate => ({
+          value: String(rate),
+          label: <span className="choice-text"><strong>{rate} fps</strong><small>{FRAME_RATE_HINTS[rate]}</small></span>,
+        }))} />
+      <p className="field-help">Qualidade e quadros maiores usam mais internet.</p>
     </fieldset>
     <Switch id="screen-share-audio" checked={audio} onChange={setAudio} label="Compartilhar o áudio do computador"
       description="O áudio da chamada fica de fora, sem eco." />

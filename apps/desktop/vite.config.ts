@@ -1,12 +1,12 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   publicDir: "../../public",
-  // Tests run without the developer's .env: they call the API at "/api",
-  // whatever the local app is pointed to (src/test has no .env).
-  envDir: process.env.VITEST ? "./src/test" : "../..",
+  // Tests (Vitest runs in "test" mode) skip the developer's .env: they call
+  // the API at "/api", whatever the local app is pointed to (src/test has no .env).
+  envDir: mode === "test" ? "./src/test" : "../..",
   clearScreen: false,
   server: {
     port: 1420,
@@ -20,4 +20,4 @@ export default defineConfig({
     restoreMocks: true,
     clearMocks: true,
   },
-});
+}));

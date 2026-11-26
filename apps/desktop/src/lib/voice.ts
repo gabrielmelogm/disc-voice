@@ -18,7 +18,7 @@ export type ScreenFrameRate = 30 | 60;
  * gets its own copy (P2P mesh), so the upload is that times the others.
  */
 export const SCREEN_QUALITIES: Record<ScreenQuality, { width: number; height: number; bitrate: Record<ScreenFrameRate, number>; label: string }> = {
-  "360p": { width: 640, height: 360, bitrate: { 30: 800_000, 60: 1_200_000 }, label: "usa menos internet" },
+  "360p": { width: 640, height: 360, bitrate: { 30: 800_000, 60: 1_200_000 }, label: "econômica" },
   "720p": { width: 1280, height: 720, bitrate: { 30: 1_500_000, 60: 2_500_000 }, label: "equilibrada" },
   "1080p": { width: 1920, height: 1080, bitrate: { 30: 2_500_000, 60: 4_000_000 }, label: "mais nítida" },
 };
