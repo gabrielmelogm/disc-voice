@@ -55,7 +55,9 @@ jobs:
 
   deploy:
     needs: postgres
-    if: github.ref == 'refs/heads/main'
+    # O merge da PR de versão (`release(...)`, da skill /release) só roda os
+    # testes: a versão não muda nada na API, então não há deploy.
+    if: ${{ github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'release(') }}
     runs-on: ubuntu-latest
     # One deploy at a time; a newer push waits for the running one.
     concurrency:

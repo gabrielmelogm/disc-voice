@@ -65,10 +65,10 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 
 ### Instalar no Windows
 
-1. **Baixe o instalador** `Disc Voice_0.1.0-alpha.1_x64-setup.exe` na página de
-   [Releases](https://github.com/gabrielmelogm/disc-voice/releases). Se ainda não houver
-   uma release publicada, baixe o artefato **`disc-voice-windows`** na execução mais recente
-   do workflow [Windows](https://github.com/gabrielmelogm/disc-voice/actions/workflows/windows.yml).
+1. **Baixe o instalador** `DiscVoice_0.1.0-alpha.1_x64-setup.exe` na página de
+   [Releases](https://github.com/gabrielmelogm/disc-voice/releases) ou pelo botão de download
+   do [site](https://get-discvoice.devgabrielmelo.shop). O arquivo `SHA256SUMS` da release
+   serve para conferir o download.
 2. **Execute o `.exe`** e siga o assistente de instalação. O WebView2 é baixado
    automaticamente caso ainda não esteja presente.
 3. **Abra o Disc Voice**, crie sua conta e comece a montar sua comunidade.

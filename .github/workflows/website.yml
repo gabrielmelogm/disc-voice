@@ -44,6 +44,9 @@ jobs:
 
   image:
     needs: check
+    # O merge da PR de versão (`release(...)`, da skill /release) só roda as
+    # verificações: a imagem não é publicada de novo só por mudar a versão.
+    if: ${{ !startsWith(github.event.head_commit.message, 'release(') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
