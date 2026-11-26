@@ -1,8 +1,9 @@
 name: Windows
 
-# Runs only on pushes to main (or when triggered manually): lint + tests first,
-# then the full Windows build (and its installer artifact) in a separate job
-# so its release artifacts never bloat the checks' cache.
+# Pushes to main (or a manual run) only run lint + tests. The installer is
+# built only when a GitHub release is published: it is attached to the release
+# and uploaded to the private Lightsail bucket under releases/; the website's
+# download button signs a link to releases/latest/DiscVoice-Setup.exe.
 on:
   push:
     branches: [main]
@@ -14,6 +15,8 @@ on:
       - package.json
       - package-lock.json
       - .github/workflows/windows.yml
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,10 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  RELEASES_BUCKET: disc-voice-files-481116707314
+  RELEASES_REGION: sa-east-1
 
 jobs:
   desktop:
@@ -46,7 +53,7 @@ jobs:
           tool: cargo-nextest
       - uses: Swatinem/rust-cache@v2
         with:
-          # Only main saves the cache; manual runs on other branches reuse it.
+          # Only main saves the cache; releases and manual runs reuse it.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: npm ci
@@ -59,8 +66,14 @@ jobs:
 
   release:
     needs: desktop
+    if: github.event_name == 'release'
     runs-on: windows-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      PRERELEASE: ${{ github.event.release.prerelease }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -71,11 +84,55 @@ jobs:
       # A separate job gets its own cache key, holding only target/release.
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
+
+      # The installer carries the release version: tag v1.2.3 -> 1.2.3.
+      - name: Set version from tag
+        shell: pwsh
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag '$env:TAG' is not a semver version (e.g. v1.2.3)."
+          }
+          $path = 'apps/desktop/src-tauri/tauri.conf.json'
+          $conf = Get-Content $path -Raw | ConvertFrom-Json
+          $conf.version = $version
+          $conf | ConvertTo-Json -Depth 32 | Set-Content $path -Encoding utf8
+
       - run: npm ci
       - run: npm run build:windows
-      - uses: actions/upload-artifact@v4
-        with:
-          name: disc-voice-windows
-          path: target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+
+      - name: Attach installer to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          if (-not $exe) { throw 'No installer found in target/release/bundle/nsis.' }
+          gh release upload $env:TAG $exe.FullName --clobber
+          "INSTALLER=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Same access key the API uses (see infra/terraform/README.md, "Releases").
+      - name: Upload installer to the bucket
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FILES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FILES_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.RELEASES_REGION }}
+        run: |
+          $base = "s3://$env:RELEASES_BUCKET/releases"
+          $name = 'DiscVoice-Setup.exe'
+          $type = 'application/vnd.microsoft.portable-executable'
+
+          # The objects stay private: the website signs a short-lived link.
+          # Versioned copy, kept for good.
+          aws s3 cp $env:INSTALLER "$base/$env:TAG/$name" --content-type $type
+          if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
+          "Uploaded $base/$env:TAG/$name" >> $env:GITHUB_STEP_SUMMARY
+
+          # Key the website's download button signs; prereleases never replace it.
+          if ($env:PRERELEASE -ne 'true') {
+            aws s3 cp $env:INSTALLER "$base/latest/$name" --content-type $type
+            if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
+            "Uploaded $base/latest/$name" >> $env:GITHUB_STEP_SUMMARY
+          }

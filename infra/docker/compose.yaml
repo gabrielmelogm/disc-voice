@@ -59,6 +59,10 @@ services:
         NEXT_PUBLIC_DOWNLOAD_LINUX: ${NEXT_PUBLIC_DOWNLOAD_LINUX:-}
     # Opt-in: docker compose --profile website up -d website
     profiles: ["website"]
+    environment:
+      # Signs the installer download links (apps/website/src/app/download).
+      RELEASES_ACCESS_KEY_ID: ${RELEASES_ACCESS_KEY_ID:-}
+      RELEASES_SECRET_ACCESS_KEY: ${RELEASES_SECRET_ACCESS_KEY:-}
     ports:
       - "${WEBSITE_PORT:-3000}:3000"
     restart: unless-stopped
