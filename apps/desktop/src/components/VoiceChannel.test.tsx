@@ -18,6 +18,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
     status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
     screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {},
+    shareAudio: true, screenAudio: false, screenVolumes: {},
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
     latency: {}, serverLatency: null, ...overrides,
   };
@@ -79,6 +80,44 @@ describe("VoiceChannel screen sharing", () => {
     const pull = vi.fn(() => new Promise<ArrayBuffer>(() => {}));
     render(<VoiceChannel {...chat()} channel={channel} voice={voice() as unknown as Voice} state={state({ native: true, remoteScreens: { friend: { pull } } })} participants={[self, friend]} online />);
     expect(screen.getByLabelText("Tela de Bia").tagName).toBe("CANVAS");
+  });
+
+  it("chooses whether the computer's audio goes with the screen", async () => {
+    const controls = { ...voice(), setShareAudio: vi.fn() };
+    const onMenu = vi.fn();
+    const view = render(<ScreenButton voice={controls as unknown as Voice} state={state()} onMenu={onMenu} />);
+    await userEvent.click(screen.getByRole("button", { name: "Opções do compartilhamento de tela" }));
+    expect(onMenu).toHaveBeenCalledOnce();
+    view.rerender(<ScreenButton voice={controls as unknown as Voice} state={state()} menuOpen onMenu={onMenu} />);
+    const option = screen.getByRole("menuitemcheckbox", { name: /Incluir áudio do computador/ });
+    expect(option).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(option);
+    expect(controls.setShareAudio).toHaveBeenCalledWith(false);
+    // Changing it while sharing applies next time.
+    view.rerender(<ScreenButton voice={controls as unknown as Voice} state={state({ screen: "live", shareAudio: false, screenAudio: true })} menuOpen onMenu={onMenu} />);
+    expect(screen.getByText(/próximo compartilhamento/)).toBeVisible();
+  });
+
+  it("marks screens with audio and sets each one's volume locally", async () => {
+    const controls = { ...voice(), setScreenVolume: vi.fn(), toggleScreenMute: vi.fn() };
+    const withAudio = { ...friend, screenAudio: true };
+    const stream = {} as MediaStream;
+    const view = render(<VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice}
+      state={state({ participants: [self, withAudio], remoteScreens: { friend: stream }, screenVolumes: { "user-2": { volume: 0.4, muted: false } } })}
+      participants={[self, withAudio]} online />);
+    const slider = screen.getByRole("slider", { name: "Volume da tela de Bia" });
+    expect(slider).toHaveValue("40");
+    fireEvent.change(slider, { target: { value: "75" } });
+    expect(controls.setScreenVolume).toHaveBeenCalledWith("user-2", 0.75);
+    await userEvent.click(screen.getByRole("button", { name: "Silenciar o áudio da tela de Bia" }));
+    expect(controls.toggleScreenMute).toHaveBeenCalledWith("user-2");
+
+    // Without audio: no volume control. Our own screen only shows that it has audio.
+    view.rerender(<VoiceChannel {...chat()} channel={channel} voice={controls as unknown as Voice}
+      state={state({ localScreen: stream, screen: "live", screenAudio: true, remoteScreens: { friend: stream } })}
+      participants={[self, friend]} online />);
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(screen.getByRole("img", { name: "Com áudio do computador" })).toBeVisible();
   });
 });
 

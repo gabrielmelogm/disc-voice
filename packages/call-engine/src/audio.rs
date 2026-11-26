@@ -223,6 +223,7 @@ impl Playback {
             while !stop.load(Ordering::Relaxed) {
                 chunk.fill(0.0);
                 shared.mixer.mix(&mut chunk);
+                shared.screen_mixer.mix(&mut chunk);
                 if shared.deafened.load(Ordering::Relaxed) {
                     chunk.fill(0.0);
                 }
@@ -256,6 +257,9 @@ struct Jitter {
 #[derive(Default)]
 pub(crate) struct Mixer {
     peers: Mutex<HashMap<String, Jitter>>,
+    /// Local volume per peer (1 when unset); kept while a peer's audio
+    /// stops and starts again.
+    gains: Mutex<HashMap<String, f32>>,
 }
 
 impl Mixer {
@@ -275,18 +279,36 @@ impl Mixer {
         }
     }
 
+    fn gains(&self) -> std::sync::MutexGuard<'_, HashMap<String, f32>> {
+        self.gains
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The local volume of one peer, from 0 (muted) to 1.
+    pub fn set_gain(&self, peer: &str, gain: f32) {
+        let gain = if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self.gains().insert(peer.to_owned(), gain);
+    }
+
     /// Adds every playing peer's next samples to `out`.
     pub fn mix(&self, out: &mut [f32]) {
-        for jitter in self.peers().values_mut() {
+        let gains = self.gains().clone();
+        for (peer, jitter) in self.peers().iter_mut() {
             if !jitter.playing && jitter.samples.len() >= PRIME {
                 jitter.playing = true;
             }
             if !jitter.playing {
                 continue;
             }
+            let gain = gains.get(peer).copied().unwrap_or(1.0);
             for sample in out.iter_mut() {
                 match jitter.samples.pop_front() {
-                    Some(value) => *sample += value,
+                    Some(value) => *sample += value * gain,
                     None => {
                         // Ran dry: wait for a cushion again instead of
                         // playing every late packet as a click.
@@ -305,8 +327,53 @@ impl Mixer {
         self.peers().remove(peer);
     }
 
+    /// Forgets a peer that left the call, volume included.
+    pub fn forget(&self, peer: &str) {
+        self.remove(peer);
+        self.gains().remove(peer);
+    }
+
     pub fn clear(&self) {
         self.peers().clear();
+    }
+}
+
+/// The computer's audio, shared with our screen: stereo Opus at a music
+/// bitrate. Echo-free, since `disc_audio::SystemAudio` leaves out what this
+/// process plays (the call itself).
+pub(crate) struct ScreenCapture {
+    _audio: disc_audio::SystemAudio,
+}
+
+/// Enough for music and movies in stereo.
+const SCREEN_AUDIO_BITRATE: i32 = 128_000;
+
+impl ScreenCapture {
+    pub fn start(out: UnboundedSender<EncodedFrame>) -> Result<Self, String> {
+        use disc_audio::system::{CHANNELS, RATE as SYSTEM_RATE};
+        debug_assert_eq!(SYSTEM_RATE, RATE);
+        let mut encoder =
+            opus::Encoder::new(RATE, opus::Channels::Stereo, opus::Application::Audio).map_err(
+                |error| format!("Não foi possível iniciar o codificador do áudio da tela: {error}"),
+            )?;
+        let _ = encoder.set_bitrate(opus::Bitrate::Bits(SCREEN_AUDIO_BITRATE));
+        let _ = encoder.set_inband_fec(true);
+        let mut pending: Vec<f32> = Vec::with_capacity(PACKET * CHANNELS * 2);
+        let mut packet = vec![0_u8; 4000];
+        let audio = disc_audio::SystemAudio::start(move |chunk| {
+            pending.extend_from_slice(chunk);
+            while pending.len() >= PACKET * CHANNELS {
+                if let Ok(size) = encoder.encode_float(&pending[..PACKET * CHANNELS], &mut packet) {
+                    let _ = out.send(EncodedFrame {
+                        kind: Kind::ScreenAudio,
+                        data: Bytes::copy_from_slice(&packet[..size]),
+                        duration: Duration::from_millis(20),
+                    });
+                }
+                pending.drain(..PACKET * CHANNELS);
+            }
+        })?;
+        Ok(Self { _audio: audio })
     }
 }
 
@@ -422,6 +489,46 @@ mod tests {
         let mut out = [0.0; CHUNK];
         mixer.mix(&mut out);
         assert!(out.iter().all(|&sample| sample == 1.0));
+    }
+
+    #[test]
+    fn mixer_applies_each_peers_volume() {
+        let mixer = Mixer::default();
+        mixer.set_gain("a", 0.5);
+        mixer.set_gain("muted", 0.0);
+        mixer.set_gain("loud", 7.0);
+        mixer.push("a", &[0.4; PRIME]);
+        mixer.push("muted", &[0.4; PRIME]);
+        let mut out = [0.0; CHUNK];
+        mixer.mix(&mut out);
+        assert!(out.iter().all(|&sample| (sample - 0.2).abs() < 1e-6));
+        assert_eq!(mixer.gains()["loud"], 1.0, "never above the original");
+
+        // The volume outlives the peer's audio, not the peer.
+        mixer.remove("a");
+        assert_eq!(mixer.gains()["a"], 0.5);
+        mixer.forget("a");
+        assert!(!mixer.gains().contains_key("a"));
+    }
+
+    #[test]
+    fn stereo_screen_audio_decodes_as_mono() {
+        let mut encoder =
+            opus::Encoder::new(RATE, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+        let mut decoder = Decoder::new().unwrap();
+        let tone: Vec<f32> = (0..PACKET)
+            .flat_map(|i| {
+                let value = 0.3 * (i as f32 * 440.0 * std::f32::consts::TAU / RATE as f32).sin();
+                [value, value]
+            })
+            .collect();
+        let mut packet = [0_u8; 4000];
+        let mut decoded = 0;
+        for _ in 0..10 {
+            let size = encoder.encode_float(&tone, &mut packet).unwrap();
+            decoded = decoder.decode(&packet[..size]).unwrap().len();
+        }
+        assert_eq!(decoded, PACKET);
     }
 
     #[test]

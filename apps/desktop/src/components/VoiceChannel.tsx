@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Headphones, LoaderCircle, Maximize2, MessageSquareText, MicOff, MonitorUp, Signal, SignalHigh, SignalLow, SignalMedium,
   SignalZero, Video, Volume2, VolumeX, X, type LucideIcon,
 } from "lucide-react";
 import type { Channel, MemberRole, User, VoiceParticipant } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
-import type { ScreenFeed, VideoFeed, Voice, VoiceState } from "../lib/voice";
+import { DEFAULT_SCREEN_VOLUME, effectiveVolume, type ScreenFeed, type ScreenVolume, type VideoFeed, type Voice, type VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
 import { ProfileButton } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
@@ -58,8 +58,34 @@ function CameraVideo({ feed, label, mirrored }: { feed: VideoFeed; label: string
   </div>;
 }
 
-function ScreenVideo({ feed, label, expanded, onToggle }: {
+/**
+ * Our own volume for the audio of someone's screen: it changes nothing for
+ * the others, nor that person's voice.
+ */
+function ScreenVolumeControl({ name, setting, onVolume, onMute }: {
+  name: string; setting: ScreenVolume; onVolume: (volume: number) => void; onMute: () => void;
+}) {
+  const silent = effectiveVolume(setting) === 0;
+  const percent = Math.round(setting.volume * 100);
+  return <span className="screen-volume">
+    <button className="icon-button on-dark small" aria-pressed={setting.muted}
+      aria-label={setting.muted ? `Ativar o áudio da tela de ${name}` : `Silenciar o áudio da tela de ${name}`}
+      title={setting.muted ? "Ativar o áudio da tela" : "Silenciar o áudio da tela"} onClick={onMute}>
+      {silent ? <VolumeX size={15} /> : <Volume2 size={15} />}
+    </button>
+    <input type="range" min={0} max={100} step={1} value={setting.muted ? 0 : percent}
+      aria-label={`Volume da tela de ${name}`} aria-valuetext={setting.muted ? "Silenciado" : `${percent}%`}
+      title={setting.muted ? "Silenciado" : `${percent}%`}
+      onChange={event => onVolume(Number(event.currentTarget.value) / 100)} />
+  </span>;
+}
+
+function ScreenVideo({ feed, label, expanded, onToggle, audio, volume }: {
   feed: ScreenFeed; label: string; expanded: boolean; onToggle: () => void;
+  /** The screen carries the computer's audio. */
+  audio?: boolean;
+  /** Our volume for it (screens received only). */
+  volume?: ReactNode;
 }) {
   return <figure className={`call-screen ${expanded ? "expanded" : ""}`}>
     {"pull" in feed
@@ -68,13 +94,14 @@ function ScreenVideo({ feed, label, expanded, onToggle }: {
       </div>
       : <StreamVideo stream={feed} label={label} />}
     <figcaption><LiveTag /><span>{label}</span>
+      {audio && (volume ?? <span className="screen-audio-badge" role="img" aria-label="Com áudio do computador" title="Com áudio do computador"><Volume2 size={15} /></span>)}
       <button className="icon-button on-dark small" aria-label={expanded ? `Reduzir ${label}` : `Ampliar ${label}`} aria-pressed={expanded} title={expanded ? "Reduzir" : "Ampliar"} onClick={onToggle}><Maximize2 size={15} /></button>
     </figcaption>
   </figure>;
 }
 
 /** Screens shared in the call: ours (what we send) and the ones received. */
-function CallScreens({ state, participants }: { state: VoiceState; participants: VoiceParticipant[] }) {
+function CallScreens({ voice, state, participants }: { voice: Voice; state: VoiceState; participants: VoiceParticipant[] }) {
   const [expanded, setExpanded] = useState("");
   const remote = participants.filter(p => p.screen && p.peerId !== state.peerId);
   const local = state.localScreen;
@@ -82,11 +109,13 @@ function CallScreens({ state, participants }: { state: VoiceState; participants:
   const toggle = (id: string) => setExpanded(current => (current === id ? "" : id));
   return <div className="call-screens" aria-label="Telas compartilhadas">
     {state.screen === "picking" && <div className="call-screen pending" role="status">Escolha uma tela ou janela na janela do sistema.</div>}
-    {local && <ScreenVideo feed={local} label="Sua tela" expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
+    {local && <ScreenVideo feed={local} label="Sua tela" audio={state.screenAudio} expanded={expanded === state.peerId} onToggle={() => toggle(state.peerId)} />}
     {remote.map(p => {
       const feed = state.remoteScreens[p.peerId];
+      const volume = <ScreenVolumeControl name={p.user.name} setting={state.screenVolumes[p.user.id] ?? DEFAULT_SCREEN_VOLUME}
+        onVolume={value => voice.setScreenVolume(p.user.id, value)} onMute={() => voice.toggleScreenMute(p.user.id)} />;
       return feed
-        ? <ScreenVideo key={p.peerId} feed={feed} label={`Tela de ${p.user.name}`} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
+        ? <ScreenVideo key={p.peerId} feed={feed} label={`Tela de ${p.user.name}`} audio={!!p.screenAudio} volume={volume} expanded={expanded === p.peerId} onToggle={() => toggle(p.peerId)} />
         : <div key={p.peerId} className="call-screen pending" role="status">Recebendo a tela de {p.user.name}…</div>;
     })}
   </div>;
@@ -221,7 +250,7 @@ export function VoiceChannel({ channel, voice, state, participants, online, real
         </span>
       </header>
 
-      {active && <CallScreens state={state} participants={participants} />}
+      {active && <CallScreens voice={voice} state={state} participants={participants} />}
       {participants.length > 0 && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
         {tiles.map((p, index) => {
           const self = !!state.peerId && p.peerId === state.peerId;

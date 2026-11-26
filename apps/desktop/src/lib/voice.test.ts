@@ -20,6 +20,19 @@ vi.mock("./screenTrack", () => ({
   }),
 }));
 
+const systemAudio = vi.hoisted(() => ({
+  stop: vi.fn(),
+  track: { kind: "audio" } as unknown as MediaStreamTrack,
+  fail: null as Error | null,
+}));
+vi.mock("./screenAudio", () => ({
+  screenAudio: vi.fn(async () => {
+    if (systemAudio.fail) throw systemAudio.fail;
+    return { track: systemAudio.track, stop: systemAudio.stop };
+  }),
+  opusStereo: (sdp: string) => `${sdp}[stereo]`,
+}));
+
 const sounds = vi.hoisted(() => ({ playMicSound: vi.fn(), playScreenSound: vi.fn(), playLeaveSound: vi.fn() }));
 vi.mock("./notifications", () => sounds);
 
@@ -101,7 +114,7 @@ describe("voice lifecycle", () => {
     expect(voice.getSnapshot().status).toBe("connected");
     voice.toggleDeafen();
     expect(first.track.enabled).toBe(false);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true, screen: false, camera: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: true, deafened: true, screen: false, camera: false, screenAudio: false });
     status("reconnecting");
     expect(first.track.stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot().status).toBe("reconnecting");
@@ -233,7 +246,7 @@ describe("screen sharing in a call", () => {
 
   const screenSenders = (peer: ScreenPeer) => peer.addTrack.mock.calls.filter(([track]) => track === share.track);
 
-  async function inCall() {
+  async function inCall(withAudio = false) {
     const media = stream();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
       getUserMedia: vi.fn().mockResolvedValue(media.media),
@@ -246,6 +259,8 @@ describe("screen sharing in a call", () => {
     const stop = vi.spyOn(nativeScreen, "stop").mockResolvedValue(undefined);
     const start = vi.spyOn(nativeScreen, "start").mockResolvedValue(info);
     const call = setup();
+    // Screen audio has its own tests below.
+    call.voice.setShareAudio(withAudio);
     await call.voice.join(channel);
     call.event({ type: "voice.joined", channelId: channel.id, peerId: "self", participants: [
       participant, { ...participant, peerId: "remote" },
@@ -284,7 +299,7 @@ describe("screen sharing in a call", () => {
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ maxWidth: 1920, maxHeight: 1080, frameRate: 30 }));
     expect(voice.getSnapshot()).toMatchObject({ screen: "live", screenInfo: info, localScreen: share.stream });
     expect(screenSenders(ScreenPeer.all[0])).toHaveLength(1);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false, screenAudio: false });
 
     event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [
       participant, { ...participant, peerId: "remote" }, { ...participant, peerId: "late" },
@@ -297,7 +312,7 @@ describe("screen sharing in a call", () => {
     expect(share.stop).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot()).toMatchObject({ screen: "idle", localScreen: null });
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false, screenAudio: false });
     voice.dispose();
   });
 
@@ -362,6 +377,107 @@ describe("screen sharing in a call", () => {
     expect(voice.getSnapshot().remoteScreens).toEqual({});
     voice.dispose();
   });
+
+  const audioSenders = (peer: ScreenPeer) => peer.addTrack.mock.calls.filter(([track]) => track === systemAudio.track);
+
+  it("sends the computer's audio in the screen's stream to every peer, and stops it with the screen", async () => {
+    systemAudio.fail = null;
+    const { voice, send, event } = await inCall(true);
+    await voice.startScreen();
+    await vi.waitFor(() => expect(voice.getSnapshot().screenAudio).toBe(true));
+    const [peer] = ScreenPeer.all;
+    expect(peer.addTrack).toHaveBeenCalledWith(systemAudio.track, share.stream);
+    expect(audioSenders(peer)).toHaveLength(1);
+    await vi.waitFor(() => expect(peer.senders.at(-1)!.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 128_000 }] }));
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false, screenAudio: true });
+
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [
+      participant, { ...participant, peerId: "remote" }, { ...participant, peerId: "late" },
+    ] });
+    expect(audioSenders(ScreenPeer.all[1])).toHaveLength(1);
+
+    voice.stopScreen();
+    for (const each of ScreenPeer.all) expect(each.removeTrack).toHaveBeenCalledTimes(2);
+    expect(systemAudio.stop).toHaveBeenCalledOnce();
+    expect(voice.getSnapshot().screenAudio).toBe(false);
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false, screenAudio: false });
+    voice.dispose();
+  });
+
+  it("shares only the screen when the option is off or the system cannot capture its audio", async () => {
+    const off = await inCall(false);
+    await off.voice.startScreen();
+    expect(audioSenders(ScreenPeer.all[0])).toHaveLength(0);
+    off.voice.dispose();
+
+    systemAudio.fail = new Error("A captura do áudio do computador requer o Windows 10 21H2.");
+    const { voice } = await inCall(true);
+    await voice.startScreen();
+    await vi.waitFor(() => expect(voice.getSnapshot().error).toMatch(/Windows 10 21H2/));
+    expect(voice.getSnapshot()).toMatchObject({ screen: "live", screenAudio: false });
+    expect(audioSenders(ScreenPeer.all[0])).toHaveLength(0);
+    systemAudio.fail = null;
+    voice.dispose();
+  });
+
+  it("remembers whether to include the computer's audio", () => {
+    const first = setup();
+    expect(first.voice.getSnapshot().shareAudio).toBe(true);
+    first.voice.setShareAudio(false);
+    first.voice.dispose();
+    expect(setup().voice.getSnapshot().shareAudio).toBe(false);
+  });
+
+  it("plays a peer's screen audio apart from its voice, at our volume for that person", async () => {
+    const elements: HTMLAudioElement[] = [];
+    const RealAudio = window.Audio;
+    vi.stubGlobal("Audio", class extends RealAudio { constructor() { super(); elements.push(this); } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const { voice, event } = await inCall();
+    const remote = { ...participant, peerId: "remote", user: { ...participant.user, id: "user-2", name: "Bia" }, screen: true, screenAudio: true };
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant, remote] });
+    const [voiceElement] = elements;
+    // The peer names its screen's stream in signaling; its voice stream is unnamed.
+    const peer = ScreenPeer.all.at(-1)!;
+    const voiceTrack = { kind: "audio" };
+    const screenTrackIn = { kind: "audio" };
+    const voiceStream = { id: "{mic}" } as MediaStream;
+    peer.ontrack!({ track: voiceTrack, streams: [voiceStream] });
+    expect(voiceElement.srcObject).toBe(voiceStream);
+    (voice as unknown as { peers: Map<string, { streams: Record<string, string> }> }).peers.get("remote")!.streams = { "{screen}": "screen" };
+    peer.ontrack!({ track: screenTrackIn, streams: [{ id: "{screen}" } as MediaStream] });
+    const screenElement = elements[1];
+    expect(screenElement).toBeDefined();
+    expect(voiceElement.srcObject).toBe(voiceStream);
+    expect((screenElement.srcObject as unknown as { tracks: unknown[] }).tracks).toEqual([screenTrackIn]);
+    expect(screenElement.volume).toBe(1);
+
+    voice.setScreenVolume("user-2", 0.25);
+    expect(screenElement.volume).toBe(0.25);
+    expect(voiceElement.volume).toBe(1);
+    voice.toggleScreenMute("user-2");
+    expect(screenElement.muted).toBe(true);
+    expect(voice.getSnapshot().screenVolumes["user-2"]).toEqual({ volume: 0.25, muted: true });
+    // Moving the slider unmutes.
+    voice.setScreenVolume("user-2", 0.5);
+    expect(screenElement).toMatchObject({ muted: false, volume: 0.5 });
+    voice.toggleDeafen();
+    expect(screenElement.muted).toBe(true);
+    voice.dispose();
+
+    // Saved per person, for the next calls.
+    expect(setup().voice.getSnapshot().screenVolumes["user-2"]).toEqual({ volume: 0.5, muted: false });
+  });
+
+  it("asks peers for stereo Opus in what they describe", async () => {
+    const { event } = await inCall();
+    const peer = ScreenPeer.all[0] as unknown as ScreenPeer & { setRemoteDescription: ReturnType<typeof vi.fn> };
+    peer.setRemoteDescription = vi.fn().mockResolvedValue(undefined);
+    (peer as unknown as { localDescription: unknown }).localDescription = { toJSON: () => ({ type: "answer", sdp: "answer" }) };
+    (peer as unknown as { setLocalDescription: unknown }).setLocalDescription = vi.fn().mockResolvedValue(undefined);
+    event({ type: "voice.signal", channelId: channel.id, peerId: "remote", data: { description: { type: "offer", sdp: "v=0\r\n" } } });
+    await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledWith({ type: "offer", sdp: "v=0\r\n[stereo]" }));
+  });
 });
 
 describe("webcam in a call (webview)", () => {
@@ -422,7 +538,7 @@ describe("webcam in a call (webview)", () => {
     expect(voice.getSnapshot()).toMatchObject({ camera: "live", localCamera: cams[0].media });
     expect(cameraSenders(CameraPeer.all[0], cams[0].track)).toHaveLength(1);
     await vi.waitFor(() => expect(CameraPeer.all[0].senders.at(-1)!.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 600_000 }] }));
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true, screenAudio: false });
 
     // The offer that adds the camera tells the peer which stream it is.
     await CameraPeer.all[0].onnegotiationneeded!();
@@ -437,7 +553,7 @@ describe("webcam in a call (webview)", () => {
     for (const peer of CameraPeer.all) expect(peer.removeTrack).toHaveBeenCalledOnce();
     expect(cams[0].track.stop).toHaveBeenCalledOnce();
     expect(voice.getSnapshot()).toMatchObject({ camera: "idle", localCamera: null });
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: false, screenAudio: false });
     voice.dispose();
   });
 
@@ -513,6 +629,9 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
       }),
       startScreen: vi.spyOn(nativeCall, "startScreen").mockResolvedValue(undefined),
       stopScreen: vi.spyOn(nativeCall, "stopScreen").mockResolvedValue(undefined),
+      startScreenAudio: vi.spyOn(nativeCall, "startScreenAudio").mockResolvedValue(undefined),
+      stopScreenAudio: vi.spyOn(nativeCall, "stopScreenAudio").mockResolvedValue(undefined),
+      setScreenVolume: vi.spyOn(nativeCall, "setScreenVolume").mockResolvedValue(undefined),
       frame: vi.spyOn(nativeCall, "frame").mockResolvedValue(new ArrayBuffer(0)),
       startCamera: vi.spyOn(nativeCall, "startCamera").mockResolvedValue(undefined),
       stopCamera: vi.spyOn(nativeCall, "stopCamera").mockResolvedValue(undefined),
@@ -599,11 +718,13 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     vi.spyOn(nativeScreen, "start").mockResolvedValue(info);
     const stop = vi.spyOn(nativeScreen, "stop").mockResolvedValue(undefined);
     const { voice, send, event, engine } = await inNativeCall();
+    voice.setShareAudio(false);
     await voice.startScreen();
     expect(engine.startScreen).toHaveBeenCalledWith(30);
+    expect(engine.startScreenAudio).not.toHaveBeenCalled();
     const local = voice.getSnapshot().localScreen as { pull: () => Promise<ArrayBuffer> };
     expect(local.pull).toBe(nativeScreen.frame);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: true, camera: false, screenAudio: false });
 
     engine.emit({ type: "videoEnded", source: "screen", message: "O compartilhamento de tela foi encerrado." });
     expect(voice.getSnapshot()).toMatchObject({ screen: "idle", localScreen: null, error: "O compartilhamento de tela foi encerrado." });
@@ -628,7 +749,7 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     expect(startForCall).toHaveBeenCalledWith("camera-2", 360);
     expect(engine.startCamera).toHaveBeenCalledWith(30, CAMERA_QUALITIES["360p"].bitrate);
     expect((voice.getSnapshot().localCamera as { pull: unknown }).pull).toBe(nativeCamera.frame);
-    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true });
+    expect(send).toHaveBeenLastCalledWith({ type: "voice.state", muted: false, deafened: false, screen: false, camera: true, screenAudio: false });
 
     // A new quality restarts the camera; the others keep seeing it on.
     send.mockClear();
@@ -650,6 +771,33 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     engine.emit({ type: "video", peerId: "remote", source: "camera", active: false });
     expect(voice.getSnapshot().remoteCameras).toEqual({});
     event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant] });
+    voice.dispose();
+  });
+
+  it("sends the computer's audio with the engine's screen and sets each peer's screen volume", async () => {
+    vi.spyOn(nativeScreen, "start").mockResolvedValue({ source: "monitor", width: 1920, height: 1080, maxWidth: 1920, maxHeight: 1080, frameRate: 30, cursor: true });
+    vi.spyOn(nativeScreen, "stop").mockResolvedValue(undefined);
+    const { voice, send, event, engine } = await inNativeCall();
+    const bia = { ...participant, peerId: "remote", user: { ...participant.user, id: "user-2", name: "Bia" } };
+    event({ type: "voice.participants", serverId: "server-1", channelId: channel.id, participants: [participant, bia] });
+    expect(engine.setScreenVolume).toHaveBeenLastCalledWith("remote", 1);
+    voice.setScreenVolume("user-2", 0.3);
+    expect(engine.setScreenVolume).toHaveBeenLastCalledWith("remote", 0.3);
+    voice.toggleScreenMute("user-2");
+    expect(engine.setScreenVolume).toHaveBeenLastCalledWith("remote", 0);
+
+    await voice.startScreen();
+    await vi.waitFor(() => expect(voice.getSnapshot().screenAudio).toBe(true));
+    expect(engine.startScreenAudio).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "voice.state", screen: true, screenAudio: true }));
+    voice.stopScreen();
+    expect(engine.stopScreen).toHaveBeenCalledOnce();
+    expect(voice.getSnapshot().screenAudio).toBe(false);
+
+    engine.startScreenAudio.mockRejectedValueOnce("Não foi possível capturar o áudio do computador: sem servidor.");
+    await voice.startScreen();
+    await vi.waitFor(() => expect(voice.getSnapshot().error).toMatch(/sem servidor/));
+    expect(voice.getSnapshot()).toMatchObject({ screen: "live", screenAudio: false });
     voice.dispose();
   });
 
