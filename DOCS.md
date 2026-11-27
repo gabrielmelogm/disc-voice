@@ -167,7 +167,7 @@ sudo apt install -y libpulse-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-pipewire cmake
 ```
 
-O `cmake` e o compilador C++ compilam o Opus e o OpenH264 usados pelo motor de chamadas. Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`.
+O `cmake` e o compilador C++ compilam o Opus e o OpenH264 usados pelo motor de chamadas. Depois execute `npm run dev` para desenvolvimento ou `npm run build:linux` para gerar `.deb` e `.rpm` em `target/release/bundle/`. O AppImage publicado nas releases sai de `npm run build:appimage` (em `target/release/bundle/appimage/`, com os plugins do GStreamer embutidos); para gerá-lo também são necessários `patchelf`, `file` e os pacotes `gstreamer1.0-plugins-base`, `gstreamer1.0-gl` e `gstreamer1.0-pipewire`, e em máquinas sem FUSE use `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 Os testes do backend PulseAudio usam um *null sink*, sem tocar alto-falantes nem microfone:
 
