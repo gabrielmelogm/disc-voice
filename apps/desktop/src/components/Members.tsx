@@ -10,7 +10,7 @@ import { Avatar } from "./ui";
 /** Where each person is in a voice room of the server, by user id. */
 export type RoomPresence = Record<string, { channel: Channel; screen: boolean }>;
 
-/** At most this many offline people show as avatars before "Ver todos". */
+/** At most this many offline people show as avatars in the offline row. */
 const OFFLINE_PREVIEW = 6;
 
 export function RoleBadge({ role }: { role: MemberRole | undefined }) {
@@ -92,14 +92,13 @@ export function PeoplePanel({ self, selfStatus, members, loading, error, rooms, 
     {!!offline.length && (q
       // While searching, offline matches are listed like everyone else.
       ? <ul className="people-list" aria-label="Pessoas offline">{offline.map(m => <MemberRow key={m.user.id} member={m} selfId={self.id} />)}</ul>
-      : <div className="offline-group">
+      : <button type="button" className="offline-group" aria-label={`Ver todas as pessoas (${offline.length} offline)`} onClick={onShowAll}>
         <span className="offline-label">Offline · {offline.length}</span>
         <div className="offline-stack" aria-hidden="true">
           {offline.slice(0, OFFLINE_PREVIEW).map(m => <Avatar key={m.user.id} name={m.user.name} src={m.user.avatar} still={m.user.avatarStill} size="sm" />)}
           {offline.length > OFFLINE_PREVIEW && <span className="avatar avatar-sm more-count">+{offline.length - OFFLINE_PREVIEW}</span>}
         </div>
-        <button className="link-button" onClick={onShowAll}>Ver todos</button>
-      </div>)}
+      </button>)}
     {loading && !members.length && <p className="muted" role="status">Carregando pessoas…</p>}
   </section>;
 }

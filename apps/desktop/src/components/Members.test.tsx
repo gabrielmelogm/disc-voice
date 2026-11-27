@@ -72,7 +72,7 @@ describe("people panel", () => {
     ]);
     expect(screen.getByText("Offline · 2")).toBeVisible();
     expect(screen.queryByRole("list", { name: "Pessoas offline" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Ver todos" }));
+    await userEvent.click(screen.getByRole("button", { name: "Ver todas as pessoas (2 offline)" }));
     expect(onShowAll).toHaveBeenCalled();
   });
 
