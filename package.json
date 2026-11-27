@@ -7,6 +7,7 @@
   "scripts": {
     "dev:api": "npm run db:up && cargo run -p disc-api",
     "db:up": "docker compose up -d --wait db",
+    "dev:user": "node scripts/dev-user.mjs",
     "services:up": "docker compose up --build -d",
     "services:down": "docker compose down",
     "dev": "npm run tauri:dev --workspace @disc-voice/desktop",
