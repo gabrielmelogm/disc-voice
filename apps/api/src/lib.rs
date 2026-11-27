@@ -134,6 +134,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/channels/{id}/messages",
             get(messages::list).post(messages::send),
         )
+        .route(
+            "/channels/{id}/messages/{message}",
+            axum::routing::patch(messages::edit).delete(messages::remove),
+        )
+        .route(
+            "/channels/{id}/messages/{message}/reactions/{emoji}",
+            axum::routing::put(messages::react).delete(messages::react),
+        )
         .route("/channels/{id}/read", post(reads::mark))
         .route("/reads", get(reads::list))
         .route("/dms", get(dms::list).post(dms::open))
@@ -218,7 +226,13 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
-                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                ])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
         )
         .layer(TraceLayer::new_for_http())

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Download, ExternalLink, FileText, FileX, X } from "lucide-react";
-import type { Attachment } from "@disc-voice/shared";
+import type { Attachment, User } from "@disc-voice/shared";
 import { mediaUrl } from "../lib/api";
 import { openExternal } from "../lib/external";
 import { downloadFile } from "../lib/files";
@@ -18,9 +18,10 @@ export type Segment =
   | { kind: "link"; url: string }
   | { kind: "code"; text: string }
   | { kind: "codeblock"; text: string }
+  | { kind: "mention"; id: string }
   | { kind: "bold" | "italic" | "strike"; children: Segment[] };
 
-const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^\n]+?\*\*)|(~~(?=\S)[^\n]+?~~)|(\*(?=[^\s*])[^*\n]+?\*)|(https?:\/\/[^\s<>]+)/g;
+const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^\n]+?\*\*)|(~~(?=\S)[^\n]+?~~)|(\*(?=[^\s*])[^*\n]+?\*)|(https?:\/\/[^\s<>]+)|(<@(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|everyone)>)/g;
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|avif)$/i;
 
 /** Drops punctuation that ends a sentence rather than the link. */
@@ -40,12 +41,13 @@ function parseInline(text: string): Segment[] {
   };
   let last = 0;
   for (const match of text.matchAll(INLINE)) {
-    const [token, code, bold, strike, italic, url] = match;
+    const [token, code, bold, strike, italic, url, mention] = match;
     push(text.slice(last, match.index));
     if (code) out.push({ kind: "code", text: code.slice(1, -1) });
     else if (bold) out.push({ kind: "bold", children: parseInline(bold.slice(2, -2)) });
     else if (strike) out.push({ kind: "strike", children: parseInline(strike.slice(2, -2)) });
     else if (italic) out.push({ kind: "italic", children: parseInline(italic.slice(1, -1)) });
+    else if (mention) out.push({ kind: "mention", id: mention.slice(2, -1).toLowerCase() });
     else if (url) {
       const clean = trimUrl(url);
       out.push({ kind: "link", url: clean });
@@ -82,23 +84,33 @@ export function imageLinks(text: string) {
   return [...links].slice(0, 4);
 }
 
-function render(segments: Segment[]): ReactNode {
+/** Who the message mentions, to show their names; `selfId` stands out. */
+interface MentionContext { mentions?: User[]; selfId?: string }
+
+function render(segments: Segment[], context: MentionContext): ReactNode {
   return segments.map((segment, index) => {
     switch (segment.kind) {
+      case "mention": {
+        // `@everyone` reaches the reader too, so it stands out like their own name.
+        if (segment.id === "everyone") return <span key={index} className="mention self">@everyone</span>;
+        const person = context.mentions?.find(user => user.id === segment.id);
+        return <span key={index} className={`mention ${segment.id === context.selfId ? "self" : ""}`}>@{person?.name || "alguém"}</span>;
+      }
       case "text": return <Fragment key={index}>{segment.text}</Fragment>;
       case "code": return <code key={index} className="inline-code">{segment.text}</code>;
       case "codeblock": return <pre key={index} className="message-code"><code>{segment.text}</code></pre>;
-      case "bold": return <strong key={index}>{render(segment.children)}</strong>;
-      case "italic": return <em key={index}>{render(segment.children)}</em>;
-      case "strike": return <s key={index}>{render(segment.children)}</s>;
+      case "bold": return <strong key={index}>{render(segment.children, context)}</strong>;
+      case "italic": return <em key={index}>{render(segment.children, context)}</em>;
+      case "strike": return <s key={index}>{render(segment.children, context)}</s>;
       case "link": return <a key={index} href={segment.url} className="message-link" title={segment.url} target="_blank" rel="noopener noreferrer"
         onClick={event => { event.preventDefault(); void openExternal(segment.url); }}>{segment.url}</a>;
     }
   });
 }
 
-export function MessageText({ text }: { text: string }) {
-  return <div className="message-text">{render(parseMessage(text))}</div>;
+/** `suffix` follows the last line, like the "(editado)" marker. */
+export function MessageText({ text, mentions, selfId, suffix }: { text: string; suffix?: ReactNode } & MentionContext) {
+  return <div className="message-text">{render(parseMessage(text), { mentions, selfId })}{suffix}</div>;
 }
 
 export function mediaKind(file: Attachment): "image" | "video" | "audio" | "file" {

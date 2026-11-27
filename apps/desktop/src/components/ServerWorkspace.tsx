@@ -73,6 +73,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [membersOpen, setMembersOpen] = useState(false);
   const presence = Object.fromEntries(friends.friends.map(f => [f.user.id, f.status]));
   const roles = Object.fromEntries(members.members.map(m => [m.user.id, m.role]));
+  const people = members.members.map(m => m.user);
   // The open conversation; none shows the friends page.
   const [dmId, setDmId] = useState<string | null>(null);
   const [newDm, setNewDm] = useState(false);
@@ -324,9 +325,9 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} memberCount={members.members.length} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
-          roles={roles} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
+          roles={roles} members={people} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"} pip={pip.active}
-          realtime={realtime.client} revision={realtime.revision} self={user} roles={roles}
+          realtime={realtime.client} revision={realtime.revision} self={user} roles={roles} members={people}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
           <span className="empty-icon"><MessageSquareText size={34} /></span>

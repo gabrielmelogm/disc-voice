@@ -46,6 +46,12 @@ export function useDirectMessages(realtime: Realtime, revision: number) {
         return current.map(c => c.channel.id === message.channelId ? { ...c, lastMessageId: message.id, lastMessage: preview } : c).sort(newest);
       });
     }
+    // An edited last message changes the preview.
+    if (event.type === "message.updated") {
+      const { message } = event;
+      setConversations(current => current.some(c => c.lastMessage?.id === message.id)
+        ? current.map(c => c.lastMessage?.id === message.id ? { ...c, lastMessage: { ...c.lastMessage, content: message.content } } : c) : current);
+    }
     // Keep the other person's name and photo current.
     if (event.type === "user.updated") {
       setConversations(current => current.some(c => c.user.id === event.user.id)

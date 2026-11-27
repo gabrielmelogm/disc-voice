@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Clock, MessageCircle, Plus, RefreshCw, Search, UserCheck, UserPlus, Users, X } from "lucide-react";
 import type { DirectConversation, Friendship, PresenceStatus, User, UserProfile } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
+import { mentionText } from "../lib/mentions";
 import type { Realtime } from "../lib/realtime";
 import { bannerColor } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
@@ -11,7 +12,8 @@ import { Avatar, Badge, unreadLabel } from "./ui";
 export function previewText(conversation: DirectConversation, selfId: string) {
   const last = conversation.lastMessage;
   if (!last) return "Nenhuma mensagem ainda";
-  const text = last.content.replace(/\s+/g, " ").trim() || "Anexo";
+  // Only the two people of the conversation can be mentioned in it.
+  const text = mentionText(last.content, [conversation.user, { id: selfId, name: "você" }]).replace(/\s+/g, " ").trim() || "Anexo";
   return last.authorId === selfId ? `Você: ${text}` : text;
 }
 

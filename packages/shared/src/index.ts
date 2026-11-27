@@ -296,6 +296,8 @@ export interface MessageHit {
   author: User;
   content: string;
   createdAt: string;
+  /** People mentioned as `<@id>` in the text. */
+  mentions?: User[];
 }
 
 export interface SearchResults {
@@ -362,6 +364,19 @@ export interface ChatMessage {
   /** Present on messages imported from Discord. */
   discordId?: string;
   attachments?: Attachment[];
+  /** When the author last changed the text: shows "(editado)". */
+  editedAt?: string;
+  /** People mentioned as `<@id>` in the text, to show their names. */
+  mentions?: User[];
+  reactions?: Reaction[];
+}
+
+/** An emoji on a message, in the order of the first reaction. */
+export interface Reaction {
+  emoji: string;
+  count: number;
+  /** Who reacted, by user id. */
+  users: string[];
 }
 
 export interface MessagePage {
@@ -484,6 +499,12 @@ export type RealtimeEvent =
    * and its type: `voice` for the chat of a voice room. Absent in direct messages.
    */
   | { type: "message.created"; message: ChatMessage; serverId?: string; serverName?: string; channelName?: string; channelType?: Channel["type"] }
+  /** The author edited a message (in the server on screen, or a conversation of the user). */
+  | { type: "message.updated"; message: ChatMessage }
+  /** The author deleted a message. */
+  | { type: "message.deleted"; channelId: string; messageId: string }
+  /** Someone added or removed a reaction: the message's reactions now. */
+  | { type: "message.reactions"; channelId: string; messageId: string; reactions: Reaction[] }
   | { type: "user.updated"; user: User }
   | { type: "server.snapshot"; serverId: string | null; channels: Record<string, VoiceParticipant[]> }
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }

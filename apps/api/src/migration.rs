@@ -20,7 +20,51 @@ impl MigratorTrait for Migrator {
             Box::new(DiscordLogin),
             Box::new(GifProfiles),
             Box::new(UserFiles),
+            Box::new(ReactionsAndEdits),
         ]
+    }
+}
+
+struct ReactionsAndEdits;
+
+impl MigrationName for ReactionsAndEdits {
+    fn name(&self) -> &str {
+        "m20261202_000015_reactions_and_edits"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for ReactionsAndEdits {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            -- When the author last changed the text ("(editado)").
+            ALTER TABLE messages ADD COLUMN edited_at timestamptz;
+            -- One row per person and emoji on a message; deleting the
+            -- message or the account removes them.
+            CREATE TABLE message_reactions (
+                message_id bigint NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                emoji varchar(64) NOT NULL CHECK (length(emoji) > 0),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (message_id, emoji, user_id)
+            );
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "DROP TABLE message_reactions; ALTER TABLE messages DROP COLUMN edited_at;",
+            )
+            .await?;
+        Ok(())
     }
 }
 

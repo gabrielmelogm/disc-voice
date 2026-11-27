@@ -1,8 +1,8 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, RealtimeEvent } from "@disc-voice/shared";
-import { TextChannel } from "./TextChannel";
+import { refreshMessages, TextChannel } from "./TextChannel";
 import type { Realtime } from "../lib/realtime";
 import { api } from "../lib/api";
 
@@ -46,7 +46,8 @@ describe("text chat", () => {
 
   it("recovers gaps from the REST watermark rather than the last live event", async () => {
     const history = vi.spyOn(api, "messages").mockResolvedValueOnce({ messages: [chat("1", "Primeira")], hasMore: false })
-      .mockResolvedValueOnce({ messages: [chat("2", "Perdida"), chat("3", "Ao vivo")], hasMore: false });
+      .mockResolvedValueOnce({ messages: [chat("2", "Perdida"), chat("3", "Ao vivo")], hasMore: false })
+      .mockResolvedValueOnce({ messages: [chat("1", "Primeira"), chat("2", "Perdida"), chat("3", "Ao vivo")], hasMore: false });
     const live = realtime();
     const { rerender } = render(<TextChannel channel={channel} realtime={live.client} revision={1} />);
     await screen.findByText("Primeira");
@@ -54,6 +55,8 @@ describe("text chat", () => {
     rerender(<TextChannel channel={channel} realtime={live.client} revision={2} />);
     await screen.findByText("Perdida");
     expect(history.mock.calls[1][1]).toEqual({ after: "1" });
+    // Then the newest page again, for edits and deletions missed meanwhile.
+    await waitFor(() => expect(history.mock.calls[2]?.[1]).toEqual({ before: "4" }));
     expect(screen.getAllByText("Ao vivo")).toHaveLength(1);
     expect([...screen.getByRole("log").querySelectorAll("article .message-text")].map(p => p.textContent)).toEqual(["Primeira", "Perdida", "Ao vivo"]);
   });
@@ -157,5 +160,175 @@ describe("text chat", () => {
     render(<TextChannel channel={dm} peer={author} realtime={realtime().client} revision={1} />);
     expect(await screen.findByText("Esse é o começo da sua conversa com Amigo.")).toBeVisible();
     expect(screen.getByPlaceholderText("Conversar com Amigo")).toBeVisible();
+  });
+
+  describe("reactions, mentions, edits and deletes", () => {
+    const me = { id: "00000000-0000-4000-8000-0000000000aa", email: "eu@example.com", name: "Levi" };
+    const ana = { id: "00000000-0000-4000-8000-0000000000bb", email: "ana@example.com", name: "Ana Souza" };
+    beforeEach(() => {
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+        configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute("open", ""); },
+      });
+      Object.defineProperty(HTMLDialogElement.prototype, "close", {
+        configurable: true, value: function (this: HTMLDialogElement) { this.removeAttribute("open"); },
+      });
+    });
+
+    it("shows reaction counts, highlights the user's own, and toggles them", async () => {
+      const user = userEvent.setup();
+      const reacted = { ...chat("1", "Bom dia"), author: ana, reactions: [
+        { emoji: "🔥", count: 2, users: [ana.id, me.id] },
+        { emoji: "👀", count: 1, users: [ana.id] },
+      ] };
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [reacted], hasMore: false });
+      const react = vi.spyOn(api, "react").mockResolvedValue([{ emoji: "👀", count: 1, users: [ana.id] }]);
+      const live = realtime();
+      render(<TextChannel channel={channel} realtime={live.client} revision={1} self={me} members={[me, ana]} />);
+      const fire = await screen.findByRole("button", { name: /Ana Souza e Você reagiram com 🔥/ });
+      expect(fire).toHaveAttribute("aria-pressed", "true");
+      expect(fire).toHaveTextContent("2");
+      expect(screen.getByRole("button", { name: /Ana Souza reagiu com 👀/ })).toHaveAttribute("aria-pressed", "false");
+      await user.click(fire);
+      expect(react).toHaveBeenCalledWith(channel.id, "1", "🔥", false);
+      await waitFor(() => expect(screen.queryByRole("button", { name: /com 🔥/ })).not.toBeInTheDocument());
+      // Someone else reacts: the count updates live.
+      live.emit({ type: "message.reactions", channelId: channel.id, messageId: "1", reactions: [{ emoji: "👀", count: 2, users: [ana.id, "x"] }] });
+      expect(screen.getByRole("button", { name: /Ana Souza, Alguém reagiram com 👀|Ana Souza e Alguém reagiram com 👀/ })).toHaveTextContent("2");
+      // Quick reactions from the message's toolbar.
+      await user.click(screen.getByRole("button", { name: "Reagir com 👍" }));
+      expect(react).toHaveBeenLastCalledWith(channel.id, "1", "👍", true);
+    });
+
+    it("suggests members after @ and sends the mention by id", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      const send = vi.spyOn(api, "sendMessage").mockImplementation(async (_, clientId, content) => ({ ...chat("5", content), clientId, author: me }));
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]} />);
+      const field = screen.getByRole("textbox");
+      await user.type(field, "oi @so");
+      const option = screen.getByRole("option", { name: "Ana Souza" });
+      expect(option).toHaveAttribute("aria-selected", "true");
+      // The user's own name is not offered.
+      await user.keyboard("{Enter}");
+      expect(field).toHaveValue("oi @Ana Souza ");
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      await user.type(field, "revisa?{Enter}");
+      expect(send).toHaveBeenCalledWith(channel.id, expect.any(String), `oi <@${ana.id}> revisa?`);
+    });
+
+    it("says when nobody can be mentioned", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me]} />);
+      await user.type(screen.getByRole("textbox"), "@");
+      expect(screen.getByRole("listbox")).toHaveTextContent("Ninguém para mencionar ainda");
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    });
+
+    it("offers @everyone to the owner and moderators only", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      const send = vi.spyOn(api, "sendMessage").mockImplementation(async (_, clientId, content) => ({ ...chat("5", content), clientId, author: me }));
+      const { unmount } = render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
+        roles={{ [me.id]: "member", [ana.id]: "owner" }} />);
+      await user.type(screen.getByRole("textbox"), "@ev");
+      expect(screen.queryByRole("option", { name: /@everyone/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("listbox")).toHaveTextContent("Ninguém encontrado");
+      unmount();
+
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
+        roles={{ [me.id]: "moderator" }} />);
+      const field = screen.getByRole("textbox");
+      await user.type(field, "@");
+      expect(screen.getByRole("option", { name: /@everyone/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Ana Souza" })).toBeInTheDocument();
+      await user.keyboard("{Enter}");
+      expect(field).toHaveValue("@everyone ");
+      await user.type(field, "reunião{Enter}");
+      expect(send).toHaveBeenCalledWith(channel.id, expect.any(String), "<@everyone> reunião");
+    });
+
+    it("highlights @everyone for the others", async () => {
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [{ ...chat("1", "<@everyone> reunião"), author: ana }], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} />);
+      const mention = await screen.findByText("@everyone");
+      expect(mention).toHaveClass("mention", "self");
+      expect(mention.closest("article")).toHaveClass("mentions-me");
+    });
+
+    it("highlights messages that mention the user", async () => {
+      const mentioned = { ...chat("1", `<@${me.id}> consegue revisar?`), author: ana, mentions: [me] };
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [mentioned, { ...chat("2", "outra"), author: ana }], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} />);
+      const mention = await screen.findByText("@Levi");
+      expect(mention).toHaveClass("mention", "self");
+      expect(mention.closest("article")).toHaveClass("mentions-me");
+      expect(screen.getByText("outra").closest("article")).not.toHaveClass("mentions-me");
+    });
+
+    it("edits the user's own messages and shows the marker", async () => {
+      const user = userEvent.setup();
+      const mine = { ...chat("1", `Oi <@${ana.id}>`), author: me, mentions: [ana] };
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [{ ...chat("0", "Dela"), author: ana }, mine], hasMore: false });
+      const edit = vi.spyOn(api, "editMessage").mockImplementation(async (_, id, content) =>
+        ({ ...mine, id, content, editedAt: "2026-11-17T10:05:00Z" }));
+      const live = realtime();
+      render(<TextChannel channel={channel} realtime={live.client} revision={1} self={me} members={[me, ana]} />);
+      await screen.findByText("Dela");
+      // Only one's own messages can be edited.
+      expect(within(screen.getByText("Dela").closest("article")!).queryByRole("button", { name: "Editar mensagem" })).not.toBeInTheDocument();
+      // ↑ in the empty composer edits the last one, with names instead of ids.
+      await user.click(screen.getByRole("textbox"));
+      await user.keyboard("{ArrowUp}");
+      const box = screen.getByRole("textbox", { name: "Editar mensagem" });
+      expect(box).toHaveValue("Oi @Ana Souza");
+      await user.type(box, ", tudo bem?{Enter}");
+      expect(edit).toHaveBeenCalledWith(channel.id, "1", `Oi <@${ana.id}>, tudo bem?`);
+      expect(await screen.findByText("(editado)")).toBeVisible();
+      // An edit from elsewhere arrives live.
+      live.emit({ type: "message.updated", message: { ...chat("0", "Dela, editada"), author: ana, editedAt: "2026-11-17T10:06:00Z" } });
+      expect(screen.getByText("Dela, editada")).toBeVisible();
+      // Escape cancels.
+      await user.click(within(screen.getByText(/tudo bem/).closest("article")!).getByRole("button", { name: "Editar mensagem" }));
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("textbox", { name: "Editar mensagem" })).not.toBeInTheDocument();
+    });
+
+    it("deletes after confirming, and removes messages deleted by others", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [{ ...chat("1", "Dela"), author: ana }, { ...chat("2", "Minha"), author: me }], hasMore: false });
+      const remove = vi.spyOn(api, "deleteMessage").mockResolvedValue(undefined);
+      const live = realtime();
+      render(<TextChannel channel={channel} realtime={live.client} revision={1} self={me} />);
+      await user.click(within((await screen.findByText("Minha")).closest("article")!).getByRole("button", { name: "Excluir mensagem" }));
+      const dialog = screen.getByRole("dialog", { name: "Excluir mensagem" });
+      await user.click(within(dialog).getByRole("button", { name: "Excluir" }));
+      expect(remove).toHaveBeenCalledWith(channel.id, "2");
+      await waitFor(() => expect(screen.queryByText("Minha")).not.toBeInTheDocument());
+      live.emit({ type: "message.deleted", channelId: channel.id, messageId: "1" });
+      expect(screen.queryByText("Dela")).not.toBeInTheDocument();
+    });
+
+    it("inserts emoji from the composer's picker", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} />);
+      await user.type(screen.getByRole("textbox"), "Bom dia ");
+      await user.click(screen.getByRole("button", { name: "Inserir emoji" }));
+      await user.type(screen.getByRole("searchbox", { name: "Buscar emoji" }), "sol");
+      await user.click(screen.getByRole("button", { name: "☀️" }));
+      expect(screen.getAllByRole("textbox")[0]).toHaveValue("Bom dia ☀️");
+    });
+  });
+});
+
+describe("refreshMessages", () => {
+  it("applies the newest page and drops what was deleted in its range", () => {
+    const current = [chat("1", "Antiga"), chat("5", "Apagada"), chat("6", "Velha"), chat("9", "Nova ao vivo")];
+    const page = { messages: [chat("4", "Quatro"), chat("6", "Editada")], hasMore: true };
+    expect(refreshMessages(current, page, "8").map(m => `${m.id}:${m.content}`))
+      .toEqual(["1:Antiga", "4:Quatro", "6:Editada", "9:Nova ao vivo"]);
+    // The whole history fits in the page: anything missing was deleted.
+    expect(refreshMessages(current, { messages: [chat("6", "Editada")], hasMore: false }, "9").map(m => m.id)).toEqual(["6"]);
   });
 });
