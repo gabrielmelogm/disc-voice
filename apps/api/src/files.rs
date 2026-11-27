@@ -314,6 +314,42 @@ pub(crate) fn url(id: Uuid, name: &str) -> String {
     format!("/api/files/{id}/{}", encode(name))
 }
 
+/// Id of a file kept here, from its URL (the inverse of [`url`]); `None` for
+/// links elsewhere, like Discord's CDN.
+pub(crate) fn stored_id(url: &str) -> Option<Uuid> {
+    let (id, _) = url.strip_prefix("/api/files/")?.split_once('/')?;
+    Uuid::parse_str(id).ok()
+}
+
+/// Whether a stored file is an image the app shows inline.
+pub(crate) fn is_image(content_type: &str) -> bool {
+    matches!(
+        content_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+    )
+}
+
+/// Deletes a file that belongs to no one (e.g. a replaced server icon).
+pub(crate) async fn discard(state: &AppState, id: Uuid) {
+    let found = file::Entity::find_by_id(id)
+        .filter(file::Column::OwnerId.is_null())
+        .one(&state.db)
+        .await;
+    let file = match found {
+        Ok(Some(file)) => file,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, file = %id, "Não foi possível apagar o arquivo");
+            return;
+        }
+    };
+    if let Err(error) = file::Entity::delete_by_id(id).exec(&state.db).await {
+        tracing::warn!(%error, file = %id, "Não foi possível apagar o arquivo");
+        return;
+    }
+    erase(state, id, &file.storage).await;
+}
+
 /// A plain `type/subtype`, or `application/octet-stream`.
 fn content_type(value: Option<&str>) -> String {
     let value = value
@@ -692,6 +728,11 @@ mod tests {
             "/api/files/00000000-0000-0000-0000-000000000000/foto%20de%20f%C3%A9rias.png"
         );
         assert_eq!(encode("../a/b"), "..%2Fa%2Fb");
+        let id = Uuid::new_v4();
+        assert_eq!(stored_id(&url(id, "ícone.png")), Some(id));
+        assert_eq!(stored_id("https://cdn.discordapp.com/icons/1/a.png"), None);
+        assert_eq!(stored_id("/api/files/nao-e-uuid/a.png"), None);
+        assert!(is_image("image/webp") && !is_image("video/mp4"));
         assert_eq!(content_type(Some("Image/PNG; charset=x")), "image/png");
         assert_eq!(
             content_type(Some("text/html\r\nX: y")),

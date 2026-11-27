@@ -4589,7 +4589,8 @@ async fn moderation_bans_and_server_deletion() {
             db.clone(),
             "https://discvoice.example".into(),
             fake_google().await,
-        ),
+        )
+        .with_uploads(std::env::temp_dir().join(format!("disc-voice-test-{}", Uuid::new_v4()))),
         vec![],
     );
     let (ana, ana_id) = register(&app, "Ana").await;
@@ -4721,6 +4722,105 @@ async fn moderation_bans_and_server_deletion() {
         .unwrap()
         .iter()
         .any(|s| s["description"] == "Leituras do mês"));
+
+    // The icon is an image sent with POST /files; it leaves the sender's gallery.
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x10\0\0\0\x10".to_vec();
+    let (status, first) = upload(&app, &ana, "logo.png", png.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let first_id = first["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &server_path,
+            Some(&bia),
+            Some(json!({ "icon": first_id }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, edited) = call(
+        &app,
+        "PATCH",
+        &server_path,
+        Some(&ana),
+        Some(json!({ "icon": first_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let first_icon = edited["icon"].as_str().unwrap().to_owned();
+    assert!(first_icon.starts_with(&format!("/api/files/{first_id}/")));
+    assert_eq!(edited["name"], "Clube do Livro");
+    let updated = event(&mut dani_ws, "server.updated").await;
+    assert_eq!(updated["server"]["icon"], json!(first_icon));
+    let gallery = call(&app, "GET", "/files", Some(&ana), None).await.1;
+    assert!(!gallery["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["id"] == json!(first_id)));
+    // Already used, someone else's file, or not an image: refused.
+    let (_, text) = upload(&app, &ana, "notas.txt", b"oi".to_vec()).await;
+    let (_, other) = upload(&app, &dani, "dela.png", png.clone()).await;
+    for file in [&first["id"], &text["id"], &other["id"]] {
+        let (status, body) = call(
+            &app,
+            "PATCH",
+            &server_path,
+            Some(&ana),
+            Some(json!({ "icon": file })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    // A new icon deletes the old one; null goes back to initials.
+    let (_, second) = upload(&app, &ana, "logo2.png", png.clone()).await;
+    let (status, edited) = call(
+        &app,
+        "PATCH",
+        &server_path,
+        Some(&ana),
+        Some(json!({ "icon": second["id"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let second_icon = edited["icon"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call(&app, "GET", &first_icon[4..], None, None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, "GET", &second_icon[4..], None, None).await.0,
+        StatusCode::OK
+    );
+    let (status, edited) = call(
+        &app,
+        "PATCH",
+        &server_path,
+        Some(&ana),
+        Some(json!({ "icon": null })),
+    )
+    .await;
+    assert_eq!((status, &edited["icon"]), (StatusCode::OK, &Value::Null));
+    assert_eq!(
+        call(&app, "GET", &second_icon[4..], None, None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // The icon the server has when deleted goes with it (checked at the end).
+    let (_, last) = upload(&app, &ana, "logo3.png", png).await;
+    let last_icon = call(
+        &app,
+        "PATCH",
+        &server_path,
+        Some(&ana),
+        Some(json!({ "icon": last["id"] })),
+    )
+    .await
+    .1["icon"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     // Without Gerenciar canais in @everyone, members can't create channels;
     // without Criar convite, they can't see the invite.
@@ -4980,6 +5080,10 @@ async fn moderation_bans_and_server_deletion() {
         (&json!(server_id), &json!("Clube do Livro"))
     );
     event(&mut bia_ws, "server.deleted").await;
+    assert_eq!(
+        call(&app, "GET", &last_icon[4..], None, None).await.0,
+        StatusCode::NOT_FOUND
+    );
     let servers = call(&app, "GET", "/servers", Some(&bia), None).await.1;
     assert!(!servers
         .as_array()

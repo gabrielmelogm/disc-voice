@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { mediaUrl } from "../lib/api";
 import { initials } from "../lib/display";
 import { motionSrc, useReducedMotion } from "../lib/motion";
 
@@ -18,7 +19,8 @@ export function Avatar({ name, src, still, size = "md", status, speaking = false
 }) {
   const [failed, setFailed] = useState<string | null>(null);
   const reduced = useReducedMotion();
-  const shown = src ? motionSrc(src, still, reduced) : null;
+  // Images kept by the API (e.g. server icons) come as `/api/files/...`.
+  const shown = src ? mediaUrl(motionSrc(src, still, reduced)) : null;
   const photo = shown && failed !== shown ? shown : null;
   return <span className={`avatar avatar-${size} ${square ? "avatar-square" : ""} ${speaking ? "is-speaking" : ""} ${className}`} aria-hidden="true">
     {photo

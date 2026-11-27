@@ -117,8 +117,11 @@ export const api = {
   invite: (serverId: string) => request<Invite>(`/servers/${serverId}/invite`),
   previewInvite: (code: string) => request<Invite>(`/invites/${encodeURIComponent(code)}`),
   join: (code: string) => request<Server>(`/invites/${encodeURIComponent(code)}/join`, { method: "POST" }),
-  /** Changes the name or description (Gerenciar servidor). */
-  updateServer: (serverId: string, changes: { name?: string; description?: string }) =>
+  /**
+   * Changes the name, description or icon (Gerenciar servidor). `icon` is the
+   * id of an image sent with `uploadFile`, or null to remove it.
+   */
+  updateServer: (serverId: string, changes: { name?: string; description?: string; icon?: string | null }) =>
     request<Server>(`/servers/${serverId}`, { method: "PATCH", body: changes }),
   /** The owner deletes the server for everyone. */
   deleteServer: (serverId: string) => request<void>(`/servers/${serverId}`, { method: "DELETE" }),
