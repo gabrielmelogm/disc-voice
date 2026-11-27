@@ -5,7 +5,7 @@ import type { ChatMessage, RealtimeEvent, VoiceParticipant } from "@disc-voice/s
 import { api } from "../lib/api";
 import type { Realtime } from "../lib/realtime";
 import type { Voice, VoiceState } from "../lib/voice";
-import { CameraButton, ScreenButton } from "./AppBar";
+import { CameraButton, DeafenButton, MicButton, ScreenButton } from "./AppBar";
 import { arrangeTiles, moveTile, signalLevel, VoiceChannel } from "./VoiceChannel";
 
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
@@ -45,8 +45,61 @@ function voice() {
   return {
     startScreen: vi.fn().mockResolvedValue(undefined), stopScreen: vi.fn(), join: vi.fn(), leave: vi.fn(), hangUp: vi.fn(), toggleMute: vi.fn(), toggleDeafen: vi.fn(),
     startCamera: vi.fn().mockResolvedValue(undefined), stopCamera: vi.fn(), setCamera: vi.fn(), setCameraQuality: vi.fn(), refreshCameras: vi.fn().mockResolvedValue(undefined),
+    setInput: vi.fn().mockResolvedValue(undefined), setOutput: vi.fn().mockResolvedValue(undefined), refreshDevices: vi.fn().mockResolvedValue(undefined),
   };
 }
+
+const device = (kind: MediaDeviceKind, deviceId: string, label: string) => ({ kind, deviceId, label, groupId: "", toJSON: () => ({}) }) as MediaDeviceInfo;
+
+describe("VoiceChannel audio controls in the app bar", () => {
+  const devices = [device("audioinput", "mic-usb", "Headset USB"), device("audiooutput", "out-usb", "Fone USB")];
+
+  it("switches the microphone and the output in the middle of the call", async () => {
+    const controls = voice();
+    const onMenu = vi.fn();
+    const onPicked = vi.fn();
+    const props = { voice: controls as unknown as Voice, onMenu, onPicked, onVoiceSettings: vi.fn() };
+    const view = render(<MicButton {...props} state={state({ devices, native: true })} menuOpen={false} />);
+    await userEvent.click(screen.getByRole("button", { name: "Escolher microfone e saída de áudio" }));
+    expect(controls.refreshDevices).toHaveBeenCalledOnce();
+    expect(onMenu).toHaveBeenCalledOnce();
+    view.rerender(<MicButton {...props} state={state({ devices, native: true })} menuOpen />);
+    const [systemInput] = screen.getAllByRole("menuitemradio", { name: "Padrão do sistema" });
+    expect(systemInput).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Headset USB" }));
+    expect(controls.setInput).toHaveBeenCalledWith("mic-usb");
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Fone USB" }));
+    expect(controls.setOutput).toHaveBeenCalledWith("out-usb");
+    expect(onPicked).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the chosen devices and warns when one is unplugged", () => {
+    render(<MicButton voice={voice() as unknown as Voice} state={state({ devices, native: true, inputId: "gone", outputId: "out-usb" })} menuOpen onMenu={vi.fn()} onPicked={vi.fn()} onVoiceSettings={vi.fn()} />);
+    expect(screen.getByText("O microfone escolhido não está conectado.")).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: "Fone USB" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("does not switch the microphone while a device change is in progress", () => {
+    render(<MicButton voice={voice() as unknown as Voice} state={state({ devices, native: true, deviceBusy: true })} menuOpen onMenu={vi.fn()} onPicked={vi.fn()} onVoiceSettings={vi.fn()} />);
+    expect(screen.getByRole("menuitemradio", { name: "Headset USB" })).toBeDisabled();
+  });
+
+  it("mutes from the main part of the button", async () => {
+    const controls = voice();
+    render(<MicButton voice={controls as unknown as Voice} state={state()} menuOpen={false} onMenu={vi.fn()} onPicked={vi.fn()} onVoiceSettings={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Silenciar microfone" }));
+    expect(controls.toggleMute).toHaveBeenCalledOnce();
+  });
+
+  it("turns the received audio off and on next to the microphone", async () => {
+    const controls = voice();
+    const view = render(<DeafenButton voice={controls as unknown as Voice} state={state()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Desativar áudio recebido" }));
+    expect(controls.toggleDeafen).toHaveBeenCalledOnce();
+    view.rerender(<DeafenButton voice={controls as unknown as Voice} state={state({ deafened: true })} />);
+    expect(screen.getByRole("button", { name: "Ativar áudio recebido" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
 
 describe("VoiceChannel screen sharing", () => {
   beforeEach(() => {
