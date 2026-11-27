@@ -98,6 +98,8 @@ jobs:
       - name: Sync secrets to the server .env
         env:
           KLIPY_TOKEN: ${{ secrets.KLIPY_TOKEN }}
+          # desktop.yml sends it to announce a new app version to open apps.
+          RELEASE_NOTIFY_TOKEN: ${{ secrets.RELEASE_NOTIFY_TOKEN }}
           FILES_ACCESS_KEY_ID: ${{ secrets.FILES_ACCESS_KEY_ID }}
           FILES_SECRET_ACCESS_KEY: ${{ secrets.FILES_SECRET_ACCESS_KEY }}
           # The Lightsail bucket from infra/terraform (aws_lightsail_bucket.files).
@@ -115,6 +117,7 @@ jobs:
             printf '%s' "$2" | ssh "ubuntu@$HOST" "export NAME=$1;" 'set -euo pipefail; value=$(cat); cd /opt/disc-voice; umask 077; touch .env; { grep -v "^$NAME=" .env || true; printf "%s=%s\n" "$NAME" "$value"; } > .env.tmp; mv .env.tmp .env'
           }
           sync KLIPY_TOKEN "$KLIPY_TOKEN"
+          sync RELEASE_NOTIFY_TOKEN "$RELEASE_NOTIFY_TOKEN"
           # Without the key the API keeps files on the instance's volume.
           if [ -n "$FILES_ACCESS_KEY_ID" ] && [ -n "$FILES_SECRET_ACCESS_KEY" ]; then
             sync FILES_ACCESS_KEY_ID "$FILES_ACCESS_KEY_ID"

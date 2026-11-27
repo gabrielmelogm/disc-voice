@@ -7,6 +7,7 @@ import type { ChosenStatus, Server, User } from "@disc-voice/shared";
 import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
 import { CAMERA_QUALITIES, screenLabel, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
 import { ScreenShareDialog } from "./ScreenShareDialog";
+import { UpdateButton } from "./UpdateDialog";
 import { Avatar, Badge, unreadLabel } from "./ui";
 
 /**
@@ -158,6 +159,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
       <MessageCircle size={20} />{dmUnread > 0 && <span className="bar-badge"><Badge count={dmUnread} /></span>}
     </button>
     {!inCall && <button className="bar-button" disabled={!canJoinVoice} aria-label="Ir para a sala de voz" title="Sala de voz" onClick={onVoice}><Headphones size={20} /></button>}
+    <UpdateButton inCall={inCall} onLeaveCall={voice.hangUp} />
     <span className="bar-divider" />
     <div className="menu-anchor">
       <button className="bar-avatar" aria-haspopup="menu" aria-expanded={menu === "account"} aria-label="Sua conta e configurações" title={`Sua conta · ${STATUS_LABELS[status]}`}

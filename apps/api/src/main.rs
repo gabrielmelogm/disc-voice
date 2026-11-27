@@ -106,6 +106,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => tracing::warn!("GIFs desativados: defina KLIPY_TOKEN com a chave da API do Klipy."),
     }
+    match env::var("RELEASE_NOTIFY_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => {
+            tracing::info!("Aviso de nova versão do app ativo em /api/releases/notify");
+            state = state.with_release_token(token);
+        }
+        _ => tracing::warn!(
+            "Aviso de nova versão desativado: defina RELEASE_NOTIFY_TOKEN (o mesmo secret do workflow desktop.yml)."
+        ),
+    }
     let app = router(state, origins).fallback_service(
         ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html"))),
     );

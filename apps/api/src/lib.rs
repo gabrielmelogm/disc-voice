@@ -13,6 +13,7 @@ mod presence;
 mod profile;
 mod reads;
 mod realtime;
+mod releases;
 mod search;
 pub mod storage;
 pub mod turn;
@@ -55,6 +56,9 @@ pub struct AppState {
     uploads: std::path::PathBuf,
     /// Present when the S3 bucket for files is configured.
     bucket: Option<Arc<storage::Bucket>>,
+    /// Present when the release workflow may announce new app versions
+    /// (see [`releases`]).
+    release_token: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -74,7 +78,16 @@ impl AppState {
             klipy: None,
             uploads: std::env::temp_dir().join("disc-voice-files"),
             bucket: None,
+            release_token: None,
         }
+    }
+
+    /// Lets `POST /api/releases/notify` with this bearer token announce a new
+    /// desktop version to every open app.
+    pub fn with_release_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        self.release_token = (!token.trim().is_empty()).then(|| Arc::from(token.trim()));
+        self
     }
 
     /// Keeps new files in this S3 bucket instead of the uploads directory.
@@ -211,6 +224,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 .route("/auth/discord", post(discord::routes::login_finish))
                 .route("/discord/callback", get(discord::routes::callback))
                 .route("/files/{id}/{name}", get(files::serve))
+                .route("/releases/notify", post(releases::notify))
                 .route(
                     "/realtime",
                     get(move |state, headers, ws| {

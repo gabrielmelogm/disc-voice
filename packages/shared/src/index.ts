@@ -492,6 +492,8 @@ export type RealtimeEvent =
   | { type: "ready"; peerId: string }
   | { type: "pong" }
   | { type: "session.expired" }
+  /** A new desktop version was released on these update channels. */
+  | { type: "app.update"; version: string; channels: ("alpha" | "beta" | "stable")[] }
   | { type: "error"; operation: string; message: string }
   | { type: "channel.created"; channel: Channel }
   /**

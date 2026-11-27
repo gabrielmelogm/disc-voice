@@ -59,6 +59,26 @@ fn save_theme_template<R: tauri::Runtime>(
     Ok(path.display().to_string())
 }
 
+/// The update platform of this install (`windows-x86_64`, `linux-x86_64`), as
+/// the update manifests name it, or `None` when it cannot update itself: a
+/// .deb or .rpm is updated by the package manager, and development builds
+/// never update.
+#[tauri::command]
+fn updater_platform() -> Option<String> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    let os = {
+        // Set by the AppImage runtime to the path the update replaces.
+        std::env::var_os("APPIMAGE")?;
+        "linux"
+    };
+    #[cfg(not(target_os = "linux"))]
+    let os = "windows";
+    Some(format!("{os}-{}", std::env::consts::ARCH))
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Opening the app again while it sits in the tray brings back the running one.
@@ -68,6 +88,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let engine = AudioEngine::new().map_err(std::io::Error::other)?;
             app.manage(engine);
@@ -147,6 +169,7 @@ pub fn run() {
             notify::show_notification,
             discord_rpc::discord_presence,
             save_theme_template,
+            updater_platform,
             pip::set_pip_ready,
             pip::pip_exit,
             tray::tray_supported,

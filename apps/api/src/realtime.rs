@@ -152,6 +152,15 @@ impl Hub {
         self.emit(recipients, payload, false);
     }
 
+    /// Sends to every live connection; returns how many there are.
+    pub(crate) fn publish_all(&self, payload: Value) -> usize {
+        let clients = self.clients.lock().unwrap();
+        let recipients: Vec<_> = clients.keys().copied().collect();
+        let count = recipients.len();
+        self.emit(recipients, payload, false);
+        count
+    }
+
     /// Which of these accounts have the app open somewhere.
     pub(crate) fn online(
         &self,

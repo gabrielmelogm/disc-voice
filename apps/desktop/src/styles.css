@@ -968,3 +968,11 @@ button.cloud-thumb { cursor: zoom-in; }
 .mention-hint { margin-left: auto; color: var(--muted); font-size: 12px; }
 .mention-option.active .mention-hint { color: inherit; opacity: .8; }
 .mention-empty { margin: 4px 8px 6px; color: var(--muted); font-size: 13px; }
+
+/* Self-update: indicator in the app bar and its dialog. */
+.update-button { position: relative; }
+.update-dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--success-text); box-shadow: 0 0 0 2px var(--surface-raised); pointer-events: none; }
+.update-dialog { width: min(520px, calc(100vw - 32px)); }
+.update-notes { max-height: 280px; overflow-y: auto; padding: 12px 14px; border-radius: var(--radius-md, 8px); background: var(--surface-sunken); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+.update-progress { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--ink-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.update-progress progress { flex: 1; height: 8px; accent-color: var(--brand, currentColor); }
