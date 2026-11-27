@@ -1,5 +1,5 @@
-//! System audio on Windows: WASAPI process loopback of everything except our
-//! own process tree (Windows 10 build 20348 / Windows 11 and later).
+//! System audio on Windows: WASAPI process loopback of everything except what
+//! this app plays (Windows 10 build 20348 / Windows 11 and later).
 
 use crate::system::{ChunkSink, Pacer, CHANNELS, RATE};
 use std::{
@@ -14,6 +14,7 @@ use std::{
 use windows::{
     core::{implement, Interface, Ref, HRESULT},
     Win32::{
+        Foundation::CloseHandle,
         Media::Audio::{
             ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
             IActivateAudioInterfaceCompletionHandler,
@@ -32,6 +33,10 @@ use windows::{
                     PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
                 },
                 BLOB, COINIT_MULTITHREADED,
+            },
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
             },
             Variant::VT_BLOB,
         },
@@ -63,13 +68,65 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
     }
 }
 
+const WEBVIEW_BROWSER: &str = "msedgewebview2.exe";
+
+/// A running process: its ID, its parent's and its executable's name.
+type ProcessEntry = (u32, u32, String);
+
+/// Every running process; empty when Windows does not list them.
+fn processes() -> Vec<ProcessEntry> {
+    let mut list = Vec::new();
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return list;
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
+    while more {
+        let name = &entry.szExeFile;
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        list.push((
+            entry.th32ProcessID,
+            entry.th32ParentProcessID,
+            String::from_utf16_lossy(&name[..len]),
+        ));
+        more = unsafe { Process32NextW(snapshot, &mut entry) }.is_ok();
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    list
+}
+
+/// Our WebView2 browser process: the child of `own` that runs WebView2.
+fn webview_browser(own: u32, processes: &[ProcessEntry]) -> Option<u32> {
+    processes
+        .iter()
+        .find(|(pid, parent, name)| {
+            *parent == own && *pid != own && name.eq_ignore_ascii_case(WEBVIEW_BROWSER)
+        })
+        .map(|(pid, ..)| *pid)
+}
+
+/// The process whose tree the capture leaves out.
+///
+/// Process loopback only leaves out the target and its direct children, not
+/// their children. Everything this app plays (the call, its sounds) comes
+/// from WebView2's audio service, a child of the WebView2 browser process,
+/// which is in turn our child: so the browser process is the target. Without
+/// one (no webview yet), ourselves.
+fn excluded_process() -> u32 {
+    let own = std::process::id();
+    webview_browser(own, &processes()).unwrap_or(own)
+}
+
 fn activate() -> Result<IAudioClient, String> {
     let fail = |error: windows::core::Error| format!("{UNSUPPORTED} ({})", error.message());
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                TargetProcessId: std::process::id(),
+                TargetProcessId: excluded_process(),
                 ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
             },
         },
@@ -233,5 +290,41 @@ impl Drop for Capture {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(pid: u32, parent: u32, name: &str) -> ProcessEntry {
+        (pid, parent, name.into())
+    }
+
+    #[test]
+    fn targets_our_webview_browser() {
+        let list = [
+            entry(10, 1, "disc-voice-desktop.exe"),
+            entry(20, 5, "msedgewebview2.exe"), // another app's webview
+            entry(30, 10, "conhost.exe"),
+            entry(40, 10, "MsEdgeWebView2.exe"),
+            entry(50, 40, "msedgewebview2.exe"), // its audio service
+        ];
+        assert_eq!(webview_browser(10, &list), Some(40));
+    }
+
+    #[test]
+    fn without_a_webview_there_is_no_browser() {
+        let list = [
+            entry(10, 1, "disc-voice-desktop.exe"),
+            entry(30, 10, "conhost.exe"),
+        ];
+        assert_eq!(webview_browser(10, &list), None);
+    }
+
+    #[test]
+    fn lists_this_process() {
+        let own = std::process::id();
+        assert!(processes().iter().any(|(pid, ..)| *pid == own));
     }
 }

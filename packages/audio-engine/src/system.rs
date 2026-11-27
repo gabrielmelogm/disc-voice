@@ -3,8 +3,9 @@
 //! Everything this process plays (the call itself, notification sounds) is
 //! left out, so the people in the call never hear themselves back:
 //!
-//! - Windows: WASAPI process loopback excluding our process tree (the
-//!   WebView2 processes that play the call are our children).
+//! - Windows: WASAPI process loopback excluding our WebView2 browser
+//!   process and its children, among them the audio service that plays the
+//!   call (see `system_windows::excluded_process`).
 //! - Linux: one PulseAudio monitor per playback stream of other applications,
 //!   mixed together (what pavucontrol does for its per-stream meters).
 //!
