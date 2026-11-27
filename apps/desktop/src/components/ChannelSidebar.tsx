@@ -1,9 +1,9 @@
-import { History, Import, MessageSquareText, Plus, RefreshCw, Settings, UserPlus, Volume2 } from "lucide-react";
+import { History, MessageSquareText, Plus, RefreshCw, Settings, UserPlus, Volume2 } from "lucide-react";
 import type { Channel, Server, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
 import { Avatar, Badge, LiveTag, unreadLabel } from "./ui";
 
-export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord, onSettings }: {
+export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onSettings }: {
   server: Server;
   channels: Channel[];
   channelId: string | null;
@@ -20,8 +20,6 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
   /** Absent without Criar convite. */
   onInvite?: () => void;
   onReload: () => void;
-  /** Opens the Discord import; only for the server owner. */
-  onDiscord?: () => void;
   /** Opens the server settings; only for who manages something there. */
   onSettings?: () => void;
 }) {
@@ -34,7 +32,6 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
       {onSettings && <button className="icon-button small" aria-label="Configurações do servidor" title="Configurações do servidor" onClick={onSettings}><Settings size={17} /></button>}</div>
     {server.description && <p className="server-description">{server.description}</p>}
     {onInvite && <button className="button soft full" onClick={onInvite}><UserPlus size={16} />Convidar pessoas</button>}
-    {onDiscord && <button className="button secondary small full" onClick={onDiscord}><Import size={16} />Importar do Discord</button>}
     {loading && <p className="sidebar-status" role="status">Carregando canais…</p>}
     {error && <div className="sidebar-status"><p role="alert">{error}</p><button className="link-button" onClick={onReload}><RefreshCw size={13} />Tentar novamente</button></div>}
     {!loading && !error && channels.length === 0 && <p className="sidebar-status">{onCreate ? "Crie o primeiro canal." : "Nenhum canal por aqui ainda."}</p>}
