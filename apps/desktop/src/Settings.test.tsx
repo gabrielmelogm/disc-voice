@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { sessionToken } from "./lib/api";
+import { CHANGELOG } from "./lib/changelog";
 import { removeTheme, setAppearance, THEME_EXAMPLE, THEME_TOKENS, themeById } from "./lib/theme";
 
 const tauri = vi.hoisted(() => ({ isTauri: vi.fn(() => false), invoke: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined) }));
@@ -77,6 +78,25 @@ describe("settings dialog", () => {
     expect(within(settings()).getByRole("heading", { name: "Voz e vídeo" })).toBeVisible();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Configurações" })).not.toBeInTheDocument());
+  });
+});
+
+describe("whats new", () => {
+  it("is the last page, found by search, and marks the installed version", async () => {
+    mockApi(() => undefined);
+    const user = await openSettings("Visão geral");
+    const nav = within(settings()).getByRole("navigation", { name: "Configurações" });
+    const links = within(nav).getAllByRole("button").filter(button => button.classList.contains("settings-link") && !button.classList.contains("danger"));
+    expect(links.at(-1)).toHaveTextContent("Novidades");
+    await user.type(within(settings()).getByRole("searchbox", { name: "Buscar nas configurações" }), "o que mudou");
+    expect(within(nav).getAllByRole("button", { name: /Novidades|Sair/ })).toHaveLength(2);
+    await user.keyboard("{Enter}");
+    expect(within(settings()).getByRole("heading", { level: 1, name: "Novidades" })).toBeVisible();
+    // The web build shows the version it was built with.
+    const current = within(settings()).getByRole("region", { name: `Versão ${CHANGELOG[0].version}` });
+    expect(within(current).getByText("Sua versão")).toBeVisible();
+    expect(within(settings()).getByRole("region", { name: "Versão 0.1.0-alpha.1" })).toHaveTextContent("Entre com a sua conta do Google ou do Discord.");
+    expect(within(settings()).getAllByText("Sua versão")).toHaveLength(1);
   });
 });
 

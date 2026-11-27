@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o AppImage do Linux e envia o instalador ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
+description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README e acrescenta as Novidades da versão ao changelog do app, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o AppImage do Linux e envia o instalador ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
 argument-hint: "[alpha|beta|stable]"
 ---
 
@@ -9,7 +9,7 @@ argument-hint: "[alpha|beta|stable]"
 O fluxo tem duas fases, porque `main` só recebe mudanças por PR:
 
 1. **PR de versão**: `release(<estágio>): v<versão>`, só com a versão nova nos manifestos e
-   no README. A skill abre a PR e **espera** o usuário revisar e dar merge.
+   no README e a entrada da versão nas Novidades do app (`changelog.ts`). A skill abre a PR e **espera** o usuário revisar e dar merge.
 2. **Release**: assim que a PR é mergeada, a skill cria a release no commit do merge.
 
 Se a sessão acabar antes do merge, rodar `/release` de novo retoma: o script detecta que a
@@ -96,15 +96,31 @@ arquivos:
 - os `Cargo.toml` dos membros do workspace Rust, e `Cargo.lock`
 - `README.md`: o texto e os badges do shields.io, onde `-` vira `--`
 
-Ele imprime a lista de arquivos alterados. Confira se `git status --short` mostra só esses
-arquivos e se os locks continuam válidos:
+**Novidades do app.** Acrescente no topo de `CHANGELOG`, em `apps/desktop/src/lib/changelog.ts`,
+a entrada da nova versão (a mesma do `package.json`) com a data de hoje (`YYYY-MM-DD`). Ela
+aparece em Configurações → Novidades e é escrita para quem usa o app, a partir das notas:
+
+- Português simples, sem termos técnicos ("endpoint", "refactor", "PR", "realtime", "CI",
+  "bucket", nomes de bibliotecas…) e sem números de PR ou commit.
+- Diga o que a pessoa pode fazer agora: "Agora você pode reagir às mensagens com emojis", e não
+  "Reações em mensagens".
+- Separe em `added` (Novo), `improved` (Melhorias) e `fixed` (Correções). Deixe de fora o que
+  não muda nada para quem usa o app (CI, testes, infraestrutura, skills).
+
+Se a release não tiver nenhuma mudança visível, escreva uma melhoria genérica ("Ajustes para o
+app ficar mais estável."). O teste `changelog.test.ts` falha se a entrada do topo não for da
+versão do `package.json`.
+
+O `bump-version.mjs` imprime a lista de arquivos alterados. Confira se `git status --short`
+mostra só esses arquivos e o `changelog.ts`, e se os locks continuam válidos:
 
 ```powershell
 cargo metadata --locked --format-version 1 --no-deps | Out-Null; $LASTEXITCODE
 npm ls --workspaces --depth 0 | Out-Null; $LASTEXITCODE
 ```
 
-**Commit, push e PR.** Adicione só os arquivos listados pelo script (nunca use `git add -A`).
+**Commit, push e PR.** Adicione só os arquivos listados pelo script e o `changelog.ts` (nunca
+use `git add -A`).
 O título da PR e a mensagem do commit seguem o formato `release(<estágio>): v<versão>`, por
 exemplo `release(alpha): v0.1.0-alpha.1`.
 
