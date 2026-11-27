@@ -8,7 +8,7 @@ const plugin = vi.hoisted(() => ({
   listener: null as ((url: string) => void) | null,
 }));
 vi.mock("@fabianlars/tauri-plugin-oauth", () => ({ start: plugin.start, cancel: plugin.cancel, onUrl: plugin.onUrl }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: plugin.openUrl }));
+vi.mock("./external", () => ({ openExternal: plugin.openUrl }));
 
 const session = { user: { id: "user-1", email: "a@example.com", name: "Ana" }, token: "t".repeat(64) };
 

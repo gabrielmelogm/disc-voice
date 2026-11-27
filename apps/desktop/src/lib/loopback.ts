@@ -2,6 +2,8 @@
 // (http://127.0.0.1:<port>, opened by tauri-plugin-oauth) receives the
 // browser's last redirect, so the app learns how the sign-in went.
 
+import { openExternal } from "./external";
+
 const TIMEOUT_MS = 5 * 60_000;
 
 const DONE_PAGE = `<!doctype html><meta charset="utf-8"><title>Disc Voice</title>
@@ -21,10 +23,7 @@ export async function signInThroughBrowser<T>({ authorize, finish, expired, sign
   expired: string;
   signal?: AbortSignal;
 }): Promise<T> {
-  const [{ start, cancel, onUrl }, { openUrl }] = await Promise.all([
-    import("@fabianlars/tauri-plugin-oauth"),
-    import("@tauri-apps/plugin-opener"),
-  ]);
+  const { start, cancel, onUrl } = await import("@fabianlars/tauri-plugin-oauth");
   const port = await start({ response: DONE_PAGE });
   let received!: (url: string) => void;
   const redirect = new Promise<string>(resolve => { received = resolve; });
@@ -32,7 +31,7 @@ export async function signInThroughBrowser<T>({ authorize, finish, expired, sign
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
-    await openUrl(await authorize(port));
+    await openExternal(await authorize(port));
     const url = await Promise.race([
       redirect,
       new Promise<never>((_, reject) => {

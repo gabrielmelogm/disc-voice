@@ -33,3 +33,5 @@ disc-call = { path = "../../../packages/call-engine" }
 webkit2gtk = { version = "2.0", features = ["v2_38"] }
 # Checks for the AppIndicator library before the tray uses it (it panics without it).
 libloading = "0.8"
+# The browser launchers, run without the AppImage's bundled libraries (browser.rs).
+open = "5.4"
