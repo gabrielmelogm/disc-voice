@@ -3,6 +3,8 @@
 #[cfg(any(windows, target_os = "linux"))]
 mod app;
 #[cfg(any(windows, target_os = "linux"))]
+mod browser;
+#[cfg(any(windows, target_os = "linux"))]
 mod call;
 #[cfg(any(windows, target_os = "linux"))]
 mod camera;
