@@ -41,7 +41,7 @@ Guarde `accessKeyId` e `secretAccessKey` nos secrets `FILES_ACCESS_KEY_ID` e `FI
 
 ## Releases
 
-Ao publicar uma release no GitHub, `.github/workflows/windows.yml` gera o instalador do Windows, anexa o arquivo à release e envia uma cópia para o mesmo bucket, na pasta `releases/`:
+Ao publicar uma release no GitHub, `.github/workflows/desktop.yml` gera o instalador do Windows (e o AppImage do Linux), anexa os arquivos à release e envia uma cópia do instalador para o mesmo bucket, na pasta `releases/`:
 
 - `releases/<tag>/DiscVoice-Setup.exe`: cópia de cada versão.
 - `releases/latest/DiscVoice-Setup.exe`: última release que não é pré-release.

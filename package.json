@@ -16,6 +16,7 @@
     "build": "npm run build --workspace @disc-voice/desktop",
     "build:windows": "npm run tauri:build --workspace @disc-voice/desktop",
     "build:linux": "npm run tauri:build:linux --workspace @disc-voice/desktop",
+    "build:appimage": "npm run tauri:build:appimage --workspace @disc-voice/desktop",
     "typecheck": "npm run typecheck --workspace @disc-voice/desktop",
     "test": "npm run test --workspace @disc-voice/desktop",
     "test:rust": "cargo test --workspace",

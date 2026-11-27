@@ -55,13 +55,14 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 | Plataforma | Instalação | Disponibilidade |
 |:--|:--|:--|
 | **Windows 10/11 (x64)** | Instalador **`.exe` (NSIS)** | ✅ App completo |
+| **Linux (x86_64)** | **AppImage**, sem instalação | 🧪 Em testes |
 | **Web** | Nenhuma — abra no navegador | ✅ Mesma conta e servidores |
-| **Linux / macOS** | Nenhuma — use a versão web | ⚠️ Sem aplicativo nativo |
+| **macOS** | Nenhuma — use a versão web | ⚠️ Sem aplicativo nativo |
 
 > [!IMPORTANT]
-> O aplicativo desktop é exclusivo para **Windows 10/11 de 64 bits**. O áudio nativo
-> (**WASAPI/CPAL**) e a integração completa com microfone, saída e webcam só funcionam
-> na versão instalada para Windows. Em outros sistemas, use a versão web.
+> O aplicativo desktop existe para **Windows 10/11 de 64 bits** e **Linux x86_64**. No Linux,
+> webcam e compartilhamento de tela passam pelos portais do sistema (PipeWire) e o áudio pelo
+> PulseAudio/PipeWire. No macOS, use a versão web.
 
 ### Instalar no Windows
 
@@ -72,6 +73,16 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 2. **Execute o `.exe`** e siga o assistente de instalação. O WebView2 é baixado
    automaticamente caso ainda não esteja presente.
 3. **Abra o Disc Voice**, crie sua conta e comece a montar sua comunidade.
+
+### Usar no Linux
+
+1. **Baixe o AppImage** `DiscVoice_0.1.0-alpha.1_x86_64.AppImage` na página de
+   [Releases](https://github.com/gabrielmelogm/disc-voice/releases). O `SHA256SUMS` da release
+   também lista o AppImage.
+2. **Dê permissão de execução** e abra: `chmod +x DiscVoice_*.AppImage && ./DiscVoice_*.AppImage`.
+   Funciona em distros com glibc 2.35 ou mais nova (Ubuntu 22.04, Fedora 36, Debian 12 em diante).
+3. **Ícone na bandeja:** no GNOME, instale a extensão AppIndicator. Se a janela ficar em
+   branco (comum com placas NVIDIA), abra com `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
 O instalador também pode ser gerado localmente:
 

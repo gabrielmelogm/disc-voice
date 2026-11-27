@@ -2,7 +2,7 @@ import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // The bucket is private: every click gets a short-lived signed link to the
-// latest installer, uploaded by .github/workflows/windows.yml.
+// latest installer, uploaded by .github/workflows/desktop.yml.
 export const dynamic = "force-dynamic";
 
 const BUCKET = process.env.RELEASES_BUCKET || "disc-voice-files-481116707314";
