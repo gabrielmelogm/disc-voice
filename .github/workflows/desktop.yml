@@ -4,14 +4,14 @@ name: Desktop
 # including the merge of a version PR `release(...)` from the /release skill.
 # The installers are built only when a GitHub release is published (by the
 # skill or by hand in the Releases tab): the Windows installer and the Linux
-# AppImage are attached to the release with one SHA256SUMS, the Windows
-# installer is uploaded to the private Lightsail bucket under releases/, and
+# packages (AppImage, .deb, .rpm) are attached to the release with one
+# SHA256SUMS and uploaded to the private Lightsail bucket under releases/, and
 # the release notes get a "Qual arquivo baixar?" section. The website's
-# download button signs a link to releases/latest/DiscVoice-Setup.exe.
+# download buttons sign links to the files in releases/latest/.
 #
 # A pull request that changes this workflow, or a manual run, also builds the
-# AppImage and keeps it as a run artifact, so the Linux bundle can be tried
-# before a release.
+# Linux packages and keeps them as a run artifact, so they can be tried before
+# a release.
 on:
   push:
     branches: [main]
@@ -187,22 +187,28 @@ jobs:
         run: ./.github/scripts/set-version.ps1
 
       - run: npm ci
-      # linuxdeploy is itself an AppImage; the runners have no FUSE.
-      - run: npm run build:appimage
+      # AppImage, .deb and .rpm from one compile. linuxdeploy is itself an
+      # AppImage; the runners have no FUSE.
+      - run: npm run build:linux:all
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
 
-      - name: Name the AppImage
+      - name: Name the Linux packages
         run: |
           shopt -s nullglob
-          images=(target/release/bundle/appimage/*.AppImage)
-          if [ ${#images[@]} -eq 0 ]; then
-            echo 'No AppImage found in target/release/bundle/appimage.' >&2
-            exit 1
-          fi
           version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
           mkdir -p dist
-          cp "${images[0]}" "dist/DiscVoice_${version}_x86_64.AppImage"
+          pick() {
+            local files=(target/release/bundle/$1/*.$2)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "No .$2 found in target/release/bundle/$1." >&2
+              exit 1
+            fi
+            cp "${files[0]}" "dist/$3"
+          }
+          pick appimage AppImage "DiscVoice_${version}_x86_64.AppImage"
+          pick deb deb "DiscVoice_${version}_amd64.deb"
+          pick rpm rpm "DiscVoice_${version}_x86_64.rpm"
           chmod +x dist/*.AppImage
           ls -lh dist >> "$GITHUB_STEP_SUMMARY"
 
@@ -236,20 +242,25 @@ jobs:
         run: |
           $installer = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
           $appimage = Get-ChildItem dist/*.AppImage | Select-Object -First 1
-          if (-not $installer -or -not $appimage) { throw 'Missing build artifacts.' }
+          $deb = Get-ChildItem dist/*.deb | Select-Object -First 1
+          $rpm = Get-ChildItem dist/*.rpm | Select-Object -First 1
+          if (-not $installer -or -not $appimage -or -not $deb -or -not $rpm) { throw 'Missing build artifacts.' }
+          $packages = @($installer, $appimage, $deb, $rpm)
 
-          $lines = foreach ($file in @($installer, $appimage)) {
+          $lines = foreach ($file in $packages) {
             "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
           }
           $sums = 'dist/SHA256SUMS'
           # sha256sum format (two spaces), LF, no BOM: `sha256sum -c` reads it.
           [IO.File]::WriteAllText($sums, (($lines -join "`n") + "`n"))
 
-          gh release upload $env:TAG $installer.FullName $appimage.FullName $sums --clobber --repo $env:GITHUB_REPOSITORY
+          gh release upload $env:TAG @($packages.FullName) $sums --clobber --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw 'Upload to the release failed.' }
           "INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
           "INSTALLER_SHA256=$((Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower())" >> $env:GITHUB_ENV
           "APPIMAGE=$($appimage.FullName)" >> $env:GITHUB_ENV
+          "DEB=$($deb.FullName)" >> $env:GITHUB_ENV
+          "RPM=$($rpm.FullName)" >> $env:GITHUB_ENV
 
       # The website's download button signs releases/latest/. It gets this
       # release when it is stable, or a prerelease while no stable exists yet
@@ -279,8 +290,9 @@ jobs:
           "UPDATE_LATEST=$($latest.ToString().ToLower())" >> $env:GITHUB_ENV
 
       # Same access key the API uses (see infra/terraform/README.md, "Releases").
-      # Only the Windows installer: the website has no Linux download yet.
-      - name: Upload installer to the bucket
+      # The object names are fixed: the website's /download/* routes sign them
+      # (apps/website/src/lib/releases.ts).
+      - name: Upload installers to the bucket
         shell: pwsh
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.FILES_ACCESS_KEY_ID }}
@@ -288,19 +300,22 @@ jobs:
           AWS_DEFAULT_REGION: ${{ env.RELEASES_REGION }}
         run: |
           $base = "s3://$env:RELEASES_BUCKET/releases"
-          $name = 'DiscVoice-Setup.exe'
-          $type = 'application/vnd.microsoft.portable-executable'
+          $files = @(
+            @{ Path = $env:INSTALLER; Name = 'DiscVoice-Setup.exe'; Type = 'application/vnd.microsoft.portable-executable' },
+            @{ Path = $env:APPIMAGE; Name = 'DiscVoice_x86_64.AppImage'; Type = 'application/vnd.appimage' },
+            @{ Path = $env:DEB; Name = 'DiscVoice_amd64.deb'; Type = 'application/vnd.debian.binary-package' },
+            @{ Path = $env:RPM; Name = 'DiscVoice_x86_64.rpm'; Type = 'application/x-rpm' }
+          )
 
           # The objects stay private: the website signs a short-lived link.
-          # Versioned copy, kept for good.
-          aws s3 cp $env:INSTALLER "$base/$env:TAG/$name" --content-type $type
-          if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
-          "Uploaded $base/$env:TAG/$name" >> $env:GITHUB_STEP_SUMMARY
-
-          if ($env:UPDATE_LATEST -eq 'true') {
-            aws s3 cp $env:INSTALLER "$base/latest/$name" --content-type $type
-            if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
-            "Uploaded $base/latest/$name (website download)" >> $env:GITHUB_STEP_SUMMARY
+          # Versioned copy, kept for good; latest/ is what the website serves.
+          $folders = @($env:TAG) + $(if ($env:UPDATE_LATEST -eq 'true') { 'latest' } else { @() })
+          foreach ($folder in $folders) {
+            foreach ($file in $files) {
+              aws s3 cp $file.Path "$base/$folder/$($file.Name)" --content-type $file.Type
+              if ($LASTEXITCODE -ne 0) { throw "Upload of $($file.Name) failed." }
+              "Uploaded $base/$folder/$($file.Name)" >> $env:GITHUB_STEP_SUMMARY
+            }
           }
 
       # Appends "Qual arquivo baixar?" to the notes, whether the release came
@@ -319,8 +334,10 @@ jobs:
 
           $file = Split-Path $env:INSTALLER -Leaf
           $image = Split-Path $env:APPIMAGE -Leaf
+          $deb = Split-Path $env:DEB -Leaf
+          $rpm = Split-Path $env:RPM -Leaf
           $site = if ($env:UPDATE_LATEST -eq 'true') {
-            "O botão de download do [site]($env:SITE) já entrega esta versão para Windows."
+            "O botão de download do [site]($env:SITE) já entrega esta versão para Windows e Linux."
           } else {
             "Esta versão não substitui o download do [site]($env:SITE): baixe o instalador aqui."
           }
@@ -331,7 +348,9 @@ jobs:
             '| Sistema | Download |',
             '| --- | --- |',
             "| Windows 10/11 (x64) | ``$file``, o instalador |",
-            "| Linux (x86_64) | ``$image``: dê permissão de execução (``chmod +x``) e abra |",
+            "| Linux (x86_64), qualquer distro | ``$image``: dê permissão de execução (``chmod +x``) e abra |",
+            "| Ubuntu, Debian, Mint, Pop!_OS | ``$deb``: ``sudo apt install ./$deb`` |",
+            "| Fedora, RHEL, openSUSE | ``$rpm``: ``sudo dnf install ./$rpm`` |",
             "| macOS | Sem app nativo: use a versão web em [$($env:SITE -replace '^https://', '')]($env:SITE) |",
             '',
             "$site Atualizar pelo instalador mantém sua conta e suas configurações.",

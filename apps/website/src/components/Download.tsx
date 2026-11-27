@@ -1,7 +1,8 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { PLATFORMS, PLATFORM_ORDER, isAvailable, readVisitor, type Platform, type Visitor } from "@/lib/platform";
+import { ChevronIcon, LinuxPackages, useEscape } from "./LinuxPackages";
 import { PlatformIcon } from "./PlatformIcon";
 import { TiltCard } from "./TiltCard";
 
@@ -38,10 +39,37 @@ export function HeroDownload() {
   const visitor = useVisitor();
   const detected = visitor !== "mobile" && visitor !== "unknown" ? visitor : null;
   const others = PLATFORM_ORDER.filter(platform => platform !== detected);
+  const [linuxOpen, setLinuxOpen] = useState(false);
+  const closeLinux = useCallback(() => setLinuxOpen(false), []);
+  useEscape(linuxOpen, closeLinux);
+  // Under the Linux button, or under the "Também disponível" row (where -mt-5
+  // cancels the column gap while closed).
+  const drawer = (className: string) => <LinuxPackages id="hero-linux-packages" open={linuxOpen} className={className} />;
 
   return (
     <div className="flex flex-col items-center gap-5 lg:items-start">
-      {detected && !isAvailable(detected) ? (
+      {detected === "linux" ? (
+        <div className="flex w-full max-w-md flex-col items-center lg:items-start">
+          <button
+            type="button"
+            aria-expanded={linuxOpen}
+            aria-controls="hero-linux-packages"
+            onClick={() => setLinuxOpen(open => !open)}
+            className="btn-3d group inline-flex items-center gap-4 rounded-2xl px-7 py-4 text-on-brand sm:px-9 sm:py-5"
+          >
+            <PlatformIcon platform="linux" className="size-8 shrink-0" />
+            <span className="flex flex-col text-left">
+              <span className="flex items-center gap-2 text-lg font-extrabold leading-tight sm:text-xl">
+                Baixar para Linux
+                <StatusBadge platform="linux" className="bg-white/20 text-white" />
+              </span>
+              <span className="text-sm font-medium text-white/75">{PLATFORMS.linux.detail}</span>
+            </span>
+            <ChevronIcon open={linuxOpen} className="ml-2 size-6" />
+          </button>
+          {drawer("max-w-md")}
+        </div>
+      ) : detected && !isAvailable(detected) ? (
         <div className="inline-flex cursor-not-allowed items-center gap-4 rounded-2xl border border-line bg-surface-raised px-7 py-4 text-ink-subtle sm:px-9 sm:py-5">
           <PlatformIcon platform={detected} className="size-8 shrink-0" />
           <span className="flex flex-col text-left">
@@ -78,7 +106,21 @@ export function HeroDownload() {
 
       <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm text-ink-subtle lg:justify-start">
         <span>{detected && isAvailable(detected) ? "Também disponível para" : "Disponível para"}</span>
-        {others.map(platform => isAvailable(platform) ? (
+        {others.map(platform => platform === "linux" ? (
+          <button
+            key={platform}
+            type="button"
+            aria-expanded={linuxOpen}
+            aria-controls="hero-linux-packages"
+            onClick={() => setLinuxOpen(open => !open)}
+            className="inline-flex items-center gap-1.5 font-semibold text-ink-muted transition-colors hover:text-brand-text"
+          >
+            <PlatformIcon platform={platform} className="size-4" />
+            {PLATFORMS[platform].name}
+            <StatusBadge platform={platform} />
+            <ChevronIcon open={linuxOpen} className="size-4" />
+          </button>
+        ) : isAvailable(platform) ? (
           <a key={platform} href={PLATFORMS[platform].href} className="inline-flex items-center gap-1.5 font-semibold text-ink-muted transition-colors hover:text-brand-text">
             <PlatformIcon platform={platform} className="size-4" />
             {PLATFORMS[platform].name}
@@ -92,6 +134,7 @@ export function HeroDownload() {
           </span>
         ))}
       </p>
+      {detected !== "linux" && drawer("-mt-5 max-w-md")}
     </div>
   );
 }
@@ -101,6 +144,12 @@ function PlatformCard({ platform, detected }: { platform: Platform; detected: bo
   const available = isAvailable(platform);
   // Only a platform that can be downloaded gets the highlight.
   const recommended = detected && available;
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  useEscape(open, close);
+  const buttonClass = `pop mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-bold [--pop:40px] ${recommended
+    ? "btn-3d text-on-brand"
+    : "bg-fill text-ink transition-colors hover:bg-fill-hover"}`;
   return (
     <TiltCard
       max={recommended ? 8 : 12}
@@ -123,12 +172,26 @@ function PlatformCard({ platform, detected }: { platform: Platform; detected: bo
         <StatusBadge platform={platform} />
       </h3>
       <p className="pop mt-1 text-sm text-ink-subtle [--pop:20px]">{detail}</p>
-      {available ? (
+      {platform === "linux" ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls="card-linux-packages"
+            onClick={() => setOpen(value => !value)}
+            className={buttonClass}
+          >
+            <DownloadIcon />
+            Baixar
+            <span className="sr-only"> para {name}</span>
+            <ChevronIcon open={open} className="size-4" />
+          </button>
+          <LinuxPackages id="card-linux-packages" open={open} compact />
+        </>
+      ) : available ? (
         <a
           href={href}
-          className={`pop mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-bold [--pop:40px] ${recommended
-            ? "btn-3d text-on-brand"
-            : "bg-fill text-ink transition-colors hover:bg-fill-hover"}`}
+          className={buttonClass}
         >
           <DownloadIcon />
           Baixar
@@ -151,7 +214,8 @@ function PlatformCard({ platform, detected }: { platform: Platform; detected: bo
 export function DownloadCards() {
   const visitor = useVisitor();
   return (
-    <div className="grid items-center gap-6 md:grid-cols-3 md:gap-8">
+    // items-start: the Linux card grows when its drawer opens, the others stay put.
+    <div className="grid items-start gap-6 md:grid-cols-3 md:gap-8">
       {PLATFORM_ORDER.map(platform => (
         <PlatformCard key={platform} platform={platform} detected={platform === visitor} />
       ))}
