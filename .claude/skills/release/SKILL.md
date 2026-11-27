@@ -130,6 +130,13 @@ do { Start-Sleep 60; $s = gh pr view <número> --json state -q .state } while ($
 - Se o comando parar sem resposta (por exemplo, porque a sessão foi encerrada), o usuário
   retoma rodando `/release` depois do merge.
 
+**Auditoria de segurança (obrigatória).** Logo depois de iniciar a espera acima, sempre
+invoque a skill `security-audit` com o número da PR (`Skill` com `skill: "security-audit"`,
+`args: "<número>"`), ainda na branch `release/v<versão>`. Ela audita o código sem modificar
+nada e publica o resultado como comentário na PR. Não é preciso pedir confirmação: o usuário
+já aprovou abrir a PR. Se ela apontar achados Críticos ou Altos, avise o usuário antes do
+merge; a decisão de mergear continua sendo dele.
+
 Não acompanhe os checks de CI do merge: eles só testam. A release roda os testes de novo
 antes de gerar o instalador.
 
