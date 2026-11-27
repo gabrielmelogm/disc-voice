@@ -297,7 +297,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .bar-button.danger:hover { background: var(--danger-hover); }
 .bar-button.wide { width: 64px; }
 .bar-button.narrow { width: 28px; }
-.split-button { display: flex; gap: 2px; }
+.split-button { display: flex; }
+.split-button > .bar-button { width: 40px; padding-left: 4px; border-radius: var(--radius-full) 0 0 var(--radius-full); }
+.split-button .bar-button.narrow { width: 30px; padding-right: 4px; border-radius: 0 var(--radius-full) var(--radius-full) 0; }
+.split-button .bar-button.narrow::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 1px; background: currentColor; opacity: .25; }
 .bar-avatar { display: grid; place-items: center; width: 44px; height: 44px; flex: none; padding: 0; border: 0; border-radius: var(--radius-full); background: none; }
 .menu-anchor { position: relative; display: flex; }
 .popover-menu { position: absolute; left: 0; bottom: calc(100% + 12px); z-index: 10; display: flex; flex-direction: column; gap: 2px; width: 280px; max-height: 60vh; padding: 8px; overflow-y: auto; border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-md), 0 0 0 1px var(--line); }
@@ -775,10 +778,10 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .popover-menu.align-end { left: auto; right: 0; }
 .popover-menu button .menu-text { display: flex; flex-direction: column; white-space: normal; }
 .popover-menu button .menu-text small { color: var(--ink-subtle); font-size: 12px; font-weight: 500; white-space: normal; }
-.popover-menu button span.presence-dot, .presence-dot { flex: none; display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--offline); }
-.presence-dot.presence-online { background: var(--online); }
-.presence-dot.presence-idle { background: var(--idle); }
-.presence-dot.presence-dnd { background: var(--danger); }
+.popover-menu button span.presence-dot, .presence-dot { flex: none; display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--presence, var(--offline)); }
+.presence-dot.presence-online { --presence: var(--online); }
+.presence-dot.presence-idle { --presence: var(--idle); }
+.presence-dot.presence-dnd { --presence: var(--danger); }
 .role-badge { display: inline-flex; flex: none; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--brand-soft); color: var(--brand-text) !important; font-size: 11px !important; font-weight: 700; line-height: 1; white-space: nowrap; }
 .role-badge.role-moderator { background: var(--success-soft); color: var(--success-text) !important; }
 .member-name { display: flex; align-items: center; gap: 6px; min-width: 0; }

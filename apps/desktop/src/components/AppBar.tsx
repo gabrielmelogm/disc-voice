@@ -52,7 +52,7 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
       {state.camera === "starting" ? <LoaderCircle size={20} className="spin" /> : on ? <VideoOff size={20} /> : <Video size={20} />}
     </button>
     <div className="menu-anchor">
-      <button className="bar-button narrow" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher câmera e qualidade" title="Câmera e qualidade"
+      <button className={`bar-button narrow ${state.camera === "live" ? "current" : ""}`} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher câmera e qualidade" title="Câmera e qualidade"
         onClick={() => { if (!menuOpen) void voice.refreshCameras(); onMenu(); }}><ChevronUp size={16} /></button>
       {menuOpen && <div className="popover-menu" role="menu" aria-label="Câmera e qualidade">
         <span className="menu-label">Câmera</span>

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Gamepad2, MessageCircle } from "lucide-react";
 import type { Activity, BannerColor, User } from "@disc-voice/shared";
 import { activityDetail, activityLabel } from "../lib/activity";
@@ -117,7 +118,11 @@ function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anch
   useEffect(() => {
     ref.current?.focus();
     const close = (event: PointerEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent ? event.key === "Escape" : !ref.current?.contains(event.target as Node) && !anchor.contains(event.target as Node)) onClose();
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !ref.current?.contains(event.target as Node) && !anchor.contains(event.target as Node)) {
+        // Escape closes only the card, not the dialog it was opened from.
+        if (event instanceof KeyboardEvent) event.preventDefault();
+        onClose();
+      }
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", close);
@@ -128,11 +133,13 @@ function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anch
     };
   }, [anchor, onClose]);
 
-  return <div ref={ref} className="profile-preview profile-card" role="dialog" aria-label={`Perfil de ${user.name}`} tabIndex={-1}
+  // A modal dialog sits in the top layer and makes the rest of the page inert,
+  // so a card opened from inside one has to live in it to show above it.
+  return createPortal(<div ref={ref} className="profile-preview profile-card" role="dialog" aria-label={`Perfil de ${user.name}`} tabIndex={-1}
     style={position ? { left: position.left, top: position.top } : { visibility: "hidden" }}>
     <ProfileSummary user={user} />
     {onMessage && <button type="button" className="button primary small full" onClick={onMessage}><MessageCircle size={16} />Enviar mensagem</button>}
-  </div>;
+  </div>, anchor.closest("dialog[open]") ?? document.body);
 }
 
 /** A user's name that opens their profile card. */
