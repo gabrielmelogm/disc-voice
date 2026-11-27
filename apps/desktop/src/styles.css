@@ -1068,7 +1068,8 @@ button.cloud-thumb { cursor: zoom-in; }
 .server-card-avatar.tone-green .avatar { background: var(--success-soft); color: var(--success-text); }
 .server-card-avatar.tone-yellow .avatar { background: var(--warning-soft); color: var(--warning-text); }
 .server-card-avatar.tone-red .avatar { background: var(--danger-soft); color: var(--danger-text); }
-.server-card-avatar .call-badge { right: -3px; bottom: -3px; }
+.server-card-avatar { position: relative; display: inline-grid; flex: none; }
+.server-card-call { position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--online); color: #fff; box-shadow: 0 0 0 2px var(--surface-sunken); }
 .here-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: var(--radius-full); background: var(--brand-soft); color: var(--brand-text); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .server-card-name { width: 100%; overflow: hidden; font-size: 15px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
 .server-card-meta { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted); font-size: 12px; white-space: nowrap; }

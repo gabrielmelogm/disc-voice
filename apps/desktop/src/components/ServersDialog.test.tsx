@@ -53,6 +53,12 @@ describe("managing servers", () => {
     expect(within(grid).getByRole("button", { name: "Criar ou entrar em um servidor" })).toBeVisible();
   });
 
+  it("marks the server of the user's call", () => {
+    const { dialog } = open({ callServerId: "s2" });
+    const card = within(dialog).getByRole("button", { name: "Abrir Clube do Livro, em chamada" });
+    expect(card.querySelector(".server-card-call")).not.toBeNull();
+  });
+
   it("opens a server and closes", async () => {
     const user = userEvent.setup();
     const { dialog, onOpen, onClose } = open();

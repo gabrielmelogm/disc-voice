@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Download, LogIn, Plus, Search, X } from "lucide-react";
+import { Download, Headphones, LogIn, Plus, Search, X } from "lucide-react";
 import type { Server } from "@disc-voice/shared";
 import { api } from "../lib/api";
-import { ServerAvatar } from "./AppBar";
 import { normalize } from "./Members";
-import { Badge, unreadLabel } from "./ui";
+import { Avatar, Badge, unreadLabel } from "./ui";
 
 /** Avatar colors, in turn down the list ("EN" purple, "CL" green, "DB" yellow, "JS" red…). */
 const TONES = ["brand", "green", "yellow", "red"] as const;
@@ -156,7 +155,10 @@ export function ServersDialog({ servers, currentId, callServerId, unread = {}, o
               <button type="button" className={`server-card ${here ? "current" : ""}`} aria-current={here ? "true" : undefined}
                 aria-label={`Abrir ${server.name}${details ? `, ${details}` : ""}`} onClick={pick(() => onOpen(server))}>
                 <span className="server-card-top">
-                  <span className={`server-card-avatar tone-${tones[server.id]}`}><ServerAvatar server={server} inCall={calling} /></span>
+                  <span className={`server-card-avatar tone-${tones[server.id]}`}>
+                    <Avatar name={server.name} src={server.icon} size="sm" />
+                    {calling && <span className="server-card-call" aria-hidden="true"><Headphones size={10} strokeWidth={3} /></span>}
+                  </span>
                   {here ? <span className="here-tag">Você está aqui</span> : <Badge count={unreadCount} />}
                 </span>
                 <strong className="server-card-name">{server.name}</strong>
