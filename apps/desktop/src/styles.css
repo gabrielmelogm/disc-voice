@@ -1009,6 +1009,9 @@ button.cloud-thumb { cursor: zoom-in; }
 .settings-tabs button:hover { color: var(--ink); }
 .settings-section { display: flex; flex-direction: column; gap: 12px; }
 .settings-section textarea { resize: vertical; }
+.server-icon-field { display: flex; align-items: center; gap: 16px; }
+.server-icon-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.server-icon-actions .field-help { flex-basis: 100%; }
 .server-danger { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; padding: 16px; border-radius: var(--radius-lg); background: var(--danger-soft); }
 .server-danger h3 { color: var(--danger-text); }
 .server-danger > .button { align-self: flex-start; }

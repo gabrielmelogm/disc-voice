@@ -10,6 +10,33 @@ use std::collections::HashSet;
 pub(crate) struct ServerInput {
     name: Option<String>,
     description: Option<String>,
+    /// Id of an image sent with `POST /files` as the icon, or null to remove it.
+    #[serde(default, deserialize_with = "crate::profile::present")]
+    icon: Option<Option<Uuid>>,
+}
+
+/// The user's image that becomes the icon. It leaves their gallery and space,
+/// so deleting it there can't break the icon.
+async fn icon_file(
+    tx: &sea_orm::DatabaseTransaction,
+    owner: Uuid,
+    id: Uuid,
+) -> ApiResult<crate::entities::file::Model> {
+    use crate::entities::file;
+    let file = file::Entity::find_by_id(id)
+        .filter(file::Column::OwnerId.eq(owner))
+        .one(tx)
+        .await?
+        .ok_or_else(|| ApiError::bad("O ícone não existe mais. Envie-o de novo."))?;
+    if !files::is_image(&file.content_type) {
+        return Err(ApiError::bad(
+            "O ícone deve ser uma imagem (PNG, JPG, GIF ou WebP).",
+        ));
+    }
+    let mut active: file::ActiveModel = file.clone().into();
+    active.owner_id = Set(None);
+    active.update(tx).await?;
+    Ok(file)
 }
 
 fn description(value: &str) -> ApiResult<String> {
@@ -30,7 +57,7 @@ async fn member_ids(db: &DatabaseConnection, server: Uuid) -> ApiResult<HashSet<
         .collect())
 }
 
-/// Changes the server's name or description; every member sees it.
+/// Changes the server's name, description or icon; every member sees it.
 pub(crate) async fn update(
     State(state): State<AppState>,
     Extension(user): Extension<UserView>,
@@ -45,7 +72,26 @@ pub(crate) async fn update(
     if let Some(value) = input.description {
         active.description = Set(description(&value)?);
     }
-    let view = ServerView::from(active.update(&state.db).await?);
+    let tx = state.db.begin().await?;
+    let mut replaced = None;
+    if let Some(icon) = input.icon {
+        let url = match icon {
+            Some(file) => {
+                let file = icon_file(&tx, user.id, file).await?;
+                Some(files::url(file.id, &file.name))
+            }
+            None => None,
+        };
+        if url != server.icon_url {
+            replaced = server.icon_url.as_deref().and_then(files::stored_id);
+            active.icon_url = Set(url);
+        }
+    }
+    let view = ServerView::from(active.update(&tx).await?);
+    tx.commit().await?;
+    if let Some(old) = replaced {
+        files::discard(&state, old).await;
+    }
     state.realtime.publish_users(
         &member_ids(&state.db, id).await?,
         serde_json::json!({ "type": "server.updated", "server": view }),
@@ -77,6 +123,9 @@ pub(crate) async fn remove(
         serde_json::json!({ "type": "server.deleted", "serverId": id, "serverName": server.name }),
     );
     state.realtime.remove_from_server(id, None);
+    if let Some(icon) = server.icon_url.as_deref().and_then(files::stored_id) {
+        files::discard(&state, icon).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

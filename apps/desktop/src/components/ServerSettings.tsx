@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ImagePlus, Plus, Search, Trash2, X } from "lucide-react";
 import type { Ban, Role, Server, ServerMember } from "@disc-voice/shared";
 import { api, message, type RoleChanges } from "../lib/api";
+import { fileProblem, isImage, uploadFile } from "../lib/files";
 import {
   can, canChange, colorHex, hasBit, outranksRole, parseColor, PERMISSION_OPTIONS, ROLE_COLORS, toggleBit, type Access,
 } from "../lib/roles";
@@ -58,24 +59,67 @@ export function ServerSettings({ server, members, onClose }: {
   </dialog>;
 }
 
+/** A new icon being sent (`id` once it is up), or null to remove the current one. */
+type IconChange = { preview: string; progress: number; id?: string } | null;
+
 function Overview({ server, access }: { server: Server; access: Access }) {
   const editable = can(access, "manageServer");
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description ?? "");
+  // undefined: the icon stays as it is.
+  const [icon, setIcon] = useState<IconChange | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const changed = name.trim() !== server.name || description.trim() !== (server.description ?? "");
+  const picker = useRef<HTMLInputElement>(null);
+  const upload = useRef<AbortController | null>(null);
+  const uploading = !!icon && !icon.id;
+  const changed = name.trim() !== server.name || description.trim() !== (server.description ?? "") || icon !== undefined;
+  const shownIcon = icon === undefined ? server.icon : icon?.preview ?? null;
+
+  useEffect(() => () => upload.current?.abort(), []);
+  // Frees the preview once it is replaced, removed or saved.
+  const preview = icon?.preview;
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  function pickIcon(file: File | undefined) {
+    if (!file) return;
+    const problem = fileProblem(file) ?? (isImage(file.type) ? null : "O ícone deve ser uma imagem (PNG, JPG, GIF ou WebP).");
+    setSaved(false);
+    if (problem) { setError(problem); return; }
+    setError("");
+    upload.current?.abort();
+    const controller = new AbortController();
+    upload.current = controller;
+    const url = URL.createObjectURL(file);
+    const update = (changes: Partial<NonNullable<IconChange>>) => setIcon(current => current?.preview === url ? { ...current, ...changes } : current);
+    setIcon({ preview: url, progress: 0 });
+    uploadFile(file, progress => update({ progress }), controller.signal)
+      .then(uploaded => update({ id: uploaded.id, progress: 1 }))
+      .catch(cause => {
+        if (controller.signal.aborted) return;
+        setIcon(current => current?.preview === url ? undefined : current);
+        setError(message(cause));
+      });
+  }
+
+  function removeIcon() {
+    upload.current?.abort();
+    setIcon(server.icon ? null : undefined);
+    setSaved(false);
+  }
 
   async function save() {
     setBusy(true);
     setError("");
     setSaved(false);
-    // Everyone (the user included) gets the new name over the realtime connection.
-    try { await api.updateServer(server.id, { name: name.trim(), description: description.trim() }); setSaved(true); }
+    const changes: { name: string; description: string; icon?: string | null } = { name: name.trim(), description: description.trim() };
+    if (icon !== undefined) changes.icon = icon?.id ?? null;
+    // Everyone (the user included) gets the new name and icon over the realtime connection.
+    try { await api.updateServer(server.id, changes); setIcon(undefined); setSaved(true); }
     catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
@@ -90,6 +134,18 @@ function Overview({ server, access }: { server: Server; access: Access }) {
 
   return <div className="settings-section">
     {editable && <form onSubmit={event => { event.preventDefault(); void save(); }}>
+      <div className="field"><span className="field-label" id="server-icon-label">Ícone do servidor</span>
+        <div className="server-icon-field" role="group" aria-labelledby="server-icon-label">
+          <Avatar name={name.trim() || server.name} src={shownIcon} size="xl" square />
+          <div className="server-icon-actions">
+            <input ref={picker} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" aria-label="Arquivo do ícone"
+              onChange={event => { pickIcon(event.target.files?.[0]); event.target.value = ""; }} />
+            <button type="button" className="button secondary small" disabled={busy} onClick={() => picker.current?.click()}><ImagePlus size={16} />Alterar ícone</button>
+            {shownIcon && <button type="button" className="button danger-soft small" disabled={busy} onClick={removeIcon}><Trash2 size={16} />Remover ícone</button>}
+            <small className="field-help" role="status">{uploading ? `Enviando… ${Math.round((icon?.progress ?? 0) * 100)}%` : "PNG, JPG, GIF ou WebP, até 15 MB."}</small>
+          </div>
+        </div>
+      </div>
       <div className="field"><label htmlFor="server-name">Nome do servidor</label>
         <input id="server-name" required maxLength={100} value={name} disabled={busy} onChange={event => { setName(event.target.value); setSaved(false); }} /></div>
       <div className="field"><label htmlFor="server-description">Descrição</label>
@@ -97,7 +153,7 @@ function Overview({ server, access }: { server: Server; access: Access }) {
           onChange={event => { setDescription(event.target.value); setSaved(false); }} /></div>
       <div className="dialog-actions">
         {saved && <span className="muted" role="status">Alterações salvas.</span>}
-        <button type="submit" className="button primary" disabled={busy || !changed || !name.trim()}>{busy ? "Salvando…" : "Salvar alterações"}</button>
+        <button type="submit" className="button primary" disabled={busy || uploading || !changed || !name.trim()}>{busy ? "Salvando…" : "Salvar alterações"}</button>
       </div>
     </form>}
     {error && <p className="inline-error" role="alert">{error}</p>}
