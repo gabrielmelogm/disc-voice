@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o envia ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
+description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o AppImage do Linux e envia o instalador ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
 argument-hint: "[alpha|beta|stable]"
 ---
 
@@ -18,12 +18,13 @@ versão já está em `main` sem release (`pendingOnMain`) e vai direto para a fa
 O que roda no GitHub em cada passo:
 
 - **Merge da PR de versão** (push em `main` com commit `release(`): só os **testes** de
-  `api.yml`, `website.yml` e `windows.yml`. O deploy da API e a imagem do site são pulados.
+  `api.yml`, `website.yml` e `desktop.yml`. O deploy da API e a imagem do site são pulados.
   Por isso o título da PR (que vira a mensagem do squash) precisa começar com `release(`.
-- **Release publicada** (pela skill ou à mão na aba Releases): o job `release` de
-  `windows.yml` roda os testes de novo e depois:
-  - gera o instalador e o anexa à release como `DiscVoice_<versão>_x64-setup.exe`, junto com
-    um `SHA256SUMS`;
+- **Release publicada** (pela skill ou à mão na aba Releases): `desktop.yml` roda os testes
+  de novo no Windows e no Linux, gera os dois pacotes (`build-windows`, `build-linux`) e o job
+  `publish`:
+  - anexa à release `DiscVoice_<versão>_x64-setup.exe` e `DiscVoice_<versão>_x86_64.AppImage`,
+    junto com um `SHA256SUMS` dos dois;
   - envia o instalador ao bucket em `releases/v<versão>/`;
   - atualiza `releases/latest/`, que o botão de download do site usa, quando a release é
     stable ou quando ainda não existe nenhuma stable (fase alpha), e nunca com uma versão mais
@@ -160,5 +161,5 @@ Depois, passe ao usuário o link da release e o run do workflow, sem ficar acomp
 build:
 
 ```powershell
-gh run list --workflow windows.yml --event release --limit 1
+gh run list --workflow desktop.yml --event release --limit 1
 ```
