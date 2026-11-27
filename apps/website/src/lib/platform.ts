@@ -31,11 +31,22 @@ export const PLATFORMS: Record<Platform, { name: string; detail: string; href: s
   },
   linux: {
     name: "Linux",
-    detail: "Versão alpha · pacotes .deb e .rpm",
+    detail: "AppImage, .deb ou .rpm · x86_64",
+    // The Linux button opens LINUX_PACKAGES instead of linking here.
     href: process.env.NEXT_PUBLIC_DOWNLOAD_LINUX || RELEASES,
     status: "alpha",
   },
 };
+
+/**
+ * The Linux packages, each redirecting to a signed link
+ * (src/app/download/linux/[format]/route.ts).
+ */
+export const LINUX_PACKAGES = [
+  { id: "appimage", label: "AppImage", ext: ".AppImage", hint: "Qualquer distro · sem instalação", href: "/download/linux/appimage" },
+  { id: "deb", label: "Debian / Ubuntu", ext: ".deb", hint: "Ubuntu, Debian, Mint, Pop!_OS", href: "/download/linux/deb" },
+  { id: "rpm", label: "Fedora / RHEL", ext: ".rpm", hint: "Fedora, RHEL, openSUSE", href: "/download/linux/rpm" },
+] as const;
 
 export const isAvailable = (platform: Platform) => PLATFORMS[platform].status !== "soon";
 

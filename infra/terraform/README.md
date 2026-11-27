@@ -41,12 +41,13 @@ Guarde `accessKeyId` e `secretAccessKey` nos secrets `FILES_ACCESS_KEY_ID` e `FI
 
 ## Releases
 
-Ao publicar uma release no GitHub, `.github/workflows/desktop.yml` gera o instalador do Windows (e o AppImage do Linux), anexa os arquivos à release e envia uma cópia do instalador para o mesmo bucket, na pasta `releases/`:
+Ao publicar uma release no GitHub, `.github/workflows/desktop.yml` gera o instalador do Windows e os pacotes do Linux (AppImage, `.deb` e `.rpm`), anexa os arquivos à release e envia uma cópia de cada um para o mesmo bucket, na pasta `releases/`, sempre com estes nomes:
 
-- `releases/<tag>/DiscVoice-Setup.exe`: cópia de cada versão.
-- `releases/latest/DiscVoice-Setup.exe`: última release que não é pré-release.
+- `DiscVoice-Setup.exe`, `DiscVoice_x86_64.AppImage`, `DiscVoice_amd64.deb` e `DiscVoice_x86_64.rpm`
+- em `releases/<tag>/`: cópia de cada versão;
+- em `releases/latest/`: a release stable mais nova (ou a pré-release mais nova, enquanto não existe nenhuma stable).
 
-O bucket continua privado. O botão de download do site aponta para `/download/windows` (`apps/website/src/app/download/windows/route.ts`), que redireciona para um link assinado de `releases/latest/DiscVoice-Setup.exe` válido por 5 minutos. O site precisa das variáveis de ambiente `RELEASES_ACCESS_KEY_ID` e `RELEASES_SECRET_ACCESS_KEY` (no Vercel, ou no `.env` do compose). Sem elas, o botão leva para a página de releases do GitHub. Use uma chave de acesso própria do bucket para o site (o Lightsail permite duas por bucket), para revogá-la sem afetar a API:
+O bucket continua privado. Os botões de download do site apontam para `/download/windows` e `/download/linux/{appimage,deb,rpm}` (`apps/website/src/lib/releases.ts`), que redirecionam para um link assinado do arquivo em `releases/latest/`, válido por 5 minutos. O site precisa das variáveis de ambiente `RELEASES_ACCESS_KEY_ID` e `RELEASES_SECRET_ACCESS_KEY` (no Vercel, ou no `.env` do compose). Sem elas, ou se o arquivo ainda não estiver no bucket, o botão leva para a página de releases do GitHub. Use uma chave de acesso própria do bucket para o site (o Lightsail permite duas por bucket), para revogá-la sem afetar a API:
 
 ```powershell
 aws lightsail create-bucket-access-key --bucket-name disc-voice-files-481116707314 --region sa-east-1

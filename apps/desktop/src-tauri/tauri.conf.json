@@ -37,7 +37,25 @@
     "shortDescription": "Seu espaço para amigos e comunidades",
     "category": "SocialNetworking",
     "linux": {
-      "appimage": { "bundleMediaFramework": true }
+      "appimage": { "bundleMediaFramework": true },
+      "deb": {
+        "depends": [
+          "libpulse0",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-pipewire",
+          "libayatana-appindicator3-1"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "pulseaudio-libs",
+          "gstreamer1-plugins-base",
+          "gstreamer1-plugins-good",
+          "pipewire-gstreamer",
+          "libayatana-appindicator-gtk3"
+        ]
+      }
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
