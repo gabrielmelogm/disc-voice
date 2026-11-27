@@ -59,6 +59,7 @@ pub mod server {
         pub created_at: DateTimeUtc,
         /// Imported from Discord; otherwise initials are shown.
         pub icon_url: Option<String>,
+        pub description: String,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -68,6 +69,7 @@ pub mod server {
 pub mod member {
     use sea_orm::entity::prelude::*;
 
+    /// The owner is `servers.owner_id`; roles are in `member_roles`.
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "members")]
     pub struct Model {
@@ -76,8 +78,66 @@ pub mod member {
         #[sea_orm(primary_key, auto_increment = false)]
         pub user_id: Uuid,
         pub joined_at: DateTimeUtc,
-        /// `member` or `moderator`; the owner is `servers.owner_id`.
-        pub role: String,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod role {
+    use sea_orm::entity::prelude::*;
+
+    /// A server role. The one whose id is the server's is @everyone.
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "roles")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub server_id: Uuid,
+        pub name: String,
+        /// `0xRRGGBB`, or none for the default name color.
+        pub color: Option<i32>,
+        /// Higher is above in the hierarchy; @everyone is 0.
+        pub position: i32,
+        pub permissions: i64,
+        pub created_at: DateTimeUtc,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod member_role {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "member_roles")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub server_id: Uuid,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: Uuid,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub role_id: Uuid,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod ban {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "bans")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub server_id: Uuid,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: Uuid,
+        pub banned_by: Option<Uuid>,
+        pub reason: String,
+        pub created_at: DateTimeUtc,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

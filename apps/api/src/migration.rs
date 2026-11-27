@@ -21,7 +21,95 @@ impl MigratorTrait for Migrator {
             Box::new(GifProfiles),
             Box::new(UserFiles),
             Box::new(ReactionsAndEdits),
+            Box::new(RolesAndBans),
         ]
+    }
+}
+
+struct RolesAndBans;
+
+impl MigrationName for RolesAndBans {
+    fn name(&self) -> &str {
+        "m20261203_000016_roles_and_bans"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for RolesAndBans {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Permission bits (see `roles::Permission`): 2 manage channels,
+        // 8 create invite, 16 manage messages, 32 mention everyone, 64 ban.
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE servers ADD COLUMN description varchar(1024) NOT NULL DEFAULT '';
+            -- Roles of a server; the one whose id is the server's is
+            -- @everyone, which every member has (position 0).
+            CREATE TABLE roles (
+                id uuid PRIMARY KEY,
+                server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                name varchar(100) NOT NULL CHECK (length(trim(name)) > 0),
+                color integer CHECK (color BETWEEN 0 AND 16777215),
+                position integer NOT NULL CHECK (position >= 0),
+                permissions bigint NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX roles_server ON roles(server_id, position);
+            CREATE TABLE member_roles (
+                server_id uuid NOT NULL,
+                user_id uuid NOT NULL,
+                role_id uuid NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                PRIMARY KEY (server_id, user_id, role_id),
+                FOREIGN KEY (server_id, user_id)
+                    REFERENCES members(server_id, user_id) ON DELETE CASCADE
+            );
+            CREATE INDEX member_roles_role ON member_roles(role_id);
+            CREATE TABLE bans (
+                server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                banned_by uuid REFERENCES users(id) ON DELETE SET NULL,
+                reason varchar(512) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (server_id, user_id)
+            );
+            -- @everyone keeps what any member could do: create channels and
+            -- share the invite.
+            INSERT INTO roles (id, server_id, name, position, permissions)
+                SELECT id, id, '@everyone', 0, 10 FROM servers;
+            -- Moderators become a "Moderador" role with what they could do,
+            -- plus deleting messages and banning.
+            INSERT INTO roles (id, server_id, name, color, position, permissions)
+                SELECT gen_random_uuid(), server_id, 'Moderador', 3066993, 1, 112
+                FROM members WHERE role = 'moderator' GROUP BY server_id;
+            INSERT INTO member_roles (server_id, user_id, role_id)
+                SELECT m.server_id, m.user_id, r.id FROM members m
+                JOIN roles r ON r.server_id = m.server_id AND r.name = 'Moderador'
+                WHERE m.role = 'moderator';
+            ALTER TABLE members DROP COLUMN role;
+            "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+            ALTER TABLE members ADD COLUMN role varchar(16) NOT NULL DEFAULT 'member'
+                CHECK (role IN ('member', 'moderator'));
+            UPDATE members m SET role = 'moderator' FROM member_roles mr
+                JOIN roles r ON r.id = mr.role_id
+                WHERE mr.server_id = m.server_id AND mr.user_id = m.user_id
+                  AND r.permissions & 16 <> 0;
+            DROP TABLE bans, member_roles, roles;
+            ALTER TABLE servers DROP COLUMN description;
+            "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

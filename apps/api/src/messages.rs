@@ -534,18 +534,14 @@ async fn check_mentions(
         let Some(server) = channel.server_id else {
             return Err(ApiError::bad("@everyone só pode ser usado em servidores."));
         };
-        let owner = server::Entity::find_by_id(server)
-            .one(db)
+        let server = crate::roles::find_server(db, server).await?;
+        if !crate::roles::access(db, &server, author)
             .await?
-            .is_some_and(|s| s.owner_id == author);
-        let moderator = member::Entity::find_by_id((server, author))
-            .one(db)
-            .await?
-            .is_some_and(|m| m.role == "moderator");
-        if !owner && !moderator {
+            .has(crate::roles::Permission::MentionEveryone)
+        {
             return Err(ApiError(
                 StatusCode::FORBIDDEN,
-                "Só o dono e os moderadores podem mencionar @everyone.".into(),
+                "Você não tem permissão para mencionar @everyone.".into(),
             ));
         }
     }
@@ -645,13 +641,31 @@ pub(crate) async fn edit(
     Ok(Json(view))
 }
 
-/// The author deletes the message, with its reactions, for everyone.
+/// The author, or in a server whoever can manage messages, deletes the
+/// message, with its reactions, for everyone.
 pub(crate) async fn remove(
     State(state): State<AppState>,
     Extension(user): Extension<UserView>,
     Path((channel, id)): Path<(Uuid, i64)>,
 ) -> ApiResult<StatusCode> {
-    let (channel, message) = own_message(&state, &user, channel, id).await?;
+    let (channel, message) = find_message(&state, &user, channel, id).await?;
+    if message.author_id != Some(user.id) {
+        let moderates = match channel.server_id {
+            Some(server) => {
+                let server = crate::roles::find_server(&state.db, server).await?;
+                crate::roles::access(&state.db, &server, user.id)
+                    .await?
+                    .has(crate::roles::Permission::ManageMessages)
+            }
+            None => false,
+        };
+        if !moderates {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Você só pode excluir as suas próprias mensagens.".into(),
+            ));
+        }
+    }
     message::Entity::delete_by_id(message.id)
         .exec(&state.db)
         .await?;
