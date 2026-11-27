@@ -249,10 +249,10 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
   </li>;
 }
 
-/** `realtime`, `revision`, `self` and `roles` feed the room chat, as in a text channel. */
-export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, roles, pip = false }: {
+/** `realtime`, `revision`, `self`, `roles` and `members` feed the room chat, as in a text channel. */
+export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, roles, members, pip = false }: {
   channel: Channel; voice: Voice; state: VoiceState; participants: VoiceParticipant[]; online: boolean;
-  realtime: Realtime; revision: number; self?: User; roles?: Record<string, MemberRole>;
+  realtime: Realtime; revision: number; self?: User; roles?: Record<string, MemberRole>; members?: User[];
   /** The window floats one screen in picture-in-picture meanwhile. */
   pip?: boolean;
 }) {
@@ -319,7 +319,7 @@ export function VoiceChannel({ channel, voice, state, participants, online, real
     {/* Only the panel closes: the call goes on. */}
     {chatOpen && <aside className="room-chat" aria-label="Chat da chamada">
       <header><h2>Chat da sala</h2><button className="icon-button" aria-label="Fechar chat da sala" onClick={() => setChatOpen(false)}><X size={18} /></button></header>
-      <TextChannel key={channel.id} channel={channel} realtime={realtime} revision={revision} self={self} roles={roles} room />
+      <TextChannel key={channel.id} channel={channel} realtime={realtime} revision={revision} self={self} roles={roles} members={members} room />
     </aside>}
   </div>;
 }

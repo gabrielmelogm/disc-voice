@@ -167,6 +167,27 @@ pub mod message {
         pub discord_id: Option<String>,
         pub discord_author: Option<Json>,
         pub attachments: Json,
+        /// When the author last changed the text.
+        pub edited_at: Option<DateTimeUtc>,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod reaction {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "message_reactions")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub message_id: i64,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub emoji: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: Uuid,
+        pub created_at: DateTimeUtc,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

@@ -1,12 +1,15 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import type { Channel, ChatMessage, CloudFile, GifChoice, MemberRole, User } from "@disc-voice/shared";
+import type { Channel, ChatMessage, CloudFile, GifChoice, MemberRole, MessagePage, Reaction, User } from "@disc-voice/shared";
 import { FileText, History, MessageSquareText, Plus, SendHorizontal, Smile, Upload, X } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import { fileProblem, MAX_FILES_PER_MESSAGE, uploadFile } from "../lib/files";
 import type { Realtime } from "../lib/realtime";
+import { encodeMentions, mentionMatches, mentionQuery, mentionText } from "../lib/mentions";
+import { EmojiPicker } from "./EmojiPicker";
 import { GifImage, GifPicker } from "./GifPicker";
+import { applyReaction, DeleteMessageDialog, MentionSuggestions, MessageToolbar, Reactions } from "./MessageActions";
 import { Attachments, fileSize, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
 import { RoleBadge } from "./Members";
 import { ProfileButton } from "./ProfileCard";
@@ -18,6 +21,27 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
   const unique = new Map(current.map(item => [item.id, item]));
   incoming.forEach(item => unique.set(item.id, item));
   return [...unique.values()].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
+}
+
+/**
+ * After a reconnect, the newest page as it is now: edits and reactions missed
+ * while offline apply, and deleted messages leave. Older pages stay as loaded.
+ */
+export function refreshMessages(current: ChatMessage[], page: MessagePage, newest: string) {
+  const from = page.hasMore && page.messages[0] ? BigInt(page.messages[0].id) : -1n;
+  const to = BigInt(newest);
+  const fresh = new Set(page.messages.map(item => item.id));
+  return mergeMessages(current.filter(item => {
+    const id = BigInt(item.id);
+    return id < from || id > to || fresh.has(item.id);
+  }), page.messages);
+}
+
+/** Inserts text at the field's caret (or over its selection). */
+function insertAt(field: HTMLTextAreaElement | null, value: string, text: string) {
+  const start = field?.selectionStart ?? value.length;
+  const end = field?.selectionEnd ?? value.length;
+  return { value: value.slice(0, start) + text + value.slice(end), caret: start + text.length };
 }
 
 interface Pending { clientId: string; content: string; gif?: GifChoice; files?: CloudFile[]; error: string; sending: boolean }
@@ -61,11 +85,15 @@ function focused() {
  * focused and the list scrolled to the bottom).
  * `peer`: the other person, when the channel is a direct conversation.
  * `roles`: server roles by user id, shown as a badge next to the author.
+ * `members`: people of the server, offered when typing `@` (in a direct
+ * conversation, the other person).
  * `room`: the chat of a voice room, in the narrow panel next to the call.
  */
-export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles, room = false }: {
+export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles, members = [], room = false }: {
   channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string;
-  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>; room?: boolean;
+  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>;
+  /** People of the server, who can be mentioned with `@`. */
+  members?: User[]; room?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -114,6 +142,117 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const [viewing, setViewing] = useState<Media | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
   const closeGifs = useCallback(() => setGifOpen(false), []);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const closeEmoji = useCallback(() => setEmojiOpen(false), []);
+  /** The message whose emoji picker is open, to react with. */
+  const [reacting, setReacting] = useState<{ id: string; up: boolean } | null>(null);
+  const closeReacting = useCallback(() => setReacting(null), []);
+  /** Opens the reaction picker, upwards for messages low in the list so it stays visible. */
+  function openReactions(id: string) {
+    const box = list.current?.getBoundingClientRect();
+    const row = list.current?.querySelector(`[data-message-id="${id}"]`)?.getBoundingClientRect();
+    setReacting({ id, up: !!box && !!row && row.top - box.top > box.height / 2 });
+  }
+  const [editing, setEditing] = useState<{ id: string; text: string; saving: boolean; error: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ message: ChatMessage; busy: boolean; error: string } | null>(null);
+  /** A reaction that could not be saved. */
+  const [notice, setNotice] = useState("");
+  /** The `@` being typed in the composer, and the highlighted suggestion. */
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  /** Where the composer's caret goes once the inserted text is rendered. */
+  const caretAfter = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (caretAfter.current === null) return;
+    const position = caretAfter.current;
+    caretAfter.current = null;
+    textarea.current?.focus();
+    textarea.current?.setSelectionRange(position, position);
+  }, [content]);
+
+  function setReactions(messageId: string, reactions: Reaction[]) {
+    setMessages(current => current.map(item => item.id === messageId ? { ...item, reactions } : item));
+  }
+
+  // Everyone the chat may name: mentions, reactions and the composer's `@`.
+  const people = new Map<string, User>();
+  [...members, ...(peer ? [peer] : []), ...(self ? [self] : [])].forEach(person => people.set(person.id, person));
+  messages.forEach(item => {
+    if (!people.has(item.author.id)) people.set(item.author.id, item.author);
+    item.mentions?.forEach(person => { if (!people.has(person.id)) people.set(person.id, person); });
+  });
+  const names = Object.fromEntries([...people.values()].map(person => [person.id, person.name]));
+  // Members (or the other person) can be mentioned; one's own name stays out of the list.
+  const mentionable = (members.length ? members : peer ? [peer] : []).filter(person => person.id !== self?.id);
+  const suggestions = mention ? mentionMatches(mentionable, mention.query) : [];
+  const activeSuggestion = Math.min(mentionIndex, Math.max(0, suggestions.length - 1));
+
+  async function toggleReaction(item: ChatMessage, emoji: string, add: boolean) {
+    if (!self) return;
+    setNotice("");
+    setMessages(current => current.map(m => m.id === item.id ? { ...m, reactions: applyReaction(m.reactions, emoji, self.id, add) } : m));
+    try { setReactions(item.id, await api.react(channel.id, item.id, emoji, add)); }
+    catch (cause) {
+      setMessages(current => current.map(m => m.id === item.id ? { ...m, reactions: applyReaction(m.reactions, emoji, self.id, !add) } : m));
+      setNotice(message(cause));
+    }
+  }
+
+  function startEditing(item: ChatMessage) {
+    setEditing({ id: item.id, text: mentionText(item.content, item.mentions), saving: false, error: "" });
+  }
+
+  async function saveEdit(item: ChatMessage) {
+    if (!editing || editing.saving) return;
+    const content = encodeMentions(editing.text.trim(), [...people.values()]);
+    if (content === item.content) { setEditing(null); return; }
+    setEditing({ ...editing, saving: true, error: "" });
+    try {
+      const saved = await api.editMessage(channel.id, item.id, content);
+      setMessages(current => current.map(m => m.id === saved.id ? saved : m));
+      setEditing(null);
+      textarea.current?.focus();
+    } catch (cause) {
+      setEditing(current => current && { ...current, saving: false, error: message(cause) });
+    }
+  }
+
+  async function deleteMessage(item: ChatMessage) {
+    setDeleting({ message: item, busy: true, error: "" });
+    try {
+      await api.deleteMessage(channel.id, item.id);
+      setMessages(current => current.filter(m => m.id !== item.id));
+      setDeleting(null);
+    } catch (cause) {
+      setDeleting({ message: item, busy: false, error: message(cause) });
+    }
+  }
+
+  /** Puts `@Name ` where the `@` being typed was. */
+  function pickMention(person: User) {
+    if (!mention) return;
+    const field = textarea.current;
+    const caret = field?.selectionStart ?? content.length;
+    const text = `@${person.name} `;
+    setContent(content.slice(0, mention.start) + text + content.slice(caret));
+    setMention(null);
+    caretAfter.current = mention.start + text.length;
+  }
+
+  function insertEmoji(emoji: string) {
+    const field = textarea.current;
+    const { value, caret } = insertAt(field, content, emoji);
+    caretAfter.current = caret;
+    setContent(value);
+  }
+
+  /** Follows the caret to offer people while an `@` is being typed. */
+  function trackMention(field: HTMLTextAreaElement) {
+    const found = field.selectionStart === field.selectionEnd ? mentionQuery(field.value, field.selectionStart) : null;
+    if (found?.query !== mention?.query) setMentionIndex(0);
+    setMention(current => current?.start === found?.start && current?.query === found?.query ? current : found);
+  }
   const textarea = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -194,6 +333,15 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       setRetry(n => n + 1);
     }
     if (event.type === "message.created" && event.message.channelId === channel.id) accept([event.message]);
+    if (event.type === "message.updated" && event.message.channelId === channel.id) {
+      const updated = event.message;
+      setMessages(current => current.map(item => item.id === updated.id ? updated : item));
+    }
+    if (event.type === "message.deleted" && event.channelId === channel.id) {
+      setMessages(current => current.filter(item => item.id !== event.messageId));
+      setEditing(current => current?.id === event.messageId ? null : current);
+    }
+    if (event.type === "message.reactions" && event.channelId === channel.id) setReactions(event.messageId, event.reactions);
     // Existing messages show the author's current name.
     if (event.type === "user.updated") {
       setMessages(current => current.some(item => item.author.id === event.user.id)
@@ -226,6 +374,13 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
           cursor.current = page.messages.at(-1)?.id || cursor.current;
           more = page.hasMore;
         }
+      }
+      if (!initial && cursor.current !== "0") {
+        // Edits, reactions and deletions only arrive live: catch up on the ones missed.
+        const newest = cursor.current!;
+        const page = await api.messages(channel.id, { before: (BigInt(newest) + 1n).toString() }, controller.signal);
+        if (controller.signal.aborted) return;
+        setMessages(current => refreshMessages(current, page, newest));
       }
     })().catch(cause => { if (!controller.signal.aborted) setError(message(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -289,9 +444,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     event.preventDefault();
     if (!canSend) return;
     const files = drafts.flatMap(d => d.uploaded ? [d.uploaded] : []);
-    const item: Pending = { clientId: crypto.randomUUID(), content: content.trim(), ...(files.length ? { files } : {}), sending: true, error: "" };
+    const item: Pending = { clientId: crypto.randomUUID(), content: encodeMentions(content.trim(), [...people.values()]), ...(files.length ? { files } : {}), sending: true, error: "" };
     setPending(current => [...current, item]);
     setContent("");
+    setMention(null);
     drafts.forEach(d => { if (d.preview) { URL.revokeObjectURL(d.preview); previews.current.delete(d.preview); } });
     setDrafts([]);
     setFileError("");
@@ -311,8 +467,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     textarea.current?.focus();
   }
 
-  function type(value: string) {
+  function type(field: HTMLTextAreaElement) {
+    const value = field.value;
     setContent(value);
+    trackMention(field);
     const now = Date.now();
     if (!value.trim() || now - lastTyping.current < TYPING_INTERVAL) return;
     lastTyping.current = now;
@@ -325,14 +483,44 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const importing = imported && !!channel.readOnly;
   const typingText = typingLabel(typing);
   const typingIndicator = typingText && <span className="typing-indicator"><span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>{typingText}</span>;
+  const pasteFiles = (event: ClipboardEvent) => {
+    const files = clipboardFiles(event.clipboardData);
+    if (files.length) { event.preventDefault(); addFiles(files); }
+  };
+  const lastOwn = [...messages].reverse().find(item => item.author.id === self?.id && !item.discordId);
   const enterToSend = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.nativeEvent.isComposing) return;
+    if (suggestions.length) {
+      const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+      if (move) { event.preventDefault(); setMentionIndex((activeSuggestion + move + suggestions.length) % suggestions.length); return; }
+      if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickMention(suggestions[activeSuggestion]); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
+    }
+    // Like Discord: ↑ in an empty composer edits the last message the user sent.
+    if (event.key === "ArrowUp" && !content && lastOwn) { event.preventDefault(); startEditing(lastOwn); return; }
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault(); event.currentTarget.form?.requestSubmit();
     }
   };
+  const composerFieldProps = {
+    onChange: (event: { target: HTMLTextAreaElement }) => type(event.target),
+    onSelect: (event: { currentTarget: HTMLTextAreaElement }) => trackMention(event.currentTarget),
+    onBlur: () => setMention(null),
+    onKeyDown: enterToSend,
+    onPaste: pasteFiles,
+    "aria-autocomplete": "list" as const,
+    "aria-controls": suggestions.length ? "mention-suggestions" : undefined,
+    "aria-activedescendant": suggestions.length ? `mention-${suggestions[activeSuggestion].id}` : undefined,
+  };
+  const mentionList = suggestions.length > 0 && <MentionSuggestions people={suggestions} active={activeSuggestion}
+    onPick={pickMention} onHover={setMentionIndex} />;
+  const emojiButton = <button type="button" className={`icon-button ${room ? "attach-button" : ""} ${emojiOpen ? "active" : ""}`} aria-label="Inserir emoji" title="Emojis"
+    aria-haspopup="dialog" aria-expanded={emojiOpen} onPointerDown={event => { if (emojiOpen) event.stopPropagation(); }}
+    onClick={() => { setGifOpen(false); setEmojiOpen(open => !open); }}><Smile size={18} /></button>;
+  const emojiPicker = emojiOpen && <EmojiPicker className={room ? "narrow" : ""} label="Inserir emoji" onPick={insertEmoji} onClose={closeEmoji} />;
   const gifButton = <button type="button" className={`icon-button gif-button ${gifOpen ? "active" : ""}`} aria-label="Enviar um GIF" title="GIFs"
     aria-haspopup="dialog" aria-expanded={gifOpen} onPointerDown={event => { if (gifOpen) event.stopPropagation(); }}
-    onClick={() => setGifOpen(open => !open)}>GIF</button>;
+    onClick={() => { setEmojiOpen(false); setGifOpen(open => !open); }}>GIF</button>;
   const gifPicker = gifOpen && <GifPicker className={room ? "narrow" : ""} label="Enviar um GIF" onPick={sendGif} onClose={closeGifs} />;
   const attachButton = <button type="button" className={`icon-button ${room ? "attach-button" : ""}`} aria-label="Anexar arquivos" title="Anexar arquivos (até 15 MB cada)"
     disabled={drafts.length >= MAX_FILES_PER_MESSAGE} onClick={() => picker.current?.click()}><Plus size={18} /></button>;
@@ -373,14 +561,11 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       addFiles(Array.from(event.dataTransfer.files));
     },
   } : {};
-  const pasteFiles = (event: ClipboardEvent) => {
-    const files = clipboardFiles(event.clipboardData);
-    if (files.length) { event.preventDefault(); addFiles(files); }
-  };
   attachFromClipboard.current = canAttach ? addFiles : null;
   return <section className={`text-chat ${room ? "room" : ""}`} aria-label={room ? `Mensagens da sala ${channel.name}` : peer ? `Conversa com ${peer.name}` : `Chat de texto ${channel.name}`} {...dragProps}>
     {dragging && <div className="drop-overlay" aria-hidden="true"><Upload size={32} /><strong>Solte para anexar</strong><span>Até {MAX_FILES_PER_MESSAGE} arquivos de 15 MB cada</span></div>}
     {error && <div className="chat-error" role="alert">{error} <button className="link-button" onClick={() => setRetry(n => n + 1)}>Tentar novamente</button></div>}
+    {notice && <div className="chat-error" role="alert">{notice} <button className="link-button" onClick={() => setNotice("")}>Fechar</button></div>}
     <div ref={list} className="message-list" role="log" aria-label="Mensagens" aria-live="polite" onScroll={() => {
       const element = list.current!;
       pinBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
@@ -399,16 +584,42 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         const newDay = !previous || new Date(previous.createdAt).toDateString() !== new Date(item.createdAt).toDateString();
         const grouped = !!previous && !newDay && previous.author.id === item.author.id
           && new Date(item.createdAt).getTime() - new Date(previous.createdAt).getTime() < GROUP_WINDOW;
+        const mentionsMe = !!self && !!item.mentions?.some(person => person.id === self.id);
+        const own = !!self && item.author.id === self.id && !item.discordId;
+        const isEditing = editing?.id === item.id;
         return <Fragment key={item.id}>
           {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
-          <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""}`}>
+          <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""} ${mentionsMe ? "mentions-me" : ""} ${isEditing ? "is-editing" : ""}`}>
             {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} /></ProfileButton>}
             <div className="message-body">
               {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><RoleBadge role={roles?.[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
-              {item.content ? <MessageText text={item.content} /> : !item.attachments?.length && <p className="muted"><em>Mensagem sem texto</em></p>}
+              {isEditing && editing ? <form className="message-edit" onSubmit={event => { event.preventDefault(); void saveEdit(item); }}>
+                <label className="sr-only" htmlFor={`edit-${item.id}`}>Editar mensagem</label>
+                <textarea id={`edit-${item.id}`} autoFocus maxLength={4000} rows={Math.min(8, editing.text.split("\n").length)} value={editing.text} disabled={editing.saving}
+                  onFocus={event => { const end = event.currentTarget.value.length; event.currentTarget.setSelectionRange(end, end); }}
+                  onChange={event => setEditing({ ...editing, text: event.target.value })}
+                  onKeyDown={event => {
+                    if (event.nativeEvent.isComposing) return;
+                    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); textarea.current?.focus(); }
+                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+                  }} />
+                {editing.error && <p className="message-error" role="alert">{editing.error}</p>}
+                <p className="message-edit-hint">Esc para <button type="button" className="link-button" onClick={() => setEditing(null)}>cancelar</button> · Enter para <button type="submit" className="link-button" disabled={editing.saving}>{editing.saving ? "salvando…" : "salvar"}</button></p>
+              </form>
+              : item.content ? <MessageText text={item.content} mentions={item.mentions} selfId={self?.id}
+                suffix={item.editedAt && <> <span className="edited-tag" title={`Editada em ${new Date(item.editedAt).toLocaleString("pt-BR")}`}>(editado)</span></>} />
+              : !item.attachments?.length && <p className="muted"><em>Mensagem sem texto</em></p>}
               {item.content && imageLinks(item.content).map(url => <ImageThumb key={url} url={url} name={url.split("/").pop() || "imagem"} onView={setViewing} />)}
               {!!item.attachments?.length && <Attachments files={item.attachments} onView={setViewing} />}
+              {!!item.reactions?.length && <Reactions reactions={item.reactions} names={names} selfId={self?.id}
+                onToggle={(emoji, add) => void toggleReaction(item, emoji, add)} onAdd={() => openReactions(item.id)} />}
             </div>
+            {self && !isEditing && <MessageToolbar own={own}
+              onReact={emoji => void toggleReaction(item, emoji, !item.reactions?.some(r => r.emoji === emoji && r.users.includes(self.id)))}
+              onPicker={() => openReactions(item.id)} onEdit={() => startEditing(item)}
+              onDelete={immediately => immediately ? void deleteMessage(item) : setDeleting({ message: item, busy: false, error: "" })} />}
+            {reacting?.id === item.id && <EmojiPicker className={`reaction-picker ${reacting.up ? "up" : ""}`} label="Reagir à mensagem" onClose={closeReacting}
+              onPick={emoji => { setReacting(null); if (!item.reactions?.some(r => r.emoji === emoji && r.users.includes(self?.id || ""))) void toggleReaction(item, emoji, true); }} />}
           </article>
         </Fragment>;
       })}
@@ -416,7 +627,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         <Avatar name={self?.name || "Você"} src={self?.avatar} still={self?.avatarStill} />
         <div className="message-body">
           <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div>
-          {item.content && <MessageText text={item.content} />}
+          {item.content && <MessageText text={mentionText(item.content, [...people.values()])} />}
           {item.gif && <figure className="message-gif"><GifImage url={item.gif.url} still={item.gif.still} alt={item.gif.title || "GIF"} /></figure>}
           {item.files && <ul className="pending-files">{item.files.map(file => <li key={file.id}><FileText size={14} aria-hidden="true" />{file.name}</li>)}</ul>}
           {item.error && <div className="message-error" role="alert">{item.error} <button className="link-button" onClick={() => void send(item)}>Reenviar</button></div>}
@@ -424,8 +635,12 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       </article>)}
     </div>
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
+    {deleting && <DeleteMessageDialog message={deleting.message} busy={deleting.busy} error={deleting.error}
+      onConfirm={() => void deleteMessage(deleting.message)} onClose={() => setDeleting(null)} />}
     {room ? <form className="composer room-composer" onSubmit={submit}>
       {gifPicker}
+      {emojiPicker}
+      {mentionList}
       {fileInput}
       {draftList}
       {/* Who is typing shows above the field, which stays a single line. */}
@@ -434,22 +649,24 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       <div className="room-input">
         {attachButton}
         <textarea ref={textarea} id="room-message" placeholder={`Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-          onChange={event => type(event.target.value)} onKeyDown={enterToSend} onPaste={pasteFiles} />
+          {...composerFieldProps} />
+        {emojiButton}
         {gifButton}
       </div>
       <button className="sr-only" type="submit" disabled={!canSend}>Enviar mensagem</button>
     </form>
     : importing ? <p className="composer read-only-notice" role="note"><History size={16} aria-hidden="true" />Importando o histórico do Discord. Você poderá enviar mensagens aqui quando a importação terminar.</p> : <form className="composer" onSubmit={submit}>
       {gifPicker}
+      {emojiPicker}
+      {mentionList}
       {fileInput}
       {draftList}
       <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
       <textarea ref={textarea} id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}
-        onChange={event => type(event.target.value)} onKeyDown={enterToSend} onPaste={pasteFiles} />
+        {...composerFieldProps} />
       <div className="composer-actions">
         {attachButton}
-        {/* Emoji is designed but not implemented yet. */}
-        <button type="button" className="icon-button" disabled aria-label="Inserir emoji (em breve)" title="Emojis em breve"><Smile size={18} /></button>
+        {emojiButton}
         {gifButton}
         {/* Who is typing takes the hint's place, so the composer never jumps. */}
         <span className="composer-hint" aria-live="polite">{typingIndicator || (uploading ? "Aguardando o envio dos arquivos…" : "Enter para enviar · Shift+Enter para nova linha")}</span>

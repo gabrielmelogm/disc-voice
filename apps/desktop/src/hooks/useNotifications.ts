@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Channel, ChosenStatus, RealtimeEvent, User } from "@disc-voice/shared";
+import { mentionText } from "../lib/mentions";
 import type { Realtime } from "../lib/realtime";
 import type { VoiceState } from "../lib/voice";
 import { notificationPrefs, playNotificationSound, playVoiceConnectSound, showDesktopNotification } from "../lib/notifications";
@@ -58,7 +59,7 @@ export function useNotifications({ realtime, user, status, voiceState, viewingCh
       if (!background && message.channelId === viewingChannelId) return;
       if (prefs.messageSounds) playNotificationSound();
       if (background && prefs.desktop) {
-        void showDesktopNotification(messageTitle(event, channels), preview(message.content), message.author.name);
+        void showDesktopNotification(messageTitle(event, channels), preview(mentionText(message.content, message.mentions)), message.author.name);
       }
       return;
     }

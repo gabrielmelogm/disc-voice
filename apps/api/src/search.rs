@@ -49,6 +49,9 @@ struct MessageHit {
     author: UserView,
     content: String,
     created_at: chrono::DateTime<Utc>,
+    /// People mentioned as `<@id>` in the text.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<UserView>,
 }
 
 #[derive(Serialize)]
@@ -169,6 +172,7 @@ pub(crate) async fn search(
         &state.db,
         rows.iter()
             .map(|m| (m.author_id, m.discord_author.as_ref())),
+        rows.iter().flat_map(|m| messages::mentioned(&m.content)),
     )
     .await?;
     let messages = rows
@@ -176,6 +180,7 @@ pub(crate) async fn search(
         .filter_map(|m| {
             Some(MessageHit {
                 author: authors.get(m.author_id, m.discord_author.as_ref())?,
+                mentions: authors.mentions(&m.content),
                 id: m.id.to_string(),
                 channel_id: m.channel_id,
                 channel_name: m.channel_name,

@@ -1,7 +1,7 @@
 import type {
   Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
   FileGallery, GifChoice, GifPage, GoogleConfig, GoogleLogin, Invite,
-  Friends, MemberRole, MessagePage, ProfileUpdate, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
+  Friends, MemberRole, MessagePage, ProfileUpdate, Reaction, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
 
 const TOKEN_KEY = "discvoice.session";
@@ -67,7 +67,7 @@ export function parseInvite(value: string): string {
 }
 
 async function request<T>(path: string, options: {
-  method?: "POST" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal; public?: boolean;
+  method?: "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal; public?: boolean;
 } = {}): Promise<T> {
   const token = options.public ? null : sessionToken.get();
   let response: Response;
@@ -128,6 +128,15 @@ export const api = {
       method: "POST",
       body: { clientId, content, ...(gif ? { gif } : {}), ...(files?.length ? { files } : {}) },
     }),
+  /** The author changes the text (mentions as `<@id>`). */
+  editMessage: (channelId: string, messageId: string, content: string) =>
+    request<ChatMessage>(`/channels/${channelId}/messages/${messageId}`, { method: "PATCH", body: { content } }),
+  /** The author deletes the message for everyone. */
+  deleteMessage: (channelId: string, messageId: string) =>
+    request<void>(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" }),
+  /** Adds or removes the user's reaction; returns the message's reactions. */
+  react: (channelId: string, messageId: string, emoji: string, add: boolean) =>
+    request<Reaction[]>(`/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`, { method: add ? "PUT" : "DELETE" }),
   /** The files the user sent and the space they take. */
   files: (signal?: AbortSignal) => request<FileGallery>("/files", { signal }),
   /** Deletes one of the user's files, freeing its space. */

@@ -4155,3 +4155,219 @@ async fn file_uploads_quota_gallery_and_deletion() {
     assert_eq!(attachments[0]["filename"], "foto de férias.png");
     assert!(attachments[1].get("deleted").is_none());
 }
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn reactions_mentions_edits_and_deletes() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
+        vec![],
+    );
+    let tag = Uuid::new_v4().simple().to_string()[..10].to_owned();
+    let (owner, owner_id) = register(&app, "Ana").await;
+    let (guest, guest_id) = register(&app, "Levi").await;
+    let (_outsider, outsider_id) = register(&app, "Fora").await;
+    let created = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&owner),
+        Some(json!({ "name": format!("Reações {tag}") })),
+    )
+    .await
+    .1;
+    let server_id = created["server"]["id"].as_str().unwrap().to_owned();
+    let code = created["code"].as_str().unwrap();
+    call(
+        &app,
+        "POST",
+        &format!("/invites/{code}/join"),
+        Some(&guest),
+        None,
+    )
+    .await;
+    let text = call(
+        &app,
+        "POST",
+        &format!("/servers/{server_id}/channels"),
+        Some(&owner),
+        Some(json!({ "name": "geral" })),
+    )
+    .await
+    .1;
+    let channel = text["id"].as_str().unwrap().to_owned();
+    let messages = format!("/channels/{channel}/messages");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut guest_ws, _) = socket(&url, &guest).await;
+    emit(
+        &mut guest_ws,
+        json!({ "type": "server.watch", "serverId": server_id }),
+    )
+    .await;
+    event(&mut guest_ws, "server.snapshot").await;
+
+    // Mentions resolve to the people's names; only members can be mentioned.
+    let send = |token: &str, content: String| {
+        let (app, token, messages) = (app.clone(), token.to_owned(), messages.clone());
+        async move {
+            call(
+                &app,
+                "POST",
+                &messages,
+                Some(&token),
+                Some(json!({ "clientId": Uuid::new_v4(), "content": content })),
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        send(&owner, format!("<@{outsider_id}> oi")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, sent) = send(&owner, format!("<@{guest_id}> revisa o PR?")).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["mentions"][0]["id"], guest_id);
+    assert_eq!(sent["mentions"][0]["name"], "Levi");
+    assert!(sent.get("editedAt").is_none() && sent.get("reactions").is_none());
+    let id = sent["id"].as_str().unwrap().to_owned();
+    let message = format!("{messages}/{id}");
+
+    // Reactions: per emoji, with who reacted; everyone watching sees them live.
+    let fire = format!("{message}/reactions/{}", urlencode("🔥"));
+    let eyes = format!("{message}/reactions/{}", urlencode("👀"));
+    let (status, reactions) = call(&app, "PUT", &fire, Some(&guest), None).await;
+    assert_eq!(status, StatusCode::OK, "{reactions}");
+    let live_event = event(&mut guest_ws, "message.reactions").await;
+    assert_eq!(live_event["messageId"], id);
+    assert_eq!(live_event["reactions"], reactions);
+    // Reacting twice with the same emoji counts once.
+    call(&app, "PUT", &fire, Some(&guest), None).await;
+    call(&app, "PUT", &fire, Some(&owner), None).await;
+    let reactions = call(&app, "PUT", &eyes, Some(&owner), None).await.1;
+    assert_eq!(
+        reactions,
+        json!([
+            { "emoji": "🔥", "count": 2, "users": [guest_id, owner_id] },
+            { "emoji": "👀", "count": 1, "users": [owner_id] },
+        ])
+    );
+    let reactions = call(&app, "DELETE", &fire, Some(&guest), None).await.1;
+    assert_eq!(reactions[0]["users"], json!([owner_id]));
+    for invalid in ["ok", "%20", "a%F0%9F%94%A5"] {
+        assert_eq!(
+            call(
+                &app,
+                "PUT",
+                &format!("{message}/reactions/{invalid}"),
+                Some(&guest),
+                None
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST,
+            "{invalid}"
+        );
+    }
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("{messages}/999999999/reactions/{}", urlencode("🔥")),
+            Some(&guest),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Only the author edits; the history shows the change and the reactions.
+    let edit = |token: &str, content: &str| {
+        let (app, token, message) = (app.clone(), token.to_owned(), message.clone());
+        let body = json!({ "content": content });
+        async move { call(&app, "PATCH", &message, Some(&token), Some(body)).await }
+    };
+    assert_eq!(edit(&guest, "não é minha").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(edit(&owner, "   ").await.0, StatusCode::BAD_REQUEST);
+    let (status, edited) = edit(&owner, "Revisa o PR do convite?").await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert!(edited["editedAt"].is_string());
+    assert!(edited.get("mentions").is_none());
+    let updated = event(&mut guest_ws, "message.updated").await;
+    assert_eq!(updated["message"]["content"], "Revisa o PR do convite?");
+    let page = call(&app, "GET", &messages, Some(&guest), None).await.1;
+    let listed = &page["messages"][0];
+    assert_eq!(listed["content"], "Revisa o PR do convite?");
+    assert_eq!(listed["editedAt"], edited["editedAt"]);
+    assert_eq!(listed["reactions"][0]["emoji"], "🔥");
+
+    // Only the author deletes; it disappears for everyone, reactions too.
+    assert_eq!(
+        call(&app, "DELETE", &message, Some(&guest), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "DELETE", &message, Some(&owner), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let deleted = event(&mut guest_ws, "message.deleted").await;
+    assert_eq!(
+        (&deleted["channelId"], &deleted["messageId"]),
+        (&json!(channel), &json!(id))
+    );
+    let page = call(&app, "GET", &messages, Some(&guest), None).await.1;
+    assert_eq!(page["messages"], json!([]));
+    assert_eq!(
+        call(&app, "PUT", &fire, Some(&owner), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // In a direct conversation, only its two people can be mentioned.
+    let dm = call(
+        &app,
+        "POST",
+        "/dms",
+        Some(&owner),
+        Some(json!({ "userId": guest_id })),
+    )
+    .await
+    .1;
+    let dm_messages = format!(
+        "/channels/{}/messages",
+        dm["channel"]["id"].as_str().unwrap()
+    );
+    let in_dm = |content: String| {
+        let (app, owner, path) = (app.clone(), owner.clone(), dm_messages.clone());
+        async move {
+            call(
+                &app,
+                "POST",
+                &path,
+                Some(&owner),
+                Some(json!({ "clientId": Uuid::new_v4(), "content": content })),
+            )
+            .await
+            .0
+        }
+    };
+    assert_eq!(in_dm(format!("<@{guest_id}> oi")).await, StatusCode::OK);
+    assert_eq!(
+        in_dm(format!("<@{outsider_id}> oi")).await,
+        StatusCode::BAD_REQUEST
+    );
+    live.abort();
+}

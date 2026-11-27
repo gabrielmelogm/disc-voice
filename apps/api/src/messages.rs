@@ -1,7 +1,7 @@
 use super::*;
 use axum::extract::Query;
-use entities::{discord_account, message};
-use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement};
+use entities::{discord_account, dm_channel, message, reaction};
+use sea_orm::{ConnectionTrait, DbBackend, PaginatorTrait, QuerySelect, Statement};
 use std::collections::HashMap;
 
 /// Author of an imported Discord message, stored with the message.
@@ -125,26 +125,140 @@ pub(crate) struct MessageView {
     author: UserView,
     content: String,
     created_at: chrono::DateTime<Utc>,
+    /// When the author last changed the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edited_at: Option<chrono::DateTime<Utc>>,
     /// Present on messages imported from Discord.
     #[serde(skip_serializing_if = "Option::is_none")]
     discord_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<Attachment>,
+    /// People mentioned as `<@id>` in the text, to show their names.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<UserView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reactions: Vec<ReactionView>,
 }
 
-impl MessageView {
-    fn new(m: message::Model, author: UserView) -> Self {
-        Self {
+/// An emoji on a message and who reacted with it, in the order of the first
+/// reaction.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReactionView {
+    emoji: String,
+    count: usize,
+    users: Vec<Uuid>,
+}
+
+/// Most distinct emoji on one message.
+const MAX_REACTIONS: usize = 20;
+/// Most people one message can mention.
+const MAX_MENTIONS: usize = 20;
+
+/// People mentioned as `<@user-id>` in a message, without repeats.
+pub(crate) fn mentioned(content: &str) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find("<@") {
+        rest = &rest[start + 2..];
+        let id = rest
+            .get(..36)
+            .filter(|_| rest[36..].starts_with('>'))
+            .and_then(|id| Uuid::parse_str(id).ok());
+        if let Some(id) = id {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
+/// Reactions of these messages, grouped by emoji.
+async fn reactions_of(
+    db: &DatabaseConnection,
+    ids: Vec<i64>,
+) -> ApiResult<HashMap<i64, Vec<ReactionView>>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = reaction::Entity::find()
+        .filter(reaction::Column::MessageId.is_in(ids))
+        .order_by_asc(reaction::Column::CreatedAt)
+        .order_by_asc(reaction::Column::UserId)
+        .all(db)
+        .await?;
+    Ok(group_reactions(rows))
+}
+
+fn group_reactions(rows: Vec<reaction::Model>) -> HashMap<i64, Vec<ReactionView>> {
+    let mut grouped: HashMap<i64, Vec<ReactionView>> = HashMap::new();
+    for row in rows {
+        let list = grouped.entry(row.message_id).or_default();
+        match list.iter_mut().find(|r| r.emoji == row.emoji) {
+            Some(existing) => {
+                existing.users.push(row.user_id);
+                existing.count += 1;
+            }
+            None => list.push(ReactionView {
+                emoji: row.emoji,
+                count: 1,
+                users: vec![row.user_id],
+            }),
+        }
+    }
+    grouped
+}
+
+/// Everything needed to show a page of messages: authors, mentioned people
+/// and reactions.
+pub(crate) struct Views {
+    authors: Authors,
+    reactions: HashMap<i64, Vec<ReactionView>>,
+}
+
+impl Views {
+    pub(crate) async fn load(db: &DatabaseConnection, rows: &[message::Model]) -> ApiResult<Self> {
+        let authors = Authors::load(
+            db,
+            rows.iter()
+                .map(|m| (m.author_id, m.discord_author.as_ref())),
+            rows.iter().flat_map(|m| mentioned(&m.content)),
+        )
+        .await?;
+        let reactions = reactions_of(db, rows.iter().map(|m| m.id).collect()).await?;
+        Ok(Self { authors, reactions })
+    }
+
+    /// None when the author no longer exists.
+    pub(crate) fn view(&mut self, m: message::Model) -> Option<MessageView> {
+        let author = self.authors.get(m.author_id, m.discord_author.as_ref())?;
+        let mentions = self.authors.mentions(&m.content);
+        let reactions = self.reactions.remove(&m.id).unwrap_or_default();
+        Some(MessageView {
             id: m.id.to_string(),
             channel_id: m.channel_id,
             client_id: m.client_id,
             author,
             content: m.content,
             created_at: m.created_at,
+            edited_at: m.edited_at,
             discord_id: m.discord_id,
             attachments: serde_json::from_value(m.attachments).unwrap_or_default(),
-        }
+            mentions,
+            reactions,
+        })
     }
+}
+
+/// One message as everyone sees it.
+async fn view_one(db: &DatabaseConnection, m: message::Model) -> ApiResult<MessageView> {
+    let rows = [m];
+    let mut views = Views::load(db, &rows).await?;
+    let [m] = rows;
+    views
+        .view(m)
+        .ok_or_else(|| ApiError::internal("mensagem sem autor"))
 }
 
 /// Authors of a page of messages. A Discord author whose account is linked
@@ -156,11 +270,13 @@ pub(crate) struct Authors {
 }
 
 impl Authors {
+    /// `rows` are the messages' authors; `mentioned`, people mentioned in them.
     pub(crate) async fn load<'a>(
         db: &DatabaseConnection,
         rows: impl Iterator<Item = (Option<Uuid>, Option<&'a serde_json::Value>)>,
+        mentioned: impl Iterator<Item = Uuid>,
     ) -> ApiResult<Self> {
-        let (mut ids, mut discord) = (Vec::new(), Vec::new());
+        let (mut ids, mut discord): (Vec<_>, Vec<_>) = (mentioned.collect(), Vec::new());
         for (user, author) in rows {
             ids.extend(user);
             if let Some(id) = author.and_then(|a| a["id"].as_str()) {
@@ -210,6 +326,14 @@ impl Authors {
                 .unwrap_or_else(|| author.view()),
         )
     }
+
+    /// The people a message mentions who still have an account.
+    pub(crate) fn mentions(&self, content: &str) -> Vec<UserView> {
+        mentioned(content)
+            .into_iter()
+            .filter_map(|id| self.users.get(&id).cloned())
+            .collect()
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -254,19 +378,8 @@ pub(crate) async fn list(
     if input.after.is_none() {
         rows.reverse();
     }
-    let authors = Authors::load(
-        &state.db,
-        rows.iter()
-            .map(|m| (m.author_id, m.discord_author.as_ref())),
-    )
-    .await?;
-    let messages = rows
-        .into_iter()
-        .filter_map(|m| {
-            let author = authors.get(m.author_id, m.discord_author.as_ref())?;
-            Some(MessageView::new(m, author))
-        })
-        .collect();
+    let mut views = Views::load(&state.db, &rows).await?;
+    let messages = rows.into_iter().filter_map(|m| views.view(m)).collect();
     Ok(Json(Page { messages, has_more }))
 }
 
@@ -312,14 +425,8 @@ pub(crate) async fn send(
     if let Some(gif) = input.gif {
         attachments.push(Attachment::gif(gif.validate()?));
     }
-    if (content.is_empty() && attachments.is_empty())
-        || content.chars().count() > 4000
-        || content.contains('\0')
-    {
-        return Err(ApiError::bad(
-            "A mensagem deve ter entre 1 e 4000 caracteres.",
-        ));
-    }
+    check_content(content, !attachments.is_empty())?;
+    check_mentions(&state.db, &channel, content).await?;
     let attachments = serde_json::to_value(&attachments).map_err(ApiError::internal)?;
     let tx = state.db.begin().await?;
     lock_channel(&tx, id).await?;
@@ -353,7 +460,7 @@ pub(crate) async fn send(
         .await?
     };
     tx.commit().await?;
-    let view = MessageView::new(row, user);
+    let view = view_one(&state.db, row).await?;
     match channel.server_id {
         // Every online member hears about it, whatever server they have open,
         // with the names a notification needs.
@@ -400,6 +507,214 @@ async fn publish_to_members(
     Ok(())
 }
 
+fn check_content(content: &str, attachments: bool) -> ApiResult<()> {
+    if (content.is_empty() && !attachments)
+        || content.chars().count() > 4000
+        || content.contains('\0')
+    {
+        return Err(ApiError::bad(
+            "A mensagem deve ter entre 1 e 4000 caracteres.",
+        ));
+    }
+    Ok(())
+}
+
+/// Only people who can read the channel can be mentioned in it.
+async fn check_mentions(
+    db: &DatabaseConnection,
+    channel: &channel::Model,
+    content: &str,
+) -> ApiResult<()> {
+    let ids = mentioned(content);
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let allowed = ids.len() <= MAX_MENTIONS
+        && match channel.server_id {
+            Some(server) => {
+                member::Entity::find()
+                    .filter(member::Column::ServerId.eq(server))
+                    .filter(member::Column::UserId.is_in(ids.clone()))
+                    .count(db)
+                    .await?
+                    == ids.len() as u64
+            }
+            None => dm_channel::Entity::find_by_id(channel.id)
+                .one(db)
+                .await?
+                .is_some_and(|dm| ids.iter().all(|id| [dm.user_a, dm.user_b].contains(id))),
+        };
+    if !allowed {
+        return Err(ApiError::bad(
+            "Só é possível mencionar até 20 pessoas que participam desta conversa.",
+        ));
+    }
+    Ok(())
+}
+
+/// A message of this channel, which the user can read.
+async fn find_message(
+    state: &AppState,
+    user: &UserView,
+    channel: Uuid,
+    id: i64,
+) -> ApiResult<(channel::Model, message::Model)> {
+    let channel = require_channel(&state.db, channel, user.id, MESSAGES).await?;
+    let message = message::Entity::find_by_id(id)
+        .filter(message::Column::ChannelId.eq(channel.id))
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Mensagem não encontrada.".into()))?;
+    Ok((channel, message))
+}
+
+/// A message the user wrote, to change or delete.
+async fn own_message(
+    state: &AppState,
+    user: &UserView,
+    channel: Uuid,
+    id: i64,
+) -> ApiResult<(channel::Model, message::Model)> {
+    let (channel, message) = find_message(state, user, channel, id).await?;
+    if message.author_id != Some(user.id) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Você só pode alterar as suas próprias mensagens.".into(),
+        ));
+    }
+    Ok((channel, message))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EditMessage {
+    content: String,
+}
+
+/// The author changes the text; files and GIFs stay.
+pub(crate) async fn edit(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserView>,
+    Path((channel, id)): Path<(Uuid, i64)>,
+    Json(input): Json<EditMessage>,
+) -> ApiResult<Json<MessageView>> {
+    let (channel, message) = own_message(&state, &user, channel, id).await?;
+    let content = input.content.trim();
+    let attachments = message
+        .attachments
+        .as_array()
+        .is_some_and(|a| !a.is_empty());
+    check_content(content, attachments)?;
+    if content == message.content {
+        return Ok(Json(view_one(&state.db, message).await?));
+    }
+    check_mentions(&state.db, &channel, content).await?;
+    let mut active: message::ActiveModel = message.into();
+    active.content = Set(content.into());
+    active.edited_at = Set(Some(Utc::now()));
+    let view = view_one(&state.db, active.update(&state.db).await?).await?;
+    dms::publish(
+        &state,
+        &channel,
+        serde_json::json!({ "type": "message.updated", "message": view }),
+    )
+    .await?;
+    Ok(Json(view))
+}
+
+/// The author deletes the message, with its reactions, for everyone.
+pub(crate) async fn remove(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserView>,
+    Path((channel, id)): Path<(Uuid, i64)>,
+) -> ApiResult<StatusCode> {
+    let (channel, message) = own_message(&state, &user, channel, id).await?;
+    message::Entity::delete_by_id(message.id)
+        .exec(&state.db)
+        .await?;
+    dms::publish(
+        &state,
+        &channel,
+        serde_json::json!({
+            "type": "message.deleted", "channelId": channel.id, "messageId": message.id.to_string()
+        }),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A single emoji, possibly made of several code points (skin tones, flags,
+/// keycaps, ZWJ sequences); never text.
+fn valid_emoji(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().count() <= 16
+        && !value.is_ascii()
+        && value.chars().all(|c| {
+            !c.is_whitespace()
+                && !c.is_control()
+                && (!c.is_ascii() || c.is_ascii_digit() || c == '#' || c == '*')
+        })
+}
+
+/// Adds (`PUT`) or removes (`DELETE`) the user's reaction.
+pub(crate) async fn react(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserView>,
+    method: axum::http::Method,
+    Path((channel, id, emoji)): Path<(Uuid, i64, String)>,
+) -> ApiResult<Json<Vec<ReactionView>>> {
+    if !valid_emoji(&emoji) {
+        return Err(ApiError::bad("Reaja com um emoji."));
+    }
+    let (channel, message) = find_message(&state, &user, channel, id).await?;
+    if method == axum::http::Method::PUT {
+        let current = reactions_of(&state.db, vec![message.id])
+            .await?
+            .remove(&message.id)
+            .unwrap_or_default();
+        if current.len() >= MAX_REACTIONS && !current.iter().any(|r| r.emoji == emoji) {
+            return Err(ApiError::bad(
+                "Esta mensagem já tem o máximo de 20 emojis diferentes.",
+            ));
+        }
+        reaction::Entity::insert(reaction::ActiveModel {
+            message_id: Set(message.id),
+            emoji: Set(emoji),
+            user_id: Set(user.id),
+            created_at: Set(Utc::now()),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                reaction::Column::MessageId,
+                reaction::Column::Emoji,
+                reaction::Column::UserId,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec_without_returning(&state.db)
+        .await?;
+    } else {
+        reaction::Entity::delete_by_id((message.id, emoji, user.id))
+            .exec(&state.db)
+            .await?;
+    }
+    let reactions = reactions_of(&state.db, vec![message.id])
+        .await?
+        .remove(&message.id)
+        .unwrap_or_default();
+    dms::publish(
+        &state,
+        &channel,
+        serde_json::json!({
+            "type": "message.reactions", "channelId": channel.id,
+            "messageId": message.id.to_string(), "reactions": reactions
+        }),
+    )
+    .await?;
+    Ok(Json(reactions))
+}
+
 /// Serializes commits within a channel: history cursors must never skip a
 /// lower sequence whose transaction was still open when the page was read.
 pub(crate) async fn lock_channel(tx: &impl ConnectionTrait, channel: Uuid) -> ApiResult<()> {
@@ -434,5 +749,47 @@ mod tests {
         assert_eq!(authors.get(None, Some(&json)).unwrap().id, view.id);
         // A local author that no longer exists is skipped.
         assert!(authors.get(Some(Uuid::new_v4()), None).is_none());
+    }
+
+    #[test]
+    fn finds_mentions() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let text = format!("<@{a}> e <@{b}>, de novo <@{a}>; <@123> <@{a} <@>");
+        assert_eq!(mentioned(&text), vec![a, b]);
+        assert!(mentioned("sem menções <@").is_empty());
+        assert!(mentioned(&format!("ç<@{a}")).is_empty());
+    }
+
+    #[test]
+    fn accepts_only_emoji() {
+        for ok in ["👍", "❤️", "👍🏽", "🇧🇷", "1️⃣", "👨‍👩‍👧"] {
+            assert!(valid_emoji(ok), "{ok}");
+        }
+        for bad in ["", "a", "ok👍", "👍 ", "\u{0}", "<@x>", &"😀".repeat(17)] {
+            assert!(!valid_emoji(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn groups_reactions_by_emoji_in_order() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let row = |message_id, emoji: &str, user_id| reaction::Model {
+            message_id,
+            emoji: emoji.into(),
+            user_id,
+            created_at: Utc::now(),
+        };
+        let grouped = group_reactions(vec![
+            row(1, "🔥", a),
+            row(1, "👀", a),
+            row(2, "🔥", b),
+            row(1, "🔥", b),
+        ]);
+        let first = &grouped[&1];
+        assert_eq!(first.len(), 2);
+        assert_eq!((first[0].emoji.as_str(), first[0].count), ("🔥", 2));
+        assert_eq!(first[0].users, vec![a, b]);
+        assert_eq!(first[1].emoji, "👀");
+        assert_eq!(grouped[&2][0].users, vec![b]);
     }
 }

@@ -3,6 +3,7 @@ import { LoaderCircle, MessageSquareText, Search, Volume2 } from "lucide-react";
 import type { ChannelHit, MessageHit, SearchResults, User } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
 import { messageTime } from "../lib/display";
+import { mentionText } from "../lib/mentions";
 import { Avatar } from "./ui";
 
 export type SearchPick =
@@ -126,9 +127,9 @@ export function SearchDialog({ onClose, onPick }: { onClose: () => void; onPick:
           <Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} size="sm" />
           <div>
             <small><strong>{item.author.name}</strong> em #{item.channelName} · {item.serverName} · {messageTime(item.createdAt)}</small>
-            <span className="result-snippet">{highlight(item.content, q)}</span>
+            <span className="result-snippet">{highlight(mentionText(item.content, item.mentions), q)}</span>
           </div>
-        </>, `Mensagem de ${item.author.name} em ${item.channelName}: ${item.content}`))}
+        </>, `Mensagem de ${item.author.name} em ${item.channelName}: ${mentionText(item.content, item.mentions)}`))}
       </div>}
       {results?.nextCursor && <button className="button secondary small search-more" disabled={more} onClick={() => void loadMore()}>{more ? "Carregando…" : "Mais mensagens"}</button>}
     </div>
