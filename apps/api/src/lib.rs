@@ -14,7 +14,9 @@ mod profile;
 mod reads;
 mod realtime;
 mod releases;
+mod roles;
 mod search;
+mod servers;
 pub mod storage;
 pub mod turn;
 
@@ -132,10 +134,27 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/auth/logout", post(logout))
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}/invite", get(server_invite))
+        .route(
+            "/servers/{id}",
+            axum::routing::patch(servers::update).delete(servers::remove),
+        )
         .route("/servers/{id}/members", get(members::list))
         .route(
-            "/servers/{id}/members/{user}",
-            axum::routing::patch(members::update),
+            "/servers/{id}/members/{user}/roles/{role}",
+            axum::routing::put(roles::assign).delete(roles::assign),
+        )
+        .route(
+            "/servers/{id}/roles",
+            get(roles::list).post(roles::create).put(roles::reorder),
+        )
+        .route(
+            "/servers/{id}/roles/{role}",
+            axum::routing::patch(roles::update).delete(roles::remove),
+        )
+        .route("/servers/{id}/bans", get(servers::bans))
+        .route(
+            "/servers/{id}/bans/{user}",
+            axum::routing::put(servers::ban).delete(servers::unban),
         )
         .route(
             "/servers/{id}/channels",
@@ -579,6 +598,7 @@ struct ServerView {
     owner_id: Uuid,
     /// Icon URL (servers imported from Discord), or null for initials.
     icon: Option<String>,
+    description: String,
 }
 impl From<server::Model> for ServerView {
     fn from(s: server::Model) -> Self {
@@ -587,6 +607,7 @@ impl From<server::Model> for ServerView {
             name: s.name,
             owner_id: s.owner_id,
             icon: s.icon_url,
+            description: s.description,
         }
     }
 }
@@ -694,14 +715,15 @@ async fn insert_server(
         owner_id: Set(owner),
         created_at: Set(Utc::now()),
         icon_url: Set(icon),
+        description: Set(String::new()),
     }
     .insert(&tx)
     .await?;
+    roles::create_everyone(&tx, server.id).await?;
     member::ActiveModel {
         server_id: Set(server.id),
         user_id: Set(owner),
         joined_at: Set(Utc::now()),
-        role: Set("member".into()),
     }
     .insert(&tx)
     .await?;
@@ -721,11 +743,8 @@ async fn server_invite(
     Extension(user): Extension<UserView>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<InviteView>> {
-    require_member(&state.db, id, user.id).await?;
-    let server = server::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(ApiError::missing)?;
+    let (server, _) =
+        roles::require(&state.db, id, user.id, roles::Permission::CreateInvite).await?;
     let invite = invite::Entity::find()
         .filter(invite::Column::ServerId.eq(id))
         .one(&state.db)
@@ -761,11 +780,16 @@ async fn join_invite(
     Path(code): Path<String>,
 ) -> ApiResult<Json<ServerView>> {
     let (_, server) = resolve_invite(&state, &code).await?;
+    if servers::banned(&state.db, server.id, user.id).await? {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Você foi banido deste servidor.".into(),
+        ));
+    }
     let member = member::ActiveModel {
         server_id: Set(server.id),
         user_id: Set(user.id),
         joined_at: Set(Utc::now()),
-        role: Set("member".into()),
     };
     let inserted = member::Entity::insert(member)
         .on_conflict(
@@ -781,7 +805,7 @@ async fn join_invite(
             .one(&state.db)
             .await?
         {
-            let view = members::view(&state, &server, &member, user.clone());
+            let view = members::view(&state, &server, &member, user.clone(), Vec::new());
             state.realtime.publish_server(
                 server.id,
                 serde_json::json!({ "type": "member.joined", "serverId": server.id, "member": view }),
@@ -848,7 +872,7 @@ async fn create_channel(
     Path(id): Path<Uuid>,
     Json(input): Json<ChannelInput>,
 ) -> ApiResult<(StatusCode, Json<ChannelView>)> {
-    require_member(&state.db, id, user.id).await?;
+    roles::require(&state.db, id, user.id, roles::Permission::ManageChannels).await?;
     let name = channel_name(&input.name)?;
     let channel = channel::ActiveModel {
         id: Set(Uuid::new_v4()),

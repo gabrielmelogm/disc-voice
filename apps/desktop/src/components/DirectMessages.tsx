@@ -5,6 +5,7 @@ import { api, message } from "../lib/api";
 import { mentionText } from "../lib/mentions";
 import type { Realtime } from "../lib/realtime";
 import { bannerColor } from "./ProfileCard";
+import { RoleBadges } from "./ServerRoles";
 import { TextChannel } from "./TextChannel";
 import { Avatar, Badge, unreadLabel } from "./ui";
 
@@ -145,7 +146,11 @@ export function DirectProfilePanel({ user, friendship, status, onAddFriend }: {
         <p>{new Date(profile.memberSince).toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" })}</p></div>}
       {profile && <div className="detail-card"><h3 className="eyebrow">Servidores em comum — {profile.mutualServers.length}</h3>
         {profile.mutualServers.length
-          ? <ul className="mutual-servers">{profile.mutualServers.map(server => <li key={server.id}><Avatar name={server.name} src={server.icon} size="xs" square />{server.name}</li>)}</ul>
+          ? <ul className="mutual-servers">{profile.mutualServers.map(server => <li key={server.id}>
+            <span className="mutual-server-name"><Avatar name={server.name} src={server.icon} size="xs" square />{server.name}</span>
+            {/* The person's roles in each shared server. */}
+            <RoleBadges badge={{ owner: !!server.owner, roles: server.roles ?? [] }} label={`Cargos de ${person.name} em ${server.name}`} />
+          </li>)}</ul>
           : <p className="muted">Nenhum servidor em comum.</p>}
       </div>}
       {error && <p className="inline-error" role="alert">{error}</p>}

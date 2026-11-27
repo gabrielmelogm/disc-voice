@@ -295,6 +295,34 @@ impl Hub {
         }
     }
 
+    /// Takes these people (everyone, when `users` is None) out of a server
+    /// they lost: they stop watching it and leave its voice rooms.
+    pub(crate) fn remove_from_server(&self, server: Uuid, users: Option<Uuid>) {
+        let mut clients = self.clients.lock().unwrap();
+        let mut left = Vec::new();
+        for (id, client) in clients
+            .iter_mut()
+            .filter(|(_, c)| users.is_none_or(|u| u == c.user.id))
+        {
+            if client.watching == Some(server) {
+                client.watching = None;
+            }
+            client
+                .typing
+                .retain(|_, scope| *scope != Scope::Server(server));
+            if client.voice.as_ref().is_some_and(|v| v.server == server) {
+                left.push((*id, client.voice.take().unwrap()));
+            }
+        }
+        for (id, voice) in left {
+            self.direct(
+                id,
+                json!({ "type": "voice.left", "channelId": voice.channel, "reason": "removed" }),
+            );
+            self.changed(&clients, &voice);
+        }
+    }
+
     pub(crate) fn revoke(&self, hash: &str) {
         let mut clients = self.clients.lock().unwrap();
         let ids: Vec<_> = clients

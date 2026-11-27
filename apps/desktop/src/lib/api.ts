@@ -1,8 +1,11 @@
 import type {
-  Activity, AuthSession, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
+  Activity, AuthSession, Ban, Channel, ChatMessage, DirectConversation, DiscordGuildImport, DiscordGuildOption, DiscordImport, DiscordServer, DiscordStatus,
   FileGallery, GifChoice, GifPage, GoogleConfig, GoogleLogin, Invite,
-  Friends, MemberRole, MessagePage, ProfileUpdate, Reaction, ReadState, SearchResults, Server, ServerMember, User, UserProfile,
+  Friends, MessagePage, ProfileUpdate, Reaction, ReadState, Role, SearchResults, Server, ServerMember, User, UserProfile,
 } from "@disc-voice/shared";
+
+/** Only the fields sent change; a null color goes back to the default. */
+export type RoleChanges = { name?: string; color?: number | null; permissions?: number };
 
 const TOKEN_KEY = "discvoice.session";
 const INVITE_KEY = "discvoice.invite";
@@ -114,10 +117,27 @@ export const api = {
   invite: (serverId: string) => request<Invite>(`/servers/${serverId}/invite`),
   previewInvite: (code: string) => request<Invite>(`/invites/${encodeURIComponent(code)}`),
   join: (code: string) => request<Server>(`/invites/${encodeURIComponent(code)}/join`, { method: "POST" }),
+  /** Changes the name or description (Gerenciar servidor). */
+  updateServer: (serverId: string, changes: { name?: string; description?: string }) =>
+    request<Server>(`/servers/${serverId}`, { method: "PATCH", body: changes }),
+  /** The owner deletes the server for everyone. */
+  deleteServer: (serverId: string) => request<void>(`/servers/${serverId}`, { method: "DELETE" }),
   members: (serverId: string, signal?: AbortSignal) => request<ServerMember[]>(`/servers/${serverId}/members`, { signal }),
-  /** Owner only: makes someone a moderator, or a member again. */
-  setRole: (serverId: string, userId: string, role: Exclude<MemberRole, "owner">) =>
-    request<ServerMember>(`/servers/${serverId}/members/${userId}`, { method: "PATCH", body: { role } }),
+  /** The server's roles, highest first; @everyone is last. */
+  roles: (serverId: string, signal?: AbortSignal) => request<Role[]>(`/servers/${serverId}/roles`, { signal }),
+  createRole: (serverId: string, role: RoleChanges = {}) => request<Role>(`/servers/${serverId}/roles`, { method: "POST", body: role }),
+  updateRole: (serverId: string, roleId: string, changes: RoleChanges) =>
+    request<Role>(`/servers/${serverId}/roles/${roleId}`, { method: "PATCH", body: changes }),
+  deleteRole: (serverId: string, roleId: string) => request<void>(`/servers/${serverId}/roles/${roleId}`, { method: "DELETE" }),
+  /** Every role but @everyone, highest first. */
+  reorderRoles: (serverId: string, ids: string[]) => request<Role[]>(`/servers/${serverId}/roles`, { method: "PUT", body: { ids } }),
+  /** Gives or takes away a member's role. */
+  assignRole: (serverId: string, userId: string, roleId: string, give: boolean) =>
+    request<ServerMember>(`/servers/${serverId}/members/${userId}/roles/${roleId}`, { method: give ? "PUT" : "DELETE" }),
+  bans: (serverId: string, signal?: AbortSignal) => request<Ban[]>(`/servers/${serverId}/bans`, { signal }),
+  ban: (serverId: string, userId: string, reason = "") =>
+    request<void>(`/servers/${serverId}/bans/${userId}`, { method: "PUT", body: { reason } }),
+  unban: (serverId: string, userId: string) => request<void>(`/servers/${serverId}/bans/${userId}`, { method: "DELETE" }),
   channels: (serverId: string, signal?: AbortSignal) => request<Channel[]>(`/servers/${serverId}/channels`, { signal }),
   createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
   messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>
@@ -131,7 +151,7 @@ export const api = {
   /** The author changes the text (mentions as `<@id>`). */
   editMessage: (channelId: string, messageId: string, content: string) =>
     request<ChatMessage>(`/channels/${channelId}/messages/${messageId}`, { method: "PATCH", body: { content } }),
-  /** The author deletes the message for everyone. */
+  /** The author, or someone with Gerenciar mensagens, deletes the message for everyone. */
   deleteMessage: (channelId: string, messageId: string) =>
     request<void>(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" }),
   /** Adds or removes the user's reaction; returns the message's reactions. */

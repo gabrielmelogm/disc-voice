@@ -3152,7 +3152,8 @@ async fn server_members_roles_and_presence() {
     let newcomer = event(&mut ana_ws, "member.joined").await;
     assert_eq!(newcomer["serverId"], server_id);
     assert_eq!(newcomer["member"]["user"]["id"], bia_id);
-    assert_eq!(newcomer["member"]["role"], "member");
+    assert_eq!(newcomer["member"]["owner"], false);
+    assert_eq!(newcomer["member"]["roles"], json!([]));
     assert_eq!(newcomer["member"]["status"], "offline");
 
     // Members only; everyone with their role and presence, by name.
@@ -3169,7 +3170,7 @@ async fn server_members_roles_and_presence() {
         .map(|m| {
             (
                 m["user"]["id"].clone(),
-                m["role"].clone(),
+                m["owner"].clone(),
                 m["status"].clone(),
             )
         })
@@ -3177,8 +3178,8 @@ async fn server_members_roles_and_presence() {
     assert_eq!(
         summary,
         vec![
-            (json!(ana_id), json!("owner"), json!("online")),
-            (json!(bia_id), json!("member"), json!("offline")),
+            (json!(ana_id), json!(true), json!("online")),
+            (json!(bia_id), json!(false), json!("offline")),
         ]
     );
     assert!(members[0]["joinedAt"].is_string());
@@ -3218,43 +3219,233 @@ async fn server_members_roles_and_presence() {
     .1;
     assert_eq!(profile["status"], "dnd");
 
-    // Only the owner changes roles, and never their own.
-    let role = |token: &str, user: &str, role: &str| {
-        let (app, token, path) = (
+    // Every server starts with @everyone, which keeps what members could do.
+    let roles_path = format!("/servers/{server_id}/roles");
+    let (status, roles) = call(&app, "GET", &roles_path, Some(&bia), None).await;
+    assert_eq!(status, StatusCode::OK, "{roles}");
+    assert_eq!(roles.as_array().unwrap().len(), 1);
+    assert_eq!(roles[0]["id"], server_id);
+    assert_eq!(roles[0]["everyone"], true);
+    assert_eq!(roles[0]["permissions"], 2 | 8);
+
+    // Only who manages roles creates them; the owner can do everything.
+    let body = json!({ "name": "Moderação", "color": 0x2ecc71, "permissions": 4 | 16 | 64 });
+    assert_eq!(
+        call(&app, "POST", &roles_path, Some(&bia), Some(body.clone()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, moderation) = call(&app, "POST", &roles_path, Some(&ana), Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{moderation}");
+    assert_eq!(moderation["position"], 1);
+    let moderation_id = moderation["id"].as_str().unwrap().to_owned();
+    let roles = event(&mut ana_ws, "roles.updated").await;
+    assert_eq!(roles["roles"][0]["name"], "Moderação");
+    let (status, helper) = call(
+        &app,
+        "POST",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "name": "Ajudante", "permissions": 16 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{helper}");
+    let helper_id = helper["id"].as_str().unwrap().to_owned();
+    // New roles go just above @everyone: Ajudante is 1, Moderação is 2.
+    let roles = call(&app, "GET", &roles_path, Some(&ana), None).await.1;
+    let order: Vec<_> = roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["name"].clone(), r["position"].clone()))
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            (json!("Moderação"), json!(2)),
+            (json!("Ajudante"), json!(1)),
+            (json!("@everyone"), json!(0)),
+        ]
+    );
+    // @everyone can't be renamed, deleted or assigned.
+    let everyone_path = format!("{roles_path}/{server_id}");
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &everyone_path,
+            Some(&ana),
+            Some(json!({ "name": "todos" }))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(&app, "DELETE", &everyone_path, Some(&ana), None)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Assigning a role shows it on the member, live.
+    let assign = |token: &str, method: &str, user: &str, role: &str| {
+        let (app, token, method, path) = (
             app.clone(),
             token.to_owned(),
-            format!("{members_path}/{user}"),
+            method.to_owned(),
+            format!("{members_path}/{user}/roles/{role}"),
         );
-        let body = json!({ "role": role });
-        async move { call(&app, "PATCH", &path, Some(&token), Some(body)).await }
+        async move { call(&app, &method, &path, Some(&token), None).await }
     };
     assert_eq!(
-        role(&bia, &bia_id, "moderator").await.0,
+        assign(&bia, "PUT", &bia_id, &moderation_id).await.0,
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        role(&ana, &ana_id, "member").await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        role(&ana, &bia_id, "owner").await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        role(&ana, &caio_id, "moderator").await.0,
+        assign(&ana, "PUT", &caio_id, &moderation_id).await.0,
         StatusCode::NOT_FOUND
     );
-    let (status, promoted) = role(&ana, &bia_id, "moderator").await;
+    assert_eq!(
+        assign(&ana, "PUT", &bia_id, &server_id).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, promoted) = assign(&ana, "PUT", &bia_id, &moderation_id).await;
     assert_eq!(status, StatusCode::OK, "{promoted}");
-    assert_eq!(promoted["role"], "moderator");
+    assert_eq!(promoted["roles"], json!([moderation_id]));
     assert_eq!(promoted["status"], "dnd");
     let updated = event(&mut ana_ws, "member.updated").await;
     assert_eq!(
-        (&updated["member"]["user"]["id"], &updated["member"]["role"]),
-        (&json!(bia_id), &json!("moderator"))
+        (
+            &updated["member"]["user"]["id"],
+            &updated["member"]["roles"]
+        ),
+        (&json!(bia_id), &json!([moderation_id]))
+    );
+    // Assigning twice changes nothing.
+    assert_eq!(
+        assign(&ana, "PUT", &bia_id, &moderation_id).await.1["roles"],
+        json!([moderation_id])
     );
     let members = call(&app, "GET", &members_path, Some(&ana), None).await.1;
-    assert_eq!(members[1]["role"], "moderator");
+    assert_eq!(members[1]["roles"], json!([moderation_id]));
+    // The profile shows the roles in the servers both people share.
+    let profile = call(
+        &app,
+        "GET",
+        &format!("/users/{bia_id}/profile"),
+        Some(&ana),
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(profile["mutualServers"][0]["owner"], false);
+    assert_eq!(profile["mutualServers"][0]["roles"][0]["name"], "Moderação");
+
+    // With Gerenciar cargos, Bia manages roles below her highest one only,
+    // and can't hand out permissions she lacks.
+    assert_eq!(
+        assign(&bia, "PUT", &bia_id, &helper_id).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &format!("{roles_path}/{moderation_id}"),
+            Some(&bia),
+            Some(json!({ "permissions": 4 | 16 | 64 | 1 }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &format!("{roles_path}/{helper_id}"),
+            Some(&bia),
+            Some(json!({ "permissions": 1 }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, renamed) = call(
+        &app,
+        "PATCH",
+        &format!("{roles_path}/{helper_id}"),
+        Some(&bia),
+        Some(json!({ "name": "Ajuda", "color": null, "permissions": 64 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(
+        (&renamed["name"], &renamed["permissions"]),
+        (&json!("Ajuda"), &json!(64))
+    );
+    // Reordering can't move roles at or above her highest one.
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &roles_path,
+            Some(&bia),
+            Some(json!({ "ids": [helper_id, moderation_id] }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &roles_path,
+            Some(&ana),
+            Some(json!({ "ids": [helper_id] }))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, reordered) = call(
+        &app,
+        "PUT",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "ids": [helper_id, moderation_id] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reordered}");
+    assert_eq!(reordered[0]["id"], helper_id);
+    // Now Ajuda is above Moderação: deleting it closes the gap.
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("{roles_path}/{helper_id}"),
+            Some(&ana),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let roles = call(&app, "GET", &roles_path, Some(&ana), None).await.1;
+    assert_eq!(roles.as_array().unwrap().len(), 2);
+    assert_eq!(
+        (&roles[0]["id"], &roles[0]["position"]),
+        (&json!(moderation_id), &json!(1))
+    );
+    let members = call(&app, "GET", &members_path, Some(&ana), None).await.1;
+    assert_eq!(members[1]["roles"], json!([moderation_id]));
+    assert_eq!(
+        assign(&ana, "DELETE", &bia_id, &moderation_id).await.1["roles"],
+        json!([])
+    );
 
     bia_ws.close(None).await.unwrap();
     assert_eq!(presence_of(&mut ana_ws, &bia_id).await, "offline");
@@ -4336,7 +4527,7 @@ async fn reactions_mentions_edits_and_deletes() {
         StatusCode::NOT_FOUND
     );
 
-    // Only the owner and moderators can mention everyone.
+    // Only who has Mencionar @everyone (the owner, here) can mention everyone.
     assert_eq!(
         send(&guest, "<@everyone> oi".into()).await.0,
         StatusCode::FORBIDDEN
@@ -4384,4 +4575,440 @@ async fn reactions_mentions_edits_and_deletes() {
         StatusCode::BAD_REQUEST
     );
     live.abort();
+}
+
+#[tokio::test]
+#[ignore = "Requires TEST_DATABASE_URL pointing to a PostgreSQL test database"]
+async fn moderation_bans_and_server_deletion() {
+    let db = Database::connect(std::env::var("TEST_DATABASE_URL").expect("Set TEST_DATABASE_URL"))
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let app = router(
+        AppState::new(
+            db.clone(),
+            "https://discvoice.example".into(),
+            fake_google().await,
+        ),
+        vec![],
+    );
+    let (ana, ana_id) = register(&app, "Ana").await;
+    let (bia, bia_id) = register(&app, "Bia").await;
+    let (caio, caio_id) = register(&app, "Caio").await;
+    let (dani, dani_id) = register(&app, "Dani").await;
+    let created = call(
+        &app,
+        "POST",
+        "/servers",
+        Some(&ana),
+        Some(json!({ "name": "Clube" })),
+    )
+    .await
+    .1;
+    let server_id = created["server"]["id"].as_str().unwrap().to_owned();
+    let code = created["code"].as_str().unwrap().to_owned();
+    for token in [&bia, &caio, &dani] {
+        let joined = call(
+            &app,
+            "POST",
+            &format!("/invites/{code}/join"),
+            Some(token),
+            None,
+        )
+        .await;
+        assert_eq!(joined.0, StatusCode::OK, "{}", joined.1);
+    }
+    let server_path = format!("/servers/{server_id}");
+    let roles_path = format!("{server_path}/roles");
+    let members_path = format!("{server_path}/members");
+    let bans_path = format!("{server_path}/bans");
+
+    // Bia moderates: she deletes messages and bans, below her role.
+    let moderation = call(
+        &app,
+        "POST",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "name": "Moderação", "permissions": 16 | 64 })),
+    )
+    .await
+    .1;
+    let moderation_id = moderation["id"].as_str().unwrap().to_owned();
+    for user in [&bia_id, &caio_id] {
+        let assigned = call(
+            &app,
+            "PUT",
+            &format!("{members_path}/{user}/roles/{moderation_id}"),
+            Some(&ana),
+            None,
+        )
+        .await;
+        assert_eq!(assigned.0, StatusCode::OK, "{}", assigned.1);
+    }
+    let senior = call(
+        &app,
+        "POST",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "name": "Sênior" })),
+    )
+    .await
+    .1;
+    let senior_id = senior["id"].as_str().unwrap().to_owned();
+    // Sênior is created below Moderação; move it above, and give it to Bia.
+    call(
+        &app,
+        "PUT",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "ids": [senior_id, moderation_id] })),
+    )
+    .await;
+    call(
+        &app,
+        "PUT",
+        &format!("{members_path}/{bia_id}/roles/{senior_id}"),
+        Some(&ana),
+        None,
+    )
+    .await;
+
+    // Only who manages the server edits it; every member hears about it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/api/realtime", listener.local_addr().unwrap());
+    let live_app = app.clone();
+    let live = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let (mut dani_ws, _) = socket(&url, &dani).await;
+    let (mut bia_ws, _) = socket(&url, &bia).await;
+    emit(
+        &mut bia_ws,
+        json!({ "type": "server.watch", "serverId": server_id }),
+    )
+    .await;
+    event(&mut bia_ws, "server.snapshot").await;
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &server_path,
+            Some(&bia),
+            Some(json!({ "name": "Outro" }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, edited) = call(
+        &app,
+        "PATCH",
+        &server_path,
+        Some(&ana),
+        Some(json!({ "name": "  Clube do Livro ", "description": "Leituras do mês" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(
+        (&edited["name"], &edited["description"]),
+        (&json!("Clube do Livro"), &json!("Leituras do mês"))
+    );
+    let updated = event(&mut dani_ws, "server.updated").await;
+    assert_eq!(updated["server"]["name"], "Clube do Livro");
+    let servers = call(&app, "GET", "/servers", Some(&dani), None).await.1;
+    assert!(servers
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["description"] == "Leituras do mês"));
+
+    // Without Gerenciar canais in @everyone, members can't create channels;
+    // without Criar convite, they can't see the invite.
+    let channel = call(
+        &app,
+        "POST",
+        &format!("{server_path}/channels"),
+        Some(&dani),
+        Some(json!({ "name": "geral" })),
+    )
+    .await;
+    assert_eq!(channel.0, StatusCode::CREATED, "{}", channel.1);
+    let channel_id = channel.1["id"].as_str().unwrap().to_owned();
+    call(
+        &app,
+        "PATCH",
+        &format!("{roles_path}/{server_id}"),
+        Some(&ana),
+        Some(json!({ "permissions": 0 })),
+    )
+    .await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{server_path}/channels"),
+            Some(&dani),
+            Some(json!({ "name": "outro" }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("{server_path}/invite"),
+            Some(&dani),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("{server_path}/invite"),
+            Some(&ana),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    // Gerenciar mensagens deletes others' messages in the server only.
+    let messages = format!("/channels/{channel_id}/messages");
+    let send = |token: &str| {
+        let (app, token, messages) = (app.clone(), token.to_owned(), messages.clone());
+        async move {
+            let sent = call(
+                &app,
+                "POST",
+                &messages,
+                Some(&token),
+                Some(json!({ "clientId": Uuid::new_v4(), "content": "oi" })),
+            )
+            .await;
+            assert_eq!(sent.0, StatusCode::OK, "{}", sent.1);
+            format!("{messages}/{}", sent.1["id"].as_str().unwrap())
+        }
+    };
+    let by_dani = send(&dani).await;
+    let by_ana = send(&ana).await;
+    assert_eq!(
+        call(&app, "DELETE", &by_ana, Some(&dani), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "DELETE", &by_dani, Some(&bia), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let deleted = event(&mut bia_ws, "message.deleted").await;
+    assert_eq!(deleted["channelId"], channel_id);
+    // Moderators can't edit what others wrote.
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &by_ana,
+            Some(&bia),
+            Some(json!({ "content": "editado" }))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "DELETE", &by_ana, Some(&bia), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    // In a direct conversation, only the author deletes.
+    let dm = call(
+        &app,
+        "POST",
+        "/dms",
+        Some(&bia),
+        Some(json!({ "userId": dani_id })),
+    )
+    .await
+    .1;
+    let dm_message = call(
+        &app,
+        "POST",
+        &format!(
+            "/channels/{}/messages",
+            dm["channel"]["id"].as_str().unwrap()
+        ),
+        Some(&dani),
+        Some(json!({ "clientId": Uuid::new_v4(), "content": "oi" })),
+    )
+    .await
+    .1;
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!(
+                "/channels/{}/messages/{}",
+                dm["channel"]["id"].as_str().unwrap(),
+                dm_message["id"].as_str().unwrap()
+            ),
+            Some(&bia),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Bans: never the owner, oneself, or someone at or above one's role.
+    let ban = |token: &str, user: &str| {
+        let (app, token, path) = (app.clone(), token.to_owned(), format!("{bans_path}/{user}"));
+        async move {
+            call(
+                &app,
+                "PUT",
+                &path,
+                Some(&token),
+                Some(json!({ "reason": "  spam   no chat " })),
+            )
+            .await
+            .0
+        }
+    };
+    assert_eq!(ban(&dani, &caio_id).await, StatusCode::FORBIDDEN);
+    assert_eq!(ban(&bia, &ana_id).await, StatusCode::FORBIDDEN);
+    assert_eq!(ban(&bia, &bia_id).await, StatusCode::BAD_REQUEST);
+    assert_eq!(ban(&caio, &bia_id).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        ban(&bia, &Uuid::new_v4().to_string()).await,
+        StatusCode::NOT_FOUND
+    );
+    // Dani is in a voice room when banned: she leaves it and the server.
+    let voice = call(
+        &app,
+        "POST",
+        &format!("{server_path}/channels"),
+        Some(&ana),
+        Some(json!({ "name": "sala", "type": "voice" })),
+    )
+    .await
+    .1;
+    emit(
+        &mut dani_ws,
+        json!({ "type": "voice.join", "channelId": voice["id"], "muted": false, "deafened": false }),
+    )
+    .await;
+    event(&mut dani_ws, "voice.joined").await;
+    assert_eq!(ban(&bia, &dani_id).await, StatusCode::NO_CONTENT);
+    let banned = event(&mut dani_ws, "server.banned").await;
+    assert_eq!(banned["serverId"], server_id);
+    let left = event(&mut dani_ws, "voice.left").await;
+    assert_eq!(left["reason"], "removed");
+    let gone = event(&mut bia_ws, "member.left").await;
+    assert_eq!(gone["userId"], dani_id);
+    assert_eq!(
+        call(&app, "GET", &members_path, Some(&dani), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, bans) = call(&app, "GET", &bans_path, Some(&bia), None).await;
+    assert_eq!(status, StatusCode::OK, "{bans}");
+    assert_eq!(bans[0]["user"]["id"], dani_id);
+    assert_eq!(bans[0]["reason"], "spam no chat");
+    assert_eq!(
+        call(&app, "GET", &bans_path, Some(&caio), None).await.0,
+        StatusCode::OK
+    );
+    // The invite doesn't let her back in until she's unbanned.
+    let rejoin = format!("/invites/{code}/join");
+    assert_eq!(
+        call(&app, "POST", &rejoin, Some(&dani), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let unban = format!("{bans_path}/{dani_id}");
+    assert_eq!(
+        call(&app, "DELETE", &unban, Some(&bia), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, "DELETE", &unban, Some(&bia), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, "POST", &rejoin, Some(&dani), None).await.0,
+        StatusCode::OK
+    );
+
+    // Only the owner deletes the server, whatever roles others have.
+    let everything = call(
+        &app,
+        "POST",
+        &roles_path,
+        Some(&ana),
+        Some(json!({ "name": "Admin", "permissions": 127 })),
+    )
+    .await
+    .1;
+    call(
+        &app,
+        "PUT",
+        &format!(
+            "{members_path}/{caio_id}/roles/{}",
+            everything["id"].as_str().unwrap()
+        ),
+        Some(&ana),
+        None,
+    )
+    .await;
+    assert_eq!(
+        call(&app, "DELETE", &server_path, Some(&caio), None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "DELETE", &server_path, Some(&ana), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    // It disappears for every member, even those not looking at it.
+    let deleted = event(&mut dani_ws, "server.deleted").await;
+    assert_eq!(
+        (&deleted["serverId"], &deleted["serverName"]),
+        (&json!(server_id), &json!("Clube do Livro"))
+    );
+    event(&mut bia_ws, "server.deleted").await;
+    let servers = call(&app, "GET", "/servers", Some(&bia), None).await.1;
+    assert!(!servers
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == server_id));
+    assert_eq!(
+        call(&app, "GET", &format!("/invites/{code}"), Some(&bia), None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, "GET", &messages, Some(&bia), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    live.abort();
+    for id in [ana_id, bia_id, caio_id, dani_id] {
+        for sql in [
+            "DELETE FROM channels WHERE created_by = $1",
+            "DELETE FROM users WHERE id = $1",
+        ] {
+            db.execute(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                sql,
+                [Uuid::parse_str(&id).unwrap().into()],
+            ))
+            .await
+            .unwrap();
+        }
+    }
 }

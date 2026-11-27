@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Gamepad2, MessageCircle } from "lucide-react";
+import { Ban, Gamepad2, MessageCircle } from "lucide-react";
 import type { Activity, BannerColor, User } from "@disc-voice/shared";
 import { activityDetail, activityLabel } from "../lib/activity";
 import { motionSrc, useReducedMotion } from "../lib/motion";
+import { BanDialog, RoleBadges, useCanBan, useServerRoles } from "./ServerRoles";
 import { Avatar } from "./ui";
 
 const ActivityContext = createContext<Record<string, Activity>>({});
@@ -102,6 +103,10 @@ export function ProfileCardProvider({ profiles, activities = {}, selfId, onMessa
 function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anchor: HTMLElement; onClose: () => void; onMessage?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const { serverId, serverName, badges } = useServerRoles();
+  const badge = badges[user.id];
+  const canBan = useCanBan(user.id);
+  const [banning, setBanning] = useState(false);
 
   useLayoutEffect(() => {
     const card = ref.current!.getBoundingClientRect();
@@ -118,6 +123,8 @@ function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anch
   useEffect(() => {
     ref.current?.focus();
     const close = (event: PointerEvent | KeyboardEvent) => {
+      // The ban dialog opened from the card handles its own keys and clicks.
+      if (banning) return;
       if (event instanceof KeyboardEvent ? event.key === "Escape" : !ref.current?.contains(event.target as Node) && !anchor.contains(event.target as Node)) {
         // Escape closes only the card, not the dialog it was opened from.
         if (event instanceof KeyboardEvent) event.preventDefault();
@@ -129,16 +136,20 @@ function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anch
     return () => {
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", close);
-      if (anchor.isConnected) anchor.focus();
     };
-  }, [anchor, onClose]);
+  }, [anchor, onClose, banning]);
+
+  useEffect(() => () => { if (anchor.isConnected) anchor.focus(); }, [anchor]);
 
   // A modal dialog sits in the top layer and makes the rest of the page inert,
   // so a card opened from inside one has to live in it to show above it.
   return createPortal(<div ref={ref} className="profile-preview profile-card" role="dialog" aria-label={`Perfil de ${user.name}`} tabIndex={-1}
     style={position ? { left: position.left, top: position.top } : { visibility: "hidden" }}>
     <ProfileSummary user={user} />
+    {badge && (badge.owner || badge.roles.length > 0) && <div className="detail-card"><h3 className="eyebrow">Cargos em {serverName}</h3><RoleBadges badge={badge} /></div>}
     {onMessage && <button type="button" className="button primary small full" onClick={onMessage}><MessageCircle size={16} />Enviar mensagem</button>}
+    {canBan && serverId && <button type="button" className="button danger-soft small full" onClick={() => setBanning(true)}><Ban size={16} />Banir de {serverName}</button>}
+    {banning && serverId && <BanDialog serverId={serverId} serverName={serverName} user={user} onClose={() => setBanning(false)} onBanned={onClose} />}
   </div>, anchor.closest("dialog[open]") ?? document.body);
 }
 

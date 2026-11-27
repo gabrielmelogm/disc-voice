@@ -1,9 +1,9 @@
-import { History, Import, MessageSquareText, Plus, RefreshCw, UserPlus, Volume2 } from "lucide-react";
+import { History, Import, MessageSquareText, Plus, RefreshCw, Settings, UserPlus, Volume2 } from "lucide-react";
 import type { Channel, Server, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
 import { Avatar, Badge, LiveTag, unreadLabel } from "./ui";
 
-export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord }: {
+export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onDiscord, onSettings }: {
   server: Server;
   channels: Channel[];
   channelId: string | null;
@@ -15,25 +15,31 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
   error: string;
   onSelect: (channel: Channel) => void;
   onJoin: (channel: Channel) => void;
-  onCreate: (type: Channel["type"]) => void;
-  onInvite: () => void;
+  /** Absent without Gerenciar canais. */
+  onCreate?: (type: Channel["type"]) => void;
+  /** Absent without Criar convite. */
+  onInvite?: () => void;
   onReload: () => void;
   /** Opens the Discord import; only for the server owner. */
   onDiscord?: () => void;
+  /** Opens the server settings; only for who manages something there. */
+  onSettings?: () => void;
 }) {
   const text = channels.filter(item => item.type === "text");
   const voice = channels.filter(item => item.type === "voice");
   const connectedId = voiceState.channel && voiceState.status !== "error" ? voiceState.channel.id : null;
 
   return <aside className="sidebar" aria-label={`Canais de ${server.name}`}>
-    <div className="sidebar-title"><h2 title={server.name}>{server.name}</h2></div>
-    <button className="button soft full" onClick={onInvite}><UserPlus size={16} />Convidar pessoas</button>
+    <div className="sidebar-title"><h2 title={server.name}>{server.name}</h2>
+      {onSettings && <button className="icon-button small" aria-label="Configurações do servidor" title="Configurações do servidor" onClick={onSettings}><Settings size={17} /></button>}</div>
+    {server.description && <p className="server-description">{server.description}</p>}
+    {onInvite && <button className="button soft full" onClick={onInvite}><UserPlus size={16} />Convidar pessoas</button>}
     {onDiscord && <button className="button secondary small full" onClick={onDiscord}><Import size={16} />Importar do Discord</button>}
     {loading && <p className="sidebar-status" role="status">Carregando canais…</p>}
     {error && <div className="sidebar-status"><p role="alert">{error}</p><button className="link-button" onClick={onReload}><RefreshCw size={13} />Tentar novamente</button></div>}
-    {!loading && !error && channels.length === 0 && <p className="sidebar-status">Crie o primeiro canal.</p>}
+    {!loading && !error && channels.length === 0 && <p className="sidebar-status">{onCreate ? "Crie o primeiro canal." : "Nenhum canal por aqui ainda."}</p>}
 
-    <div className="section-heading"><span>Conversas</span><button className="icon-button small" aria-label="Criar canal de texto" title="Criar canal de texto" disabled={loading} onClick={() => onCreate("text")}><Plus size={17} /></button></div>
+    <div className="section-heading"><span>Conversas</span>{onCreate && <button className="icon-button small" aria-label="Criar canal de texto" title="Criar canal de texto" disabled={loading} onClick={() => onCreate("text")}><Plus size={17} /></button>}</div>
     <nav className="channel-list" aria-label="Canais de texto">
       {text.map(item => {
         const selected = channelId === item.id;
@@ -47,7 +53,7 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
       })}
     </nav>
 
-    <div className="section-heading"><span>Salas de voz</span><button className="icon-button small" aria-label="Criar canal de voz" title="Criar canal de voz" disabled={loading} onClick={() => onCreate("voice")}><Plus size={17} /></button></div>
+    <div className="section-heading"><span>Salas de voz</span>{onCreate && <button className="icon-button small" aria-label="Criar canal de voz" title="Criar canal de voz" disabled={loading} onClick={() => onCreate("voice")}><Plus size={17} /></button>}</div>
     <nav className="room-list" aria-label="Canais de voz">
       {voice.map(item => {
         const people = connectedId === item.id ? voiceState.participants : participants[item.id] || [];

@@ -337,12 +337,23 @@ pub(crate) async fn remove(
 pub(crate) struct ProfileView {
     user: UserView,
     member_since: chrono::DateTime<Utc>,
-    /// Servers both people are in.
-    mutual_servers: Vec<ServerView>,
+    /// Servers both people are in, with the person's roles there.
+    mutual_servers: Vec<MutualServer>,
     /// `none`, `outgoing`, `incoming` or `friends`, from the viewer's side.
     friendship: &'static str,
     /// Presence, shared with friends and people in a mutual server; null otherwise.
     status: Option<Status>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MutualServer {
+    #[serde(flatten)]
+    server: ServerView,
+    /// The person owns this server.
+    owner: bool,
+    /// The person's roles in it, highest first.
+    roles: Vec<crate::roles::RoleView>,
 }
 
 /// Someone's profile as the user sees it. Only people the user is connected
@@ -361,22 +372,33 @@ pub(crate) async fn profile(
         .db
         .query_all(Statement::from_sql_and_values(
             DbBackend::Postgres,
-            r#"SELECT s.id, s.name, s.owner_id, s.icon_url FROM servers s
+            r#"SELECT s.id, s.name, s.owner_id, s.icon_url, s.description FROM servers s
                JOIN members mine ON mine.server_id = s.id AND mine.user_id = $1
                JOIN members theirs ON theirs.server_id = s.id AND theirs.user_id = $2
                ORDER BY s.created_at, s.id"#,
             [user.id.into(), other.into()],
         ))
         .await?;
-    let mut mutual_servers = Vec::with_capacity(servers.len());
+    let mut found = Vec::with_capacity(servers.len());
     for row in servers {
-        mutual_servers.push(ServerView {
+        found.push(ServerView {
             id: row.try_get("", "id")?,
             name: row.try_get("", "name")?,
             owner_id: row.try_get("", "owner_id")?,
             icon: row.try_get("", "icon_url")?,
+            description: row.try_get("", "description")?,
         });
     }
+    let ids: Vec<Uuid> = found.iter().map(|s| s.id).collect();
+    let mut badges = crate::roles::badges(&state.db, &ids, other).await?;
+    let mutual_servers: Vec<MutualServer> = found
+        .into_iter()
+        .map(|server| MutualServer {
+            owner: server.owner_id == other,
+            roles: badges.remove(&server.id).unwrap_or_default(),
+            server,
+        })
+        .collect();
     let friendship = relation(&state.db, user.id, other).await?;
     let conversation = state
         .db

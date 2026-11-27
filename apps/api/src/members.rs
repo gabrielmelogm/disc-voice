@@ -1,5 +1,5 @@
-//! Who is in a server: every member with their role and presence.
-//! The owner is the server's `owner_id`; the owner can make others moderators.
+//! Who is in a server: every member with their roles and presence.
+//! The owner is the server's `owner_id`; roles are in [`crate::roles`].
 
 use super::*;
 use crate::presence::Status;
@@ -9,20 +9,12 @@ use std::collections::{HashMap, HashSet};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MemberView {
     user: UserView,
-    /// `owner`, `moderator` or `member`.
-    role: &'static str,
+    /// The server's owner, who can do everything.
+    owner: bool,
+    /// Ids of the member's roles, without @everyone.
+    roles: Vec<Uuid>,
     status: Status,
     joined_at: chrono::DateTime<Utc>,
-}
-
-fn role(server: &server::Model, member: &member::Model) -> &'static str {
-    if member.user_id == server.owner_id {
-        "owner"
-    } else if member.role == "moderator" {
-        "moderator"
-    } else {
-        "member"
-    }
 }
 
 pub(crate) fn view(
@@ -30,20 +22,15 @@ pub(crate) fn view(
     server: &server::Model,
     member: &member::Model,
     user: UserView,
+    roles: Vec<Uuid>,
 ) -> MemberView {
     MemberView {
-        role: role(server, member),
+        owner: member.user_id == server.owner_id,
+        roles,
         status: state.realtime.presence(member.user_id),
         joined_at: member.joined_at,
         user,
     }
-}
-
-async fn find_server(db: &DatabaseConnection, id: Uuid) -> ApiResult<server::Model> {
-    server::Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Servidor não encontrado.".into()))
 }
 
 /// Every member of a server, sorted by name.
@@ -53,11 +40,12 @@ pub(crate) async fn list(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<MemberView>>> {
     require_member(&state.db, id, user.id).await?;
-    let server = find_server(&state.db, id).await?;
+    let server = roles::find_server(&state.db, id).await?;
     let members = member::Entity::find()
         .filter(member::Column::ServerId.eq(id))
         .all(&state.db)
         .await?;
+    let mut roles = roles::member_roles(&state.db, id).await?;
     let ids: HashSet<Uuid> = members.iter().map(|m| m.user_id).collect();
     let users: HashMap<Uuid, UserView> = user::Entity::find()
         .filter(user::Column::Id.is_in(ids.iter().copied()))
@@ -71,7 +59,8 @@ pub(crate) async fn list(
         .iter()
         .filter_map(|m| {
             Some(MemberView {
-                role: role(&server, m),
+                owner: m.user_id == server.owner_id,
+                roles: roles.remove(&m.user_id).unwrap_or_default(),
                 status: presences
                     .get(&m.user_id)
                     .copied()
@@ -83,63 +72,4 @@ pub(crate) async fn list(
         .collect();
     views.sort_by_cached_key(|m| (m.user.name.to_lowercase(), m.user.id));
     Ok(Json(views))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RoleInput {
-    role: String,
-}
-
-/// The owner makes a member a moderator, or a moderator a member again.
-pub(crate) async fn update(
-    State(state): State<AppState>,
-    Extension(user): Extension<UserView>,
-    Path((id, member_id)): Path<(Uuid, Uuid)>,
-    Json(input): Json<RoleInput>,
-) -> ApiResult<Json<MemberView>> {
-    require_member(&state.db, id, user.id).await?;
-    let server = find_server(&state.db, id).await?;
-    if server.owner_id != user.id {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Somente o dono do servidor pode mudar os papéis.".into(),
-        ));
-    }
-    if !matches!(input.role.as_str(), "member" | "moderator") {
-        return Err(ApiError::bad("Escolha entre membro e moderador."));
-    }
-    if member_id == server.owner_id {
-        return Err(ApiError::bad("O dono do servidor não muda de papel."));
-    }
-    let member = member::Entity::find_by_id((id, member_id))
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| {
-            ApiError(
-                StatusCode::NOT_FOUND,
-                "Pessoa não encontrada neste servidor.".into(),
-            )
-        })?;
-    let person = user::Entity::find_by_id(member_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| {
-            ApiError(
-                StatusCode::NOT_FOUND,
-                "Pessoa não encontrada neste servidor.".into(),
-            )
-        })?;
-    let member = if member.role == input.role {
-        member
-    } else {
-        let mut active: member::ActiveModel = member.into();
-        active.role = Set(input.role);
-        active.update(&state.db).await?
-    };
-    let view = view(&state, &server, &member, person.into());
-    state.realtime.publish_server(
-        id,
-        serde_json::json!({ "type": "member.updated", "serverId": id, "member": view }),
-    );
-    Ok(Json(view))
 }
