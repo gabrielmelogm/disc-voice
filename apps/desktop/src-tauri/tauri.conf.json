@@ -30,6 +30,13 @@
       "capabilities": ["main"]
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5Q0E2RDZCMjJGQTQ0NzQKUldSMFJQb2lhMjNLV2JHQ0FUZzM1ZEd0cTdLL3FDMGpMTHNTTDVUekMvY3ZWbjVnd3FCSzZBUi8K",
+      "endpoints": ["https://get-discvoice.devgabrielmelo.shop/api/update/{{target}}/{{arch}}/{{current_version}}"],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],

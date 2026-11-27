@@ -39,6 +39,7 @@ services:
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       KLIPY_TOKEN: ${KLIPY_TOKEN:-}
+      RELEASE_NOTIFY_TOKEN: ${RELEASE_NOTIFY_TOKEN:-}
       UPLOADS_DIR: /app/data/uploads
       # Lightsail bucket for files sent in chats (infra/terraform); without
       # them files stay in the api-uploads volume.

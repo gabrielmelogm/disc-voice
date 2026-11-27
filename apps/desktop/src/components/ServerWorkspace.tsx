@@ -5,6 +5,7 @@ import { api, message } from "../lib/api";
 import { usePictureInPicture } from "../lib/pip";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useDiscordCallPresence } from "../lib/discordPresence";
+import { useUpdateChecks } from "../lib/updater";
 import { useActivities } from "../hooks/useActivities";
 import { useDirectMessages } from "../hooks/useDirectMessages";
 import { useFriends } from "../hooks/useFriends";
@@ -84,6 +85,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const conversation = dms.conversations.find(c => c.channel.id === dmId);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
   const voiceChannels = channels.filter(c => c.type === "voice");
+  useUpdateChecks(realtime.client);
   useNotifications({
     realtime: realtime.client,
     user,

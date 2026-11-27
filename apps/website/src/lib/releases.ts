@@ -4,7 +4,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 // The bucket is private: every click gets a short-lived signed link to a file
 // of the latest release, uploaded by .github/workflows/desktop.yml.
 
-const BUCKET = process.env.RELEASES_BUCKET || "disc-voice-files-481116707314";
+export const BUCKET = process.env.RELEASES_BUCKET || "disc-voice-files-481116707314";
 const REGION = process.env.RELEASES_REGION || "sa-east-1";
 const EXPIRES_IN = 300;
 /** Lists prereleases too (github.com/.../releases/latest skips them). */
@@ -22,7 +22,7 @@ export type Download = keyof typeof DOWNLOADS;
 
 let client: S3Client | undefined;
 
-function s3(): S3Client | undefined {
+export function s3(): S3Client | undefined {
   const accessKeyId = process.env.RELEASES_ACCESS_KEY_ID;
   const secretAccessKey = process.env.RELEASES_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;

@@ -4,5 +4,5 @@
   "description": "Permissões da janela principal do Disc Voice",
   "windows": ["main"],
   "platforms": ["windows", "linux"],
-  "permissions": ["core:default", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-close", "core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize","notification:default", "opener:default", "oauth:allow-start", "oauth:allow-cancel"]
+  "permissions": ["core:default", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-close", "core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize","notification:default", "opener:default", "oauth:allow-start", "oauth:allow-cancel", "updater:default", "process:allow-restart"]
 }

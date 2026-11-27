@@ -53,6 +53,17 @@ O bucket continua privado. Os botões de download do site apontam para `/downloa
 aws lightsail create-bucket-access-key --bucket-name disc-voice-files-481116707314 --region sa-east-1
 ```
 
+### Atualização automática do app
+
+Quando uma release é publicada, o workflow grava `releases/channels/<canal>.json` no bucket e chama `POST /api/releases/notify` na API, que avisa pelo realtime todo app aberto, inclusive quem está em chamada. O app (instalador do Windows e AppImage) mostra um botão discreto na barra, sem forçar nada. Quem estava offline descobre a versão ao abrir o app e a cada 4 horas, em `/api/update/latest?channel=<canal>` no site, que não devolve link nenhum.
+
+Só quando o usuário clica em atualizar o app chama `https://get-discvoice.devgabrielmelo.shop/api/update/{target}/{arch}/{versão}`, e só essa rota (`apps/website/src/lib/updates.ts`) gera um link assinado (15 minutos) para o instalador em `releases/<tag>/`. O app baixa, confere a assinatura, instala e reinicia. Em chamada, a chamada continua durante o download e só é encerrada na hora de reiniciar. `.deb` e `.rpm` não se atualizam sozinhos.
+
+- **Chave de assinatura:** a pública fica em `apps/desktop/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`); a privada e a senha, nos secrets `TAURI_SIGNING_PRIVATE_KEY` e `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Faça backup da chave privada: sem ela, as instalações existentes não recebem mais atualizações. Builds locais não assinam e não precisam dela.
+- **Aviso em tempo real:** secret `RELEASE_NOTIFY_TOKEN` (um valor aleatório qualquer). O deploy da API grava no `.env` do servidor e o `desktop.yml` envia no aviso. Sem ele, os apps só descobrem a versão na próxima verificação.
+- **Canais:** uma release entra no próprio canal e nos menos estáveis (stable → stable, beta e alpha; beta ou rc → beta e alpha; alpha → alpha), a não ser que o canal já ofereça uma versão mais nova.
+- **Controle manual:** editar ou apagar `releases/channels/<canal>.json` no bucket segura, libera ou troca a versão oferecida.
+
 O workflow envia os arquivos com os secrets `FILES_ACCESS_KEY_ID` e `FILES_SECRET_ACCESS_KEY`. A tag da release vira a versão do app (`v1.2.3` vira `1.2.3`) e precisa seguir semver.
 
 ## Mudanças de custo

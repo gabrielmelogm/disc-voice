@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
+import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, RefreshCw, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
 import type { BannerColor, DiscordStatus, GifChoice, ProfileUpdate, User } from "@disc-voice/shared";
 import { DeviceSettings } from "../DeviceSettings";
 import { api, message } from "../lib/api";
@@ -10,6 +10,7 @@ import type { Realtime } from "../lib/realtime";
 import { requestDesktopPermission, useNotificationPrefs } from "../lib/notifications";
 import { useTraySupported, useWindowPrefs } from "../lib/tray";
 import { useShowCallOnDiscord } from "../lib/discordPresence";
+import { lookForUpdates, UPDATE_CHANNELS, useAppVersion, useUpdateChannel, useUpdaterSupported, useUpdateState } from "../lib/updater";
 import {
   addTheme, fetchTheme, MAX_THEME_BYTES, parseTheme, removeTheme, resolveTheme, THEME_EXAMPLE, THEME_TOKENS, ThemeError,
   themeById, themeTemplate, useAppearance, useThemes, type Appearance, type CustomTheme,
@@ -21,7 +22,7 @@ import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
 export type SettingsPage = "overview" | "voice" | "profile" | "connections" | "themes";
 
 const pages: { id: SettingsPage; label: string; icon: LucideIcon; keywords: string }[] = [
-  { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações janela bandeja segundo plano fechar excluir" },
+  { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações janela bandeja segundo plano fechar excluir atualizações versão canal" },
   { id: "profile", label: "Perfil", icon: IdCard, keywords: "nome pronomes avatar banner sobre mim" },
   { id: "connections", label: "Conexões", icon: Link2, keywords: "discord conta vincular atividade jogo jogando música presença privacidade" },
   { id: "voice", label: "Voz e vídeo", icon: Mic, keywords: "microfone saída áudio câmera webcam tela compartilhar" },
@@ -160,11 +161,39 @@ function Overview({ user, onEditProfile, onThemes }: { user: User; onEditProfile
       </div>
     </section>}
 
+    <Updates />
+
     <section className="danger-zone">
       <div><h2>Excluir conta</h2><p>Suas mensagens ficam, mas seu nome vira “Usuário removido”. Não dá para desfazer.</p></div>
       <button className="button danger" disabled title="Exclusão de conta em breve">Excluir conta</button>
     </section>
   </>;
+}
+
+/** Installed version, update channel and a "look now" button. Only in the app. */
+function Updates() {
+  const version = useAppVersion();
+  const supported = useUpdaterSupported();
+  const [channel, setChannel] = useUpdateChannel();
+  const update = useUpdateState();
+  const [looking, setLooking] = useState(false);
+  if (!version) return null;
+  const busy = looking || update.status === "downloading" || update.status === "installing";
+  const result = looking ? "Procurando…"
+    : update.version ? `Versão ${update.version} ${update.status === "downloading" || update.status === "installing" ? "sendo instalada" : "disponível: use o botão de atualização na barra do app"}.`
+    : update.checkedAt ? "Você está na versão mais recente." : "";
+  return <section aria-labelledby="updates-title">
+    <h2 id="updates-title" className="settings-section-title">Atualizações</h2>
+    <p className="field-help">Versão instalada: {version}</p>
+    {supported ? <>
+      <RadioCards name="update-channel" value={channel} onChange={setChannel}
+        options={UPDATE_CHANNELS.map(option => ({ value: option.value, label: <span className="choice-text"><strong>{option.label}</strong><small>{option.hint}</small></span> }))} />
+      <div className="button-row">
+        <button className="button secondary small" disabled={busy} onClick={() => { setLooking(true); void lookForUpdates().finally(() => setLooking(false)); }}><RefreshCw size={16} />Procurar atualizações</button>
+        {result && <span className="field-help" role="status">{result}</span>}
+      </div>
+    </> : <p className="field-help">Esta instalação não se atualiza sozinha (pacote .deb ou .rpm): atualize pelo gerenciador de pacotes ou baixe a nova versão no site.</p>}
+  </section>;
 }
 
 function collapse(value: string) {
