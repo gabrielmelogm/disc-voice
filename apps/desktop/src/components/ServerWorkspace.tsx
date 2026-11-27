@@ -351,7 +351,6 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       onSelect={openChannel} onJoin={joinVoice}
       onCreate={selfAccess && can(selfAccess, "manageChannels") ? type => setDialog({ kind: "channel", server, channelType: type }) : undefined}
       onInvite={selfAccess && can(selfAccess, "createInvite") ? () => setDialog({ kind: "invite", server }) : undefined} onReload={() => setChannelReload(n => n + 1)}
-      onDiscord={server.ownerId === user.id ? () => setDiscordOpen(true) : undefined}
       onSettings={selfAccess && settingsPages(selfAccess).length ? () => setServerSettingsOpen(true) : undefined} /> : <aside className="sidebar">
       <div className="sidebar-title"><h2>Seu espaço</h2></div>
       <p className="sidebar-status">{loading ? "Carregando…" : "Crie um servidor ou entre pelo link de um amigo."}</p>
@@ -398,7 +397,8 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
 
     {showDetails && <ChannelDetails user={user} selfStatus={myStatus.status} members={members} voiceChannels={voiceChannels} participants={participants}
       voiceState={voiceState} onJoin={joinVoice} onShowMembers={() => setMembersOpen(true)} />}
-    {serverSettingsOpen && server && <ServerSettings server={server} members={members.members} onClose={closeServerSettings} />}
+    {serverSettingsOpen && server && <ServerSettings server={server} members={members.members} onClose={closeServerSettings}
+      onDiscord={server.ownerId === user.id ? () => { setServerSettingsOpen(false); setDiscordOpen(true); } : undefined} />}
     {membersOpen && server && <MembersDialog server={server} self={user} selfStatus={myStatus.status} members={members.members}
       rooms={roomPresence(voiceChannels, voiceOccupants(participants, voiceState))} onClose={() => setMembersOpen(false)} />}
     {showProfile && conversation && <DirectProfilePanel key={conversation.user.id} user={visibleProfiles[conversation.user.id] || conversation.user}

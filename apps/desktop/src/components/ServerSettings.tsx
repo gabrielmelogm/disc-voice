@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ImagePlus, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ImagePlus, Import, Plus, Search, Trash2, X } from "lucide-react";
 import type { Ban, Role, Server, ServerMember } from "@disc-voice/shared";
 import { api, message, type RoleChanges } from "../lib/api";
 import { fileProblem, isImage, uploadFile } from "../lib/files";
@@ -24,10 +24,12 @@ export function settingsPages(access: Access): ServerSettingsPage[] {
 const PAGE_LABELS: Record<ServerSettingsPage, string> = { overview: "Visão geral", roles: "Cargos", bans: "Banimentos" };
 
 /** Server settings: name and description, roles and their permissions, bans. */
-export function ServerSettings({ server, members, onClose }: {
+export function ServerSettings({ server, members, onClose, onDiscord }: {
   server: Server;
   members: ServerMember[];
   onClose: () => void;
+  /** Opens the Discord import; only for the server owner. */
+  onDiscord?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const { self } = useServerRoles();
@@ -52,7 +54,7 @@ export function ServerSettings({ server, members, onClose }: {
         onClick={() => setPage(item)}>{PAGE_LABELS[item]}</button>)}
     </div>}
     <div role="tabpanel" aria-label={shown ? PAGE_LABELS[shown] : undefined}>
-      {shown === "overview" && <Overview server={server} access={self} />}
+      {shown === "overview" && <Overview server={server} access={self} onDiscord={onDiscord} />}
       {shown === "roles" && <Roles server={server} members={members} access={self} />}
       {shown === "bans" && <Bans server={server} />}
     </div>
@@ -62,7 +64,7 @@ export function ServerSettings({ server, members, onClose }: {
 /** A new icon being sent (`id` once it is up), or null to remove the current one. */
 type IconChange = { preview: string; progress: number; id?: string } | null;
 
-function Overview({ server, access }: { server: Server; access: Access }) {
+function Overview({ server, access, onDiscord }: { server: Server; access: Access; onDiscord?: () => void }) {
   const editable = can(access, "manageServer");
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description ?? "");
@@ -157,6 +159,11 @@ function Overview({ server, access }: { server: Server; access: Access }) {
       </div>
     </form>}
     {error && <p className="inline-error" role="alert">{error}</p>}
+    {access.owner && onDiscord && <section className="server-import" aria-labelledby="import-title">
+      <h3 id="import-title">Importar do Discord</h3>
+      <p className="muted">Traz canais e mensagens de um servidor do Discord que você gerencia para este servidor.</p>
+      <button type="button" className="button secondary" onClick={onDiscord}><Import size={16} />Importar do Discord</button>
+    </section>}
     {access.owner && <section className="server-danger" aria-labelledby="danger-title">
       <h3 id="danger-title">Excluir servidor</h3>
       <p className="muted">Apaga o servidor para todo mundo, com canais, mensagens, cargos e convites. Não dá para desfazer.</p>
