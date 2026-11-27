@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
-import { Pencil, SmilePlus, Trash2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef } from "react";
+import { AtSign, Pencil, SmilePlus, Trash2 } from "lucide-react";
 import type { ChatMessage, Reaction, User } from "@disc-voice/shared";
 import { QUICK_REACTIONS } from "../lib/emoji";
-import { mentionText } from "../lib/mentions";
+import { EVERYONE_NAME, mentionText } from "../lib/mentions";
 import { Avatar } from "./ui";
 
 /** Reactions after the user adds (or removes) theirs, before the API answers. */
@@ -101,21 +101,36 @@ export function DeleteMessageDialog({ message, busy, error, onConfirm, onClose }
 }
 
 /** People matching the `@` being typed; the composer handles the keys. */
-export function MentionSuggestions({ people, active, onPick, onHover }: {
+export function MentionSuggestions({ people, everyone = false, active, empty, onPick, onHover }: {
   people: User[];
+  /** Offers `@everyone` first. */
+  everyone?: boolean;
+  /** Index among the options, `@everyone` included. */
   active: number;
-  onPick: (person: User) => void;
+  /** Shown when nobody matches. */
+  empty?: string;
+  onPick: (name: string) => void;
   onHover: (index: number) => void;
 }) {
-  return <div className="mention-suggestions" role="listbox" id="mention-suggestions" aria-label="Mencionar alguém">
-    <p className="gif-heading">Mencionar</p>
-    {people.map((person, index) => <div key={person.id} id={`mention-${person.id}`} role="option" aria-selected={index === active}
+  const shift = everyone ? 1 : 0;
+  const option = (id: string, index: number, name: string, content: ReactNode, label = name) =>
+    <div key={id} id={`mention-${id}`} role="option" aria-selected={index === active} aria-label={label}
       className={`mention-option ${index === active ? "active" : ""}`}
       // Keeps the focus in the composer.
       onPointerDown={event => event.preventDefault()}
-      onPointerEnter={() => onHover(index)} onClick={() => onPick(person)}>
+      onPointerEnter={() => onHover(index)} onClick={() => onPick(name)}>
+      {content}
+    </div>;
+  return <div className="mention-suggestions" role="listbox" id="mention-suggestions" aria-label="Mencionar alguém">
+    <p className="gif-heading">Mencionar</p>
+    {everyone && option(EVERYONE_NAME, 0, EVERYONE_NAME, <>
+      <span className="mention-everyone-icon" aria-hidden="true"><AtSign size={14} /></span>
+      <strong>@{EVERYONE_NAME}</strong><span className="mention-hint">Todos do servidor</span>
+    </>, `@${EVERYONE_NAME}, todos do servidor`)}
+    {people.map((person, index) => option(person.id, index + shift, person.name, <>
       <Avatar name={person.name} src={person.avatar} still={person.avatarStill} size="xs" />
       <strong>{person.name}</strong>
-    </div>)}
+    </>))}
+    {!everyone && !people.length && empty && <p className="mention-empty">{empty}</p>}
   </div>;
 }

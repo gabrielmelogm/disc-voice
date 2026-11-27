@@ -21,7 +21,7 @@ export type Segment =
   | { kind: "mention"; id: string }
   | { kind: "bold" | "italic" | "strike"; children: Segment[] };
 
-const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^\n]+?\*\*)|(~~(?=\S)[^\n]+?~~)|(\*(?=[^\s*])[^*\n]+?\*)|(https?:\/\/[^\s<>]+)|(<@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}>)/g;
+const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^\n]+?\*\*)|(~~(?=\S)[^\n]+?~~)|(\*(?=[^\s*])[^*\n]+?\*)|(https?:\/\/[^\s<>]+)|(<@(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|everyone)>)/g;
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|avif)$/i;
 
 /** Drops punctuation that ends a sentence rather than the link. */
@@ -91,6 +91,8 @@ function render(segments: Segment[], context: MentionContext): ReactNode {
   return segments.map((segment, index) => {
     switch (segment.kind) {
       case "mention": {
+        // `@everyone` reaches the reader too, so it stands out like their own name.
+        if (segment.id === "everyone") return <span key={index} className="mention self">@everyone</span>;
         const person = context.mentions?.find(user => user.id === segment.id);
         return <span key={index} className={`mention ${segment.id === context.selfId ? "self" : ""}`}>@{person?.name || "alguém"}</span>;
       }

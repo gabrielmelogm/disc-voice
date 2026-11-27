@@ -4336,6 +4336,16 @@ async fn reactions_mentions_edits_and_deletes() {
         StatusCode::NOT_FOUND
     );
 
+    // Only the owner and moderators can mention everyone.
+    assert_eq!(
+        send(&guest, "<@everyone> oi".into()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, everyone) = send(&owner, "<@everyone> reunião às 15h".into()).await;
+    assert_eq!(status, StatusCode::OK, "{everyone}");
+    assert_eq!(everyone["content"], "<@everyone> reunião às 15h");
+    assert!(everyone.get("mentions").is_none());
+
     // In a direct conversation, only its two people can be mentioned.
     let dm = call(
         &app,
@@ -4367,6 +4377,10 @@ async fn reactions_mentions_edits_and_deletes() {
     assert_eq!(in_dm(format!("<@{guest_id}> oi")).await, StatusCode::OK);
     assert_eq!(
         in_dm(format!("<@{outsider_id}> oi")).await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        in_dm("<@everyone> oi".into()).await,
         StatusCode::BAD_REQUEST
     );
     live.abort();

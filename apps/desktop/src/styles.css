@@ -960,3 +960,7 @@ button.cloud-thumb { cursor: zoom-in; }
 .mention-suggestions .gif-heading { margin: 2px 6px 4px; }
 .mention-option { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; }
 .mention-option.active { background: var(--brand-soft); color: var(--brand-text); }
+.mention-everyone-icon { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--brand); color: var(--on-brand); }
+.mention-hint { margin-left: auto; color: var(--muted); font-size: 12px; }
+.mention-option.active .mention-hint { color: inherit; opacity: .8; }
+.mention-empty { margin: 4px 8px 6px; color: var(--muted); font-size: 13px; }

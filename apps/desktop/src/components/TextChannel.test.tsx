@@ -216,6 +216,46 @@ describe("text chat", () => {
       expect(send).toHaveBeenCalledWith(channel.id, expect.any(String), `oi <@${ana.id}> revisa?`);
     });
 
+    it("says when nobody can be mentioned", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me]} />);
+      await user.type(screen.getByRole("textbox"), "@");
+      expect(screen.getByRole("listbox")).toHaveTextContent("Ninguém para mencionar ainda");
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    });
+
+    it("offers @everyone to the owner and moderators only", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
+      const send = vi.spyOn(api, "sendMessage").mockImplementation(async (_, clientId, content) => ({ ...chat("5", content), clientId, author: me }));
+      const { unmount } = render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
+        roles={{ [me.id]: "member", [ana.id]: "owner" }} />);
+      await user.type(screen.getByRole("textbox"), "@ev");
+      expect(screen.queryByRole("option", { name: /@everyone/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("listbox")).toHaveTextContent("Ninguém encontrado");
+      unmount();
+
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
+        roles={{ [me.id]: "moderator" }} />);
+      const field = screen.getByRole("textbox");
+      await user.type(field, "@");
+      expect(screen.getByRole("option", { name: /@everyone/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Ana Souza" })).toBeInTheDocument();
+      await user.keyboard("{Enter}");
+      expect(field).toHaveValue("@everyone ");
+      await user.type(field, "reunião{Enter}");
+      expect(send).toHaveBeenCalledWith(channel.id, expect.any(String), "<@everyone> reunião");
+    });
+
+    it("highlights @everyone for the others", async () => {
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [{ ...chat("1", "<@everyone> reunião"), author: ana }], hasMore: false });
+      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} />);
+      const mention = await screen.findByText("@everyone");
+      expect(mention).toHaveClass("mention", "self");
+      expect(mention.closest("article")).toHaveClass("mentions-me");
+    });
+
     it("highlights messages that mention the user", async () => {
       const mentioned = { ...chat("1", `<@${me.id}> consegue revisar?`), author: ana, mentions: [me] };
       vi.spyOn(api, "messages").mockResolvedValue({ messages: [mentioned, { ...chat("2", "outra"), author: ana }], hasMore: false });

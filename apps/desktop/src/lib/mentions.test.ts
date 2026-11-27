@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeMentions, mentionMatches, mentionQuery, mentionText } from "./mentions";
+import { encodeMentions, everyoneMatches, mentionMatches, mentionQuery, mentionText } from "./mentions";
 
 const ana = { id: "00000000-0000-4000-8000-000000000001", name: "Ana" };
 const anaSouza = { id: "00000000-0000-4000-8000-000000000002", name: "Ana Souza" };
@@ -15,6 +15,15 @@ describe("mentions", () => {
   it("shows stored mentions as names", () => {
     expect(mentionText(`<@${levi.id}> e <@00000000-0000-4000-8000-0000000000ff>`, [levi])).toBe("@Levi e @alguém");
     expect(mentionText(encodeMentions("oi @Ana Souza", [anaSouza]), [anaSouza])).toBe("oi @Ana Souza");
+  });
+
+  it("encodes @everyone only when allowed", () => {
+    expect(encodeMentions("@everyone reunião, @everyoneX", [], true)).toBe("<@everyone> reunião, @everyoneX");
+    expect(encodeMentions("@everyone reunião", [])).toBe("@everyone reunião");
+    expect(mentionText("<@everyone> oi")).toBe("@everyone oi");
+    expect(everyoneMatches("ev")).toBe(true);
+    expect(everyoneMatches("tod")).toBe(true);
+    expect(everyoneMatches("an")).toBe(false);
   });
 
   it("finds the query being typed", () => {

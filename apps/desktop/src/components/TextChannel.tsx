@@ -6,7 +6,7 @@ import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
 import { fileProblem, MAX_FILES_PER_MESSAGE, uploadFile } from "../lib/files";
 import type { Realtime } from "../lib/realtime";
-import { encodeMentions, mentionMatches, mentionQuery, mentionText } from "../lib/mentions";
+import { encodeMentions, everyoneMatches, mentionMatches, mentionQuery, mentionsEveryone, mentionText } from "../lib/mentions";
 import { EmojiPicker } from "./EmojiPicker";
 import { GifImage, GifPicker } from "./GifPicker";
 import { applyReaction, DeleteMessageDialog, MentionSuggestions, MessageToolbar, Reactions } from "./MessageActions";
@@ -185,8 +185,18 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const names = Object.fromEntries([...people.values()].map(person => [person.id, person.name]));
   // Members (or the other person) can be mentioned; one's own name stays out of the list.
   const mentionable = (members.length ? members : peer ? [peer] : []).filter(person => person.id !== self?.id);
+  // Like Discord, only the owner and moderators reach everyone, and only in servers.
+  const selfRole = self ? roles?.[self.id] : undefined;
+  const canMentionEveryone = !!channel.serverId && !peer && (selfRole === "owner" || selfRole === "moderator");
   const suggestions = mention ? mentionMatches(mentionable, mention.query) : [];
-  const activeSuggestion = Math.min(mentionIndex, Math.max(0, suggestions.length - 1));
+  const offerEveryone = !!mention && canMentionEveryone && everyoneMatches(mention.query);
+  /** The names offered, `everyone` first when it fits. */
+  const options = [...(offerEveryone ? ["everyone"] : []), ...suggestions.map(person => person.name)];
+  const activeSuggestion = Math.min(mentionIndex, Math.max(0, options.length - 1));
+  // Nobody fits: say so while a single word is being typed, instead of hiding the list.
+  const mentionEmpty = !mention || options.length || /\s/.test(mention.query) ? ""
+    : !mentionable.length ? "Ninguém para mencionar ainda. Convide pessoas para o servidor."
+    : `Ninguém encontrado para “@${mention.query}”.`;
 
   async function toggleReaction(item: ChatMessage, emoji: string, add: boolean) {
     if (!self) return;
@@ -205,7 +215,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
 
   async function saveEdit(item: ChatMessage) {
     if (!editing || editing.saving) return;
-    const content = encodeMentions(editing.text.trim(), [...people.values()]);
+    const content = encodeMentions(editing.text.trim(), [...people.values()], canMentionEveryone);
     if (content === item.content) { setEditing(null); return; }
     setEditing({ ...editing, saving: true, error: "" });
     try {
@@ -230,11 +240,11 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   }
 
   /** Puts `@Name ` where the `@` being typed was. */
-  function pickMention(person: User) {
+  function pickMention(name: string) {
     if (!mention) return;
     const field = textarea.current;
     const caret = field?.selectionStart ?? content.length;
-    const text = `@${person.name} `;
+    const text = `@${name} `;
     setContent(content.slice(0, mention.start) + text + content.slice(caret));
     setMention(null);
     caretAfter.current = mention.start + text.length;
@@ -444,7 +454,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     event.preventDefault();
     if (!canSend) return;
     const files = drafts.flatMap(d => d.uploaded ? [d.uploaded] : []);
-    const item: Pending = { clientId: crypto.randomUUID(), content: encodeMentions(content.trim(), [...people.values()]), ...(files.length ? { files } : {}), sending: true, error: "" };
+    const item: Pending = { clientId: crypto.randomUUID(), content: encodeMentions(content.trim(), [...people.values()], canMentionEveryone), ...(files.length ? { files } : {}), sending: true, error: "" };
     setPending(current => [...current, item]);
     setContent("");
     setMention(null);
@@ -490,10 +500,10 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   const lastOwn = [...messages].reverse().find(item => item.author.id === self?.id && !item.discordId);
   const enterToSend = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
-    if (suggestions.length) {
+    if (options.length) {
       const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-      if (move) { event.preventDefault(); setMentionIndex((activeSuggestion + move + suggestions.length) % suggestions.length); return; }
-      if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickMention(suggestions[activeSuggestion]); return; }
+      if (move) { event.preventDefault(); setMentionIndex((activeSuggestion + move + options.length) % options.length); return; }
+      if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickMention(options[activeSuggestion]); return; }
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
     }
     // Like Discord: ↑ in an empty composer edits the last message the user sent.
@@ -509,11 +519,12 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     onKeyDown: enterToSend,
     onPaste: pasteFiles,
     "aria-autocomplete": "list" as const,
-    "aria-controls": suggestions.length ? "mention-suggestions" : undefined,
-    "aria-activedescendant": suggestions.length ? `mention-${suggestions[activeSuggestion].id}` : undefined,
+    "aria-controls": options.length ? "mention-suggestions" : undefined,
+    "aria-activedescendant": options.length
+      ? `mention-${offerEveryone && activeSuggestion === 0 ? "everyone" : suggestions[activeSuggestion - (offerEveryone ? 1 : 0)].id}` : undefined,
   };
-  const mentionList = suggestions.length > 0 && <MentionSuggestions people={suggestions} active={activeSuggestion}
-    onPick={pickMention} onHover={setMentionIndex} />;
+  const mentionList = (options.length > 0 || !!mentionEmpty) && <MentionSuggestions people={suggestions} everyone={offerEveryone}
+    active={activeSuggestion} empty={mentionEmpty} onPick={pickMention} onHover={setMentionIndex} />;
   const emojiButton = <button type="button" className={`icon-button ${room ? "attach-button" : ""} ${emojiOpen ? "active" : ""}`} aria-label="Inserir emoji" title="Emojis"
     aria-haspopup="dialog" aria-expanded={emojiOpen} onPointerDown={event => { if (emojiOpen) event.stopPropagation(); }}
     onClick={() => { setGifOpen(false); setEmojiOpen(open => !open); }}><Smile size={18} /></button>;
@@ -584,7 +595,8 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         const newDay = !previous || new Date(previous.createdAt).toDateString() !== new Date(item.createdAt).toDateString();
         const grouped = !!previous && !newDay && previous.author.id === item.author.id
           && new Date(item.createdAt).getTime() - new Date(previous.createdAt).getTime() < GROUP_WINDOW;
-        const mentionsMe = !!self && !!item.mentions?.some(person => person.id === self.id);
+        const mentionsMe = !!self && (!!item.mentions?.some(person => person.id === self.id)
+          || (item.author.id !== self.id && mentionsEveryone(item.content)));
         const own = !!self && item.author.id === self.id && !item.discordId;
         const isEditing = editing?.id === item.id;
         return <Fragment key={item.id}>

@@ -155,6 +155,9 @@ const MAX_REACTIONS: usize = 20;
 /// Most people one message can mention.
 const MAX_MENTIONS: usize = 20;
 
+/// Mentions every member of the server, like Discord's `@everyone`.
+pub(crate) const EVERYONE: &str = "<@everyone>";
+
 /// People mentioned as `<@user-id>` in a message, without repeats.
 pub(crate) fn mentioned(content: &str) -> Vec<Uuid> {
     let mut ids = Vec::new();
@@ -426,7 +429,7 @@ pub(crate) async fn send(
         attachments.push(Attachment::gif(gif.validate()?));
     }
     check_content(content, !attachments.is_empty())?;
-    check_mentions(&state.db, &channel, content).await?;
+    check_mentions(&state.db, &channel, user.id, content).await?;
     let attachments = serde_json::to_value(&attachments).map_err(ApiError::internal)?;
     let tx = state.db.begin().await?;
     lock_channel(&tx, id).await?;
@@ -519,12 +522,33 @@ fn check_content(content: &str, attachments: bool) -> ApiResult<()> {
     Ok(())
 }
 
-/// Only people who can read the channel can be mentioned in it.
+/// Only people who can read the channel can be mentioned in it, and only the
+/// owner and moderators can mention everyone of a server.
 async fn check_mentions(
     db: &DatabaseConnection,
     channel: &channel::Model,
+    author: Uuid,
     content: &str,
 ) -> ApiResult<()> {
+    if content.contains(EVERYONE) {
+        let Some(server) = channel.server_id else {
+            return Err(ApiError::bad("@everyone só pode ser usado em servidores."));
+        };
+        let owner = server::Entity::find_by_id(server)
+            .one(db)
+            .await?
+            .is_some_and(|s| s.owner_id == author);
+        let moderator = member::Entity::find_by_id((server, author))
+            .one(db)
+            .await?
+            .is_some_and(|m| m.role == "moderator");
+        if !owner && !moderator {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Só o dono e os moderadores podem mencionar @everyone.".into(),
+            ));
+        }
+    }
     let ids = mentioned(content);
     if ids.is_empty() {
         return Ok(());
@@ -607,7 +631,7 @@ pub(crate) async fn edit(
     if content == message.content {
         return Ok(Json(view_one(&state.db, message).await?));
     }
-    check_mentions(&state.db, &channel, content).await?;
+    check_mentions(&state.db, &channel, user.id, content).await?;
     let mut active: message::ActiveModel = message.into();
     active.content = Set(content.into());
     active.edited_at = Set(Some(Utc::now()));
