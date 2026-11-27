@@ -62,8 +62,10 @@ impl SystemAudio {
 }
 
 /// Silence is added once nothing arrived for this long...
+#[cfg_attr(not(windows), allow(dead_code))]
 const GAP: Duration = Duration::from_millis(60);
 /// ...and the clock is re-anchored when real audio runs this far ahead of it.
+#[cfg_attr(not(windows), allow(dead_code))]
 const AHEAD: Duration = Duration::from_millis(100);
 
 fn frames(duration: Duration) -> u64 {
@@ -72,6 +74,7 @@ fn frames(duration: Duration) -> u64 {
 
 /// Turns irregular captured audio into steady chunks, filling silence while
 /// nothing plays.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) struct Pacer {
     sink: ChunkSink,
     pending: Vec<f32>,
@@ -80,6 +83,7 @@ pub(crate) struct Pacer {
     sent: u64,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 impl Pacer {
     pub fn new(sink: ChunkSink, now: Instant) -> Self {
         Self {
@@ -131,53 +135,107 @@ impl Pacer {
     }
 }
 
-/// Audio from several applications, summed. Each source is drained whole:
-/// a source that is behind adds what it has (applications are not in sync
-/// with each other anyway).
+/// Audio a source must have buffered before it joins the mix, so the
+/// irregular fragments it is delivered in never run dry mid-chunk.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const CUSHION: usize = CHUNK_SAMPLES * 3;
+/// More than this buffered for one source means it stalled or runs fast:
+/// its backlog drops back to the cushion.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const MAX_BACKLOG: usize = CHUNK_SAMPLES * 20;
+/// The mixer jumps ahead instead of catching up after a stall this long
+/// (a burst would only arrive late anyway).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const STALL: Duration = Duration::from_millis(200);
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Default)]
-pub(crate) struct Sources {
-    buffers: HashMap<u32, VecDeque<f32>>,
+struct Source {
+    buffer: VecDeque<f32>,
+    /// In the mix; a source that runs dry waits for its cushion again.
+    playing: bool,
 }
 
-/// More than this buffered for one source means it stalled: drop its backlog.
-const MAX_BACKLOG: usize = CHUNK_SAMPLES * 20;
+/// Audio from several applications, summed, sent as one steady 10 ms chunk
+/// per 10 ms of clock. The clock decides when a chunk goes out, never the
+/// sources: they deliver at their own pace and out of step with each other,
+/// and draining them as they arrive would send their audio one after the
+/// other, several times faster than real time.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) struct Mixer {
+    sources: HashMap<u32, Source>,
+    anchor: Instant,
+    /// Frames sent since `anchor`.
+    sent: u64,
+    chunk: Vec<f32>,
+}
 
-impl Sources {
-    #[allow(dead_code)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl Mixer {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            sources: HashMap::new(),
+            anchor: now,
+            sent: 0,
+            chunk: vec![0.0; CHUNK_SAMPLES],
+        }
+    }
+
+    /// Interleaved stereo samples captured from `source`.
     pub fn push(&mut self, source: u32, samples: &[f32]) {
-        let buffer = self.buffers.entry(source).or_default();
-        buffer.extend(samples);
+        let buffer = &mut self.sources.entry(source).or_default().buffer;
+        buffer.extend(
+            samples
+                .iter()
+                .map(|&sample| if sample.is_finite() { sample } else { 0.0 }),
+        );
         if buffer.len() > MAX_BACKLOG {
-            let excess = buffer.len() - CHUNK_SAMPLES;
+            let excess = (buffer.len() - CUSHION) / CHANNELS * CHANNELS;
             buffer.drain(..excess);
         }
     }
 
-    #[allow(dead_code)]
     pub fn remove(&mut self, source: u32) {
-        self.buffers.remove(&source);
+        self.sources.remove(&source);
     }
 
-    /// Everything buffered, mixed; empty when no source has audio.
-    #[allow(dead_code)]
-    pub fn mix(&mut self) -> Vec<f32> {
-        let longest = self
-            .buffers
-            .values()
-            .map(|buffer| buffer.len() / CHANNELS * CHANNELS)
-            .max()
-            .unwrap_or(0);
-        let mut out = vec![0.0_f32; longest];
-        for buffer in self.buffers.values_mut() {
-            let take = buffer.len() / CHANNELS * CHANNELS;
-            for (slot, sample) in out.iter_mut().zip(buffer.drain(..take)) {
+    /// Called regularly: sends every chunk the clock is due, silence
+    /// included while nothing plays.
+    pub fn tick(&mut self, now: Instant, sink: &mut impl FnMut(&[f32])) {
+        let expected = frames(now.saturating_duration_since(self.anchor));
+        if expected > self.sent + frames(STALL) {
+            self.anchor = now;
+            self.sent = 0;
+            return;
+        }
+        while self.sent + CHUNK_FRAMES as u64 <= expected {
+            self.mix();
+            sink(&self.chunk);
+            self.sent += CHUNK_FRAMES as u64;
+        }
+    }
+
+    /// The next chunk: up to 10 ms from every playing source, summed.
+    fn mix(&mut self) {
+        self.chunk.fill(0.0);
+        for source in self.sources.values_mut() {
+            if !source.playing {
+                if source.buffer.len() < CUSHION {
+                    continue;
+                }
+                source.playing = true;
+            }
+            let take = source.buffer.len().min(CHUNK_SAMPLES) / CHANNELS * CHANNELS;
+            for (slot, sample) in self.chunk.iter_mut().zip(source.buffer.drain(..take)) {
                 *slot += sample;
             }
+            if take < CHUNK_SAMPLES {
+                source.playing = false;
+            }
         }
-        for sample in &mut out {
+        for sample in &mut self.chunk {
             *sample = sample.clamp(-1.0, 1.0);
         }
-        out
     }
 }
 
@@ -287,38 +345,107 @@ mod tests {
         assert!(chunks.lock().unwrap().is_empty(), "no silence right after");
     }
 
-    #[test]
-    fn sources_sum_and_clip() {
-        let mut sources = Sources::default();
-        assert!(sources.mix().is_empty());
-        sources.push(1, &[0.25; 8]);
-        sources.push(2, &[0.5; 4]);
-        sources.push(3, &[0.9, 0.9]);
-        sources.push(3, &[0.9, 0.9]);
-        let mixed = sources.mix();
-        assert_eq!(mixed.len(), 8);
-        assert_eq!(&mixed[..2], &[1.0, 1.0]);
-        assert_eq!(&mixed[2..4], &[1.0, 1.0]);
-        assert_eq!(&mixed[4..], &[0.25; 4]);
-        assert!(sources.mix().is_empty(), "drained");
+    /// Drives a mixer for `ms` milliseconds of clock, `step` at a time.
+    fn run_for(mixer: &mut Mixer, start: Instant, ms: u64, out: &mut Vec<Vec<f32>>) {
+        for at in (0..=ms).step_by(5) {
+            mixer.tick(start + Duration::from_millis(at), &mut |chunk: &[f32]| {
+                out.push(chunk.to_vec())
+            });
+        }
     }
 
     #[test]
-    fn sources_keep_whole_frames_and_forget_removed_ones() {
-        let mut sources = Sources::default();
-        sources.push(1, &[0.1, 0.1, 0.1]);
-        assert_eq!(sources.mix().len(), 2);
-        sources.push(1, &[0.1]);
-        assert_eq!(sources.mix().len(), 2, "the odd sample waited");
-        sources.push(2, &[0.3; 4]);
-        sources.remove(2);
-        assert!(sources.mix().is_empty());
+    fn mixer_sends_real_time_whatever_the_sources_deliver() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        let mut out = Vec::new();
+        // Three applications delivering 10 ms each, at different moments.
+        for step in 0..100_u64 {
+            for source in 0..3 {
+                mixer.push(source, &[0.1; CHUNK_SAMPLES]);
+            }
+            for at in [step * 10 + 1, step * 10 + 4, step * 10 + 7] {
+                mixer.tick(start + Duration::from_millis(at), &mut |chunk: &[f32]| {
+                    out.push(chunk.to_vec())
+                });
+            }
+        }
+        // One chunk per 10 ms of clock, not one per source.
+        assert!((99..=100).contains(&out.len()), "{} chunks", out.len());
+        assert!(out.iter().all(|chunk| chunk.len() == CHUNK_SAMPLES));
     }
 
     #[test]
-    fn sources_drop_a_stalled_backlog() {
-        let mut sources = Sources::default();
-        sources.push(1, &vec![0.1; MAX_BACKLOG + CHANNELS]);
-        assert_eq!(sources.mix().len(), CHUNK_SAMPLES);
+    fn mixer_sums_sources_that_arrive_out_of_step() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        mixer.push(1, &vec![0.25; CUSHION]);
+        mixer.push(2, &vec![0.5; CUSHION + CHUNK_SAMPLES]);
+        let mut out = Vec::new();
+        run_for(&mut mixer, start, 10, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].iter().all(|&sample| (sample - 0.75).abs() < 1e-6));
+    }
+
+    #[test]
+    fn mixer_waits_for_a_cushion_and_clips() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        mixer.push(1, &[0.9; CHUNK_SAMPLES]);
+        mixer.push(2, &vec![0.9; CUSHION]);
+        mixer.push(3, &vec![0.9; CUSHION]);
+        let mut out = Vec::new();
+        run_for(&mut mixer, start, 10, &mut out);
+        // Source 1 is still filling its cushion; 2 and 3 clip together.
+        assert!(out[0].iter().all(|&sample| sample == 1.0));
+    }
+
+    #[test]
+    fn mixer_sends_silence_while_nothing_plays() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        let mut out = Vec::new();
+        run_for(&mut mixer, start, 100, &mut out);
+        assert_eq!(out.len(), 10);
+        assert!(out.iter().flatten().all(|&sample| sample == 0.0));
+    }
+
+    #[test]
+    fn mixer_drops_invalid_samples_and_removed_sources() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        let mut samples = vec![0.5; CUSHION];
+        samples[0] = f32::NAN;
+        mixer.push(1, &samples);
+        mixer.push(2, &vec![0.3; CUSHION]);
+        mixer.remove(2);
+        let mut out = Vec::new();
+        run_for(&mut mixer, start, 10, &mut out);
+        assert_eq!(out[0][0], 0.0);
+        assert!(out[0][1..].iter().all(|&sample| sample == 0.5));
+    }
+
+    #[test]
+    fn mixer_trims_a_backlog_to_the_cushion() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        mixer.push(1, &vec![0.1; MAX_BACKLOG + CHANNELS]);
+        assert_eq!(mixer.sources[&1].buffer.len(), CUSHION);
+    }
+
+    #[test]
+    fn mixer_skips_ahead_after_a_stall() {
+        let start = Instant::now();
+        let mut mixer = Mixer::new(start);
+        let mut out = Vec::new();
+        mixer.tick(start + Duration::from_secs(2), &mut |chunk: &[f32]| {
+            out.push(chunk.to_vec())
+        });
+        assert!(out.is_empty(), "no burst of 200 chunks");
+        mixer.tick(
+            start + Duration::from_millis(2010),
+            &mut |chunk: &[f32]| out.push(chunk.to_vec()),
+        );
+        assert_eq!(out.len(), 1);
     }
 }

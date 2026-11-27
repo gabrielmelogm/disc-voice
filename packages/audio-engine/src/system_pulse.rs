@@ -7,7 +7,7 @@
 //! are followed through server events. Everything runs on one thread, with
 //! a standard (non-threaded) mainloop: callbacks only queue events.
 
-use crate::system::{parent_from_stat, ChunkSink, Pacer, Sources, CHANNELS, CHUNK_SAMPLES, RATE};
+use crate::system::{parent_from_stat, ChunkSink, Mixer, CHANNELS, CHUNK_SAMPLES, RATE};
 use libpulse_binding::{
     callbacks::ListResult,
     context::{
@@ -138,7 +138,7 @@ struct Session {
     monitors: HashMap<u32, String>,
     /// Sink inputs waiting for their sink's monitor name.
     waiting: Vec<(u32, u32)>,
-    sources: Sources,
+    mixer: Mixer,
     bytes: Vec<f32>,
 }
 
@@ -194,7 +194,7 @@ impl Session {
             monitors: HashMap::new(),
             waiting: Vec::new(),
             streams: HashMap::new(),
-            sources: Sources::default(),
+            mixer: Mixer::new(Instant::now()),
             bytes: Vec::with_capacity(CHUNK_SAMPLES * 4),
         })
     }
@@ -219,7 +219,7 @@ impl Session {
             return;
         };
         self.streams.remove(&index);
-        self.sources.remove(index);
+        self.mixer.remove(index);
         if let Some(stream) = open_stream(&mut self.context, index, &monitor) {
             self.streams.insert(index, Recorded { stream, sink });
         }
@@ -256,7 +256,7 @@ impl Session {
                 }
                 Event::Removed(index) => {
                     self.streams.remove(&index);
-                    self.sources.remove(index);
+                    self.mixer.remove(index);
                     self.waiting.retain(|&(input, _)| input != index);
                 }
                 Event::Monitor { sink, source } => {
@@ -296,7 +296,7 @@ impl Session {
                             .extend(data.chunks_exact(SAMPLE_BYTES).map(|sample| {
                                 f32::from_ne_bytes(sample.try_into().expect("4-byte chunk"))
                             }));
-                        self.sources.push(index, &self.bytes);
+                        self.mixer.push(index, &self.bytes);
                         let _ = recorded.stream.discard();
                     }
                     Ok(PeekResult::Hole(_)) => {
@@ -308,12 +308,12 @@ impl Session {
         }
         for index in broken {
             self.streams.remove(&index);
-            self.sources.remove(index);
+            self.mixer.remove(index);
         }
     }
 
-    fn run(mut self, sink: ChunkSink, stop: &AtomicBool) {
-        let mut pacer = Pacer::new(sink, Instant::now());
+    fn run(mut self, mut sink: ChunkSink, stop: &AtomicBool) {
+        self.mixer = Mixer::new(Instant::now());
         while !stop.load(Ordering::Relaxed) {
             let busy = match self.mainloop.iterate(false) {
                 IterateResult::Success(dispatched) => dispatched > 0,
@@ -324,12 +324,7 @@ impl Session {
             }
             self.handle();
             self.read();
-            let now = Instant::now();
-            let mixed = self.sources.mix();
-            if !mixed.is_empty() {
-                pacer.push(&mixed, now);
-            }
-            pacer.tick(now);
+            self.mixer.tick(Instant::now(), &mut sink);
             if !busy {
                 thread::sleep(POLL);
             }
