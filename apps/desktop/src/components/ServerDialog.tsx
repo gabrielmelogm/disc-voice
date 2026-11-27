@@ -7,14 +7,14 @@ import type { Realtime } from "../lib/realtime";
 import { DiscordGuildPicker } from "./DiscordGuildPicker";
 import { Avatar, DiscordMark, SoonTag, Switch } from "./ui";
 
+/** Creating a server: choosing how, naming it, or importing it from Discord. */
+export type CreateStep = "choose" | "name" | "discord";
+
 export type DialogMode =
-  | { kind: "create" }
+  | { kind: "create"; step?: CreateStep }
   | { kind: "join"; code?: string }
   | { kind: "invite"; server: Server }
   | { kind: "channel"; server: Server; channelType?: Channel["type"] };
-
-/** Creating a server: choosing how, naming it, or importing it from Discord. */
-type CreateStep = "choose" | "name" | "discord";
 
 export function ServerDialog({ mode, onClose, onServer, onChannel, onOpenServer, realtime }: {
   mode: DialogMode;
@@ -32,7 +32,7 @@ export function ServerDialog({ mode, onClose, onServer, onChannel, onOpenServer,
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [channelType, setChannelType] = useState<Channel["type"]>(mode.kind === "channel" ? mode.channelType || "text" : "text");
-  const [step, setStep] = useState<CreateStep>("choose");
+  const [step, setStep] = useState<CreateStep>(mode.kind === "create" ? mode.step || "choose" : "choose");
   const [discord, setDiscord] = useState<DiscordStatus | null>(null);
   const [linking, setLinking] = useState(false);
 

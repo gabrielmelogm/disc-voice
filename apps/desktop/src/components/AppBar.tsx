@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, ChevronUp, Cloud, HeadphoneOff, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
+  Check, ChevronUp, Cloud, HeadphoneOff, Headphones, Home, LayoutGrid, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
   PhoneOff, Plus, Search, Settings2, Video, VideoOff,
 } from "lucide-react";
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
@@ -128,7 +128,7 @@ export function DeafenButton({ voice, state }: { voice: Voice; state: VoiceState
 }
 
 /** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
+export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onManageServers, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
   user: User;
   /** The status others see (an idle "online" shows as idle). */
   status?: ChosenStatus;
@@ -146,6 +146,8 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   onSelectServer: (server: Server) => void;
   onCreateServer: () => void;
   onJoinServer: () => void;
+  /** Opens the grid with every server ("Gerenciar servidores"). */
+  onManageServers?: () => void;
   onDms: () => void;
   onVoice: () => void;
   onSettings: () => void;
@@ -184,6 +186,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
         </button>)}
         {!servers.length && <p className="menu-empty">Você ainda não está em nenhum servidor.</p>}
         <hr />
+        {onManageServers && <button role="menuitem" onClick={pick(onManageServers)}><span className="menu-icon"><LayoutGrid size={16} /></span>Gerenciar servidores</button>}
         <button role="menuitem" onClick={pick(onCreateServer)}><span className="menu-icon"><Plus size={16} /></span>Criar servidor</button>
         <button role="menuitem" onClick={pick(onJoinServer)}><span className="menu-icon"><LogIn size={16} /></span>Entrar com convite</button>
       </div>}

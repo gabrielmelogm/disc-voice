@@ -336,6 +336,10 @@ export interface Server {
   icon?: string | null;
   /** Absent from older servers. */
   description?: string;
+  /** How many people are in the server; only in the list of the user's servers. */
+  memberCount?: number;
+  /** How many of them have the app open; only in the list of the user's servers. */
+  onlineCount?: number;
 }
 
 /** Bits of `Role.permissions`. */
