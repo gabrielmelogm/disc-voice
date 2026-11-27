@@ -9,9 +9,8 @@ name: Desktop
 # the release notes get a "Qual arquivo baixar?" section. The website's
 # download buttons sign links to the files in releases/latest/.
 #
-# A pull request that changes this workflow, or a manual run, also builds the
-# Linux packages and keeps them as a run artifact, so they can be tried before
-# a release.
+# A pull request that changes this workflow only runs lint + tests, like Windows:
+# neither installer is built outside a release.
 on:
   push:
     branches: [main]
@@ -158,7 +157,7 @@ jobs:
 
   build-linux:
     needs: linux
-    if: github.event_name != 'push'
+    if: github.event_name == 'release'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
