@@ -1037,3 +1037,52 @@ button.cloud-thumb { cursor: zoom-in; }
 @media (max-width: 720px) {
   .roles-settings { grid-template-columns: 1fr; }
 }.action-dialog > form, .settings-section form { display: flex; flex-direction: column; gap: 16px; }
+
+/* Gerenciar servidores: every server in a grid, with a search drawer on the left. */
+.servers-dialog { width: min(1080px, calc(100vw - 48px)); height: min(720px, calc(100vh - 48px)); max-width: none; max-height: none; padding: 0; overflow: hidden; border: 0; border-radius: var(--radius-xl); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-md), 0 0 0 1px var(--line); }
+.servers-dialog::backdrop { background: rgba(10, 8, 14, .55); }
+.servers-dialog[open] { display: flex; }
+.servers-shell { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
+.servers-shell.with-drawer { grid-template-columns: 260px minmax(0, 1fr); }
+.servers-drawer { display: flex; flex-direction: column; gap: 2px; min-height: 0; padding: 20px 14px; overflow-y: auto; background: var(--surface-sunken); animation: servers-drawer-in .16s ease-out; }
+@keyframes servers-drawer-in { from { opacity: 0; transform: translateX(-12px); } }
+.servers-drawer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding-left: 6px; }
+.servers-search svg { left: 12px; }
+.servers-search input.search-input { min-height: 38px; padding: 6px 36px 6px 36px; font-size: 14px; background: var(--fill); }
+.servers-search .search-clear { position: absolute; right: 5px; }
+.servers-search .search-clear svg { position: static; color: currentColor; pointer-events: none; }
+.servers-hint { margin: 8px 6px 18px; color: var(--ink-subtle); font-size: 12px; line-height: 1.4; }
+.servers-drawer-section { margin: 0 0 6px 6px; }
+.servers-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.servers-heading { display: flex; align-items: flex-start; gap: 8px; flex: none; padding: 24px 24px 16px 28px; }
+.servers-heading > div { flex: 1; min-width: 0; }
+.servers-heading h2 { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+.servers-heading p { margin-top: 2px; color: var(--ink-muted); font-size: 13px; }
+.servers-close { background: var(--fill); color: var(--ink); }
+.servers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); align-content: start; gap: 12px; flex: 1; min-height: 0; margin: 0; padding: 0 24px 96px 28px; overflow-y: auto; list-style: none; }
+.server-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; height: 100%; min-height: 136px; padding: 16px; border: 0; border-radius: var(--radius-lg); background: var(--surface-sunken); color: var(--ink); text-align: left; transition: background-color .15s, box-shadow .15s; }
+.server-card:hover { background: var(--fill); }
+.server-card.current { box-shadow: inset 0 0 0 1.5px var(--brand-soft); }
+.server-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; width: 100%; margin-bottom: auto; padding-bottom: 14px; }
+.server-card-avatar .avatar { width: 44px; height: 44px; border-radius: var(--radius-md); font-size: 15px; }
+.server-card-avatar.tone-green .avatar { background: var(--success-soft); color: var(--success-text); }
+.server-card-avatar.tone-yellow .avatar { background: var(--warning-soft); color: var(--warning-text); }
+.server-card-avatar.tone-red .avatar { background: var(--danger-soft); color: var(--danger-text); }
+.server-card-avatar .call-badge { right: -3px; bottom: -3px; }
+.here-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: var(--radius-full); background: var(--brand-soft); color: var(--brand-text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.server-card-name { width: 100%; overflow: hidden; font-size: 15px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+.server-card-meta { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+.server-card-meta .status-dot { margin-left: 2px; }
+.server-card.add-card { align-items: center; justify-content: center; gap: 12px; border: 1.5px dashed var(--fill-hover); background: transparent; color: var(--ink-muted); font-size: 13px; font-weight: 600; text-align: center; }
+.server-card.add-card:hover { border-color: var(--ink-subtle); background: var(--surface-sunken); color: var(--ink); }
+.add-card-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--fill); color: var(--ink); }
+.servers-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; flex: 1; padding: 32px 32px 96px; text-align: center; }
+.servers-empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: var(--radius-md); background: var(--surface-sunken); color: var(--ink-muted); }
+.servers-empty h3 { font-size: 16px; font-weight: 800; }
+.servers-empty p { max-width: 340px; color: var(--ink-muted); font-size: 13px; }
+.servers-empty .button-row { justify-content: center; margin-top: 8px; gap: 8px; }
+@media (max-width: 720px) {
+  .servers-shell.with-drawer { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .servers-drawer { padding-bottom: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .servers-drawer { animation: none; } }

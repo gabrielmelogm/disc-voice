@@ -599,6 +599,12 @@ struct ServerView {
     /// Icon URL (servers imported from Discord), or null for initials.
     icon: Option<String>,
     description: String,
+    /// How many people are in the server. Only in the user's server list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    member_count: Option<u64>,
+    /// How many of them have the app open. Only in the user's server list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    online_count: Option<u64>,
 }
 impl From<server::Model> for ServerView {
     fn from(s: server::Model) -> Self {
@@ -608,6 +614,8 @@ impl From<server::Model> for ServerView {
             owner_id: s.owner_id,
             icon: s.icon_url,
             description: s.description,
+            member_count: None,
+            online_count: None,
         }
     }
 }
@@ -643,7 +651,35 @@ async fn list_servers(
         .order_by_asc(server::Column::Id)
         .all(&state.db)
         .await?;
-    Ok(Json(servers.into_iter().map(Into::into).collect()))
+    // Members and who of them is online, for the "Seus servidores" grid.
+    use std::collections::{HashMap, HashSet};
+    let memberships = member::Entity::find()
+        .filter(member::Column::ServerId.is_in(servers.iter().map(|s| s.id)))
+        .all(&state.db)
+        .await?;
+    let people: HashSet<Uuid> = memberships.iter().map(|m| m.user_id).collect();
+    let online = state.realtime.online(&people);
+    let mut counts: HashMap<Uuid, (u64, u64)> = HashMap::new();
+    for membership in &memberships {
+        let count = counts.entry(membership.server_id).or_default();
+        count.0 += 1;
+        if online.contains(&membership.user_id) {
+            count.1 += 1;
+        }
+    }
+    Ok(Json(
+        servers
+            .into_iter()
+            .map(|s| {
+                let (members, live) = counts.get(&s.id).copied().unwrap_or_default();
+                ServerView {
+                    member_count: Some(members),
+                    online_count: Some(live),
+                    ..ServerView::from(s)
+                }
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Deserialize)]

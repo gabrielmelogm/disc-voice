@@ -80,5 +80,11 @@ export function useUnread(realtime: Realtime, revision: number, { userId, server
   const counts = useMemo(() => Object.fromEntries(Object.values(reads).map(read => [read.channelId, read.unread])), [reads]);
   const dmUnread = useMemo(() => Object.values(reads).reduce((sum, read) => read.serverId === null ? sum + read.unread : sum, 0), [reads]);
 
-  return { counts, dmUnread, markRead };
+  /** Unread messages per server, for the server list. */
+  const serverUnread = useMemo(() => Object.values(reads).reduce<Record<string, number>>((sums, read) => {
+    if (read.serverId !== null && read.unread > 0) sums[read.serverId] = (sums[read.serverId] || 0) + read.unread;
+    return sums;
+  }, {}), [reads]);
+
+  return { counts, dmUnread, serverUnread, markRead };
 }

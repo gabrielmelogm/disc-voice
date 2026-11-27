@@ -32,6 +32,7 @@ import { SearchDialog, type SearchPick } from "./SearchDialog";
 import { ServerRolesProvider, type ServerRoles } from "./ServerRoles";
 import { ServerSettings, settingsPages } from "./ServerSettings";
 import { ServerDialog, type DialogMode } from "./ServerDialog";
+import { ServersDialog } from "./ServersDialog";
 import { Settings, type SettingsPage } from "./Settings";
 import { TextChannel } from "./TextChannel";
 import { CallStatus, VoiceChannel, VoiceDevices } from "./VoiceChannel";
@@ -59,6 +60,8 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [leaving, setLeaving] = useState(false);
   const [searching, setSearching] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  // "Gerenciar servidores": the grid with every server.
+  const [serversOpen, setServersOpen] = useState(false);
   // Message to scroll to when its text channel opens (from a search result).
   const [focusMessage, setFocusMessage] = useState<{ channelId: string; messageId: string; nonce: number } | null>(null);
   // Channel to open once another server's channel list arrives (e.g. returning to a call).
@@ -390,6 +393,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         <AppBar user={user} status={myStatus.status} chosenStatus={myStatus.chosen} onStatus={myStatus.choose} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
           canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
+          onManageServers={() => setServersOpen(true)}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}
           onSettings={() => openSettings("overview")} onVoiceSettings={() => openSettings("voice")} onSearch={() => setSearching(true)} onFiles={() => setFilesOpen(true)} />
       </div>
@@ -408,6 +412,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     {settingsOpen && <Settings user={user} page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsOpen(false)} onLogout={() => void logout()}
       leaving={leaving} error={logoutError} inCall={inCall} callDevices={callDevices} onUserChange={onUserChange} realtime={realtime.client} />}
     {search}
+    {serversOpen && <ServersDialog servers={servers} currentId={view === "server" ? server?.id : undefined}
+      callServerId={inCall ? voiceState.channel?.serverId ?? undefined : undefined} unread={unread.serverUnread} onClose={() => setServersOpen(false)}
+      onOpen={selectServer} onCreate={() => setDialog({ kind: "create" })} onJoin={() => setDialog({ kind: "join" })}
+      onImport={() => setDialog({ kind: "create", step: "discord" })} />}
     {filesOpen && <FilesDrawer onClose={() => setFilesOpen(false)} />}
     {newDm && <NewMessageDialog selfId={user.id} onClose={() => setNewDm(false)} onPick={async person => { await messagePerson(person); setNewDm(false); }} />}
     {discordOpen && server && <DiscordImportDialog server={server} realtime={realtime.client} onClose={() => setDiscordOpen(false)}

@@ -3184,6 +3184,18 @@ async fn server_members_roles_and_presence() {
     );
     assert!(members[0]["joinedAt"].is_string());
 
+    // The server list counts the members and who of them is online.
+    let (status, servers) = call(&app, "GET", "/servers", Some(&bia), None).await;
+    assert_eq!(status, StatusCode::OK, "{servers}");
+    let listed = servers
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == server_id)
+        .unwrap();
+    assert_eq!(listed["memberCount"], 2);
+    assert_eq!(listed["onlineCount"], 1);
+
     // Server members see each other connect, change status and leave, live.
     let (mut bia_ws, _) = socket(&url, &bia).await;
     assert_eq!(presence_of(&mut ana_ws, &bia_id).await, "online");

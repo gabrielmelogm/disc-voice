@@ -39,6 +39,15 @@ describe("unread state", () => {
     expect(hook.result.current.dmUnread).toBe(4);
   });
 
+  it("adds up each server's channels for the server list", async () => {
+    const { hook, emit } = await setup();
+    expect(hook.result.current.serverUnread).toEqual({ "server-1": 2 });
+    emit({ type: "message.created", message: chat("11", "geral") });
+    expect(hook.result.current.serverUnread).toEqual({ "server-1": 3 });
+    act(() => hook.result.current.markRead("geral", "11"));
+    expect(hook.result.current.serverUnread).toEqual({});
+  });
+
   it("counts new messages from other people, not the user's own", async () => {
     const { hook, emit } = await setup();
     emit({ type: "message.created", message: chat("11", "geral") });
