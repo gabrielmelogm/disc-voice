@@ -1,6 +1,6 @@
 [package]
 name = "disc-voice-desktop"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 description = "Comunidades, servidores e dispositivos de voz e vídeo para Windows e Linux"
 edition = "2021"
 rust-version = "1.85"
