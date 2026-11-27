@@ -42,6 +42,9 @@ export function useMembers(realtime: Realtime, revision: number, serverId: strin
     if ((event.type === "member.joined" || event.type === "member.updated") && event.serverId === serverId) {
       setMembers(current => upsert(current, event.member));
     }
+    if (event.type === "member.left" && event.serverId === serverId) {
+      setMembers(current => current.filter(m => m.user.id !== event.userId));
+    }
     if (event.type === "user.updated") {
       setMembers(current => current.some(m => m.user.id === event.user.id)
         ? current.map(m => m.user.id === event.user.id ? { ...m, user: event.user } : m)

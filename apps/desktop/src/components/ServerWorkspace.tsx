@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LogIn, MessageSquareText, Plus, RefreshCw, WifiOff, X } from "lucide-react";
 import type { Channel, DiscordAccount, Server, User, VoiceParticipant } from "@disc-voice/shared";
 import { api, message } from "../lib/api";
+import { accessOf, can, rolesOf, type Access, type MemberBadge } from "../lib/roles";
 import { usePictureInPicture } from "../lib/pip";
 import { onTrayAction, recentServers, rememberServer, syncTray } from "../lib/tray";
 import { useDiscordCallPresence } from "../lib/discordPresence";
@@ -10,6 +11,7 @@ import { useActivities } from "../hooks/useActivities";
 import { useDirectMessages } from "../hooks/useDirectMessages";
 import { useFriends } from "../hooks/useFriends";
 import { useMembers } from "../hooks/useMembers";
+import { useRoles } from "../hooks/useRoles";
 import { usePresenceStatus } from "../hooks/usePresenceStatus";
 import { useNotifications } from "../hooks/useNotifications";
 import { useRealtime } from "../hooks/useRealtime";
@@ -27,6 +29,8 @@ import { DiscordImportDialog } from "./DiscordImportDialog";
 import { DiscordOnboarding } from "./DiscordOnboarding";
 import { ProfileCardProvider, useProfileCard } from "./ProfileCard";
 import { SearchDialog, type SearchPick } from "./SearchDialog";
+import { ServerRolesProvider, type ServerRoles } from "./ServerRoles";
+import { ServerSettings, settingsPages } from "./ServerSettings";
 import { ServerDialog, type DialogMode } from "./ServerDialog";
 import { Settings, type SettingsPage } from "./Settings";
 import { TextChannel } from "./TextChannel";
@@ -70,10 +74,13 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const dms = useDirectMessages(realtime.client, realtime.revision);
   const friends = useFriends(realtime.client, realtime.revision);
   const members = useMembers(realtime.client, realtime.revision, selected);
+  const serverRoles = useRoles(realtime.client, realtime.revision, selected);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  // Why a server disappeared (deleted by its owner, or the user was banned).
+  const [notice, setNotice] = useState("");
   const myStatus = usePresenceStatus(realtime.client, realtime.revision);
   const [membersOpen, setMembersOpen] = useState(false);
   const presence = Object.fromEntries(friends.friends.map(f => [f.user.id, f.status]));
-  const roles = Object.fromEntries(members.members.map(m => [m.user.id, m.role]));
   const people = members.members.map(m => m.user);
   // The open conversation; none shows the friends page.
   const [dmId, setDmId] = useState<string | null>(null);
@@ -81,6 +88,30 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const [dmError, setDmError] = useState("");
   const unread = useUnread(realtime.client, realtime.revision, { userId: user.id, serverId: selected });
   const server = servers.find(s => s.id === selected);
+  const rolesValue = useMemo<ServerRoles | null>(() => {
+    if (!server) return null;
+    const badges: Record<string, MemberBadge> = {};
+    const access: Record<string, Access> = {};
+    for (const member of members.members) {
+      badges[member.user.id] = { owner: member.owner, roles: rolesOf(member, serverRoles.roles) };
+      access[member.user.id] = accessOf(member, serverRoles.roles);
+    }
+    // The owner can do everything even before the members list arrives.
+    const self = access[user.id] ?? accessOf(server.ownerId === user.id ? { owner: true, roles: [] } : undefined, serverRoles.roles);
+    return { serverId: server.id, serverName: server.name, roles: serverRoles.roles, badges, access, self };
+  }, [server, members.members, serverRoles.roles, user.id]);
+  const selfAccess = rolesValue?.self;
+  const serversRef = useRef(servers);
+  serversRef.current = servers;
+
+  /** A server the user lost: gone from the list, and closed (with its dialogs) if it was open. */
+  const removeServer = useCallback((id: string, reason: string) => {
+    const rest = serversRef.current.filter(s => s.id !== id);
+    setServers(current => current.filter(s => s.id !== id));
+    setSelected(open => open === id ? rest[0]?.id ?? null : open);
+    setDialog(current => current && "server" in current && current.server.id === id ? null : current);
+    setNotice(reason);
+  }, []);
   const channel = channels.find(c => c.id === channelId);
   const conversation = dms.conversations.find(c => c.channel.id === dmId);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
@@ -116,7 +147,14 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       setProfiles(current => ({ ...current, [event.user.id]: event.user }));
       if (event.user.id === user.id) onUserChange(event.user);
     }
-  }), [realtime.client, selected, user.id, onUserChange]);
+    if (event.type === "server.updated") {
+      setServers(current => current.map(s => s.id === event.server.id ? { ...s, ...event.server } : s));
+    }
+    if (event.type === "server.deleted" || event.type === "server.banned") {
+      removeServer(event.serverId, event.type === "server.deleted"
+        ? `O servidor ${event.serverName} foi excluído.` : `Você foi banido de ${event.serverName}.`);
+    }
+  }), [realtime.client, selected, user.id, onUserChange, removeServer]);
 
   useEffect(() => { if (realtime.status !== "connected") setParticipants({}); }, [realtime.status]);
 
@@ -175,7 +213,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     window.addEventListener("keydown", open);
     return () => window.removeEventListener("keydown", open);
   }, []);
-  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); setDiscordOpen(false); setMembersOpen(false); }, [selected]);
+  useEffect(() => { setParticipants({}); setChannels([]); setChannelId(null); setDiscordOpen(false); setMembersOpen(false); setServerSettingsOpen(false); }, [selected]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -290,6 +328,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     finally { setLeaving(false); }
   }
 
+  const closeServerSettings = useCallback(() => setServerSettingsOpen(false), []);
   const callDevices = <VoiceDevices voice={voice} state={voiceState} />;
   const visibleProfiles = { ...profiles, [user.id]: user };
   const search = searching && <SearchResultsHost onClose={() => setSearching(false)} onPick={pickResult} />;
@@ -302,22 +341,25 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     void messagePerson(person).catch(cause => { setDmError(message(cause)); show("dms"); });
   };
 
-  return <ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
+  return <ServerRolesProvider value={view === "server" ? rolesValue : null}><ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
     {view === "dms" ? <DirectMessagesSidebar conversations={dms.conversations} selectedId={dmId} selfId={user.id} unread={unread.counts} presence={presence}
       friendsOpen={!dmId} requests={friends.incoming.length} loading={dms.loading}
       error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onFriends={() => { setDmError(""); setDmId(null); }}
       onNew={() => setNewDm(true)} onRetry={() => { setDmError(""); dms.retry(); }} />
     : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId} unread={unread.counts}
       participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
-      onSelect={openChannel} onJoin={joinVoice} onCreate={type => setDialog({ kind: "channel", server, channelType: type })}
-      onInvite={() => setDialog({ kind: "invite", server })} onReload={() => setChannelReload(n => n + 1)}
-      onDiscord={server.ownerId === user.id ? () => setDiscordOpen(true) : undefined} /> : <aside className="sidebar">
+      onSelect={openChannel} onJoin={joinVoice}
+      onCreate={selfAccess && can(selfAccess, "manageChannels") ? type => setDialog({ kind: "channel", server, channelType: type }) : undefined}
+      onInvite={selfAccess && can(selfAccess, "createInvite") ? () => setDialog({ kind: "invite", server }) : undefined} onReload={() => setChannelReload(n => n + 1)}
+      onDiscord={server.ownerId === user.id ? () => setDiscordOpen(true) : undefined}
+      onSettings={selfAccess && settingsPages(selfAccess).length ? () => setServerSettingsOpen(true) : undefined} /> : <aside className="sidebar">
       <div className="sidebar-title"><h2>Seu espaço</h2></div>
       <p className="sidebar-status">{loading ? "Carregando…" : "Crie um servidor ou entre pelo link de um amigo."}</p>
     </aside>}
 
     <div className={`stage ${viewingCall ? "dark-stage" : ""}`}>
       {realtime.status !== "connected" && !loading && <p className="connection-banner" role="status"><WifiOff size={15} />{realtime.status === "reconnecting" ? "Reconectando ao servidor…" : "Conectando ao servidor…"}</p>}
+      {notice && <p className="notice-banner" role="status">{notice}<button type="button" className="icon-button small" aria-label="Fechar aviso" onClick={() => setNotice("")}><X size={15} /></button></p>}
       {error && <div className="workspace-error"><p className="error-banner" role="alert">{error}</p><button className="button secondary" onClick={() => setReload(n => n + 1)} disabled={loading}>Tentar novamente</button></div>}
 
       {view === "dms" ? (dmId
@@ -327,15 +369,15 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         channelError && !channel ? <div className="empty-state"><p role="alert">{channelError}</p><button className="button secondary" onClick={() => setChannelReload(n => n + 1)}>Tentar novamente</button></div>
         : channelLoading && !channel ? <div className="empty-state" role="status">Carregando canais…</div>
         : channel?.type === "text" ? <main className="channel-main"><ChannelHeader channel={channel} memberCount={members.members.length} /><TextChannel key={`${channel.id}:${focusMessage?.channelId === channel.id ? focusMessage.nonce : ""}`} channel={channel} realtime={realtime.client} revision={realtime.revision} self={user}
-          roles={roles} members={people} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
+          members={people} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"} pip={pip.active}
-          realtime={realtime.client} revision={realtime.revision} self={user} roles={roles} members={people}
+          realtime={realtime.client} revision={realtime.revision} self={user} members={people}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
           <span className="empty-icon"><MessageSquareText size={34} /></span>
           <h2>{`Bem-vindo a ${server.name}`}</h2>
-          <p>Organize sua comunidade criando uma conversa de texto ou uma sala de voz.</p>
-          <button className="button primary" onClick={() => setDialog({ kind: "channel", server })}><Plus size={16} />Criar primeiro canal</button>
+          <p>{server.description || "Organize sua comunidade criando uma conversa de texto ou uma sala de voz."}</p>
+          {selfAccess && can(selfAccess, "manageChannels") && <button className="button primary" onClick={() => setDialog({ kind: "channel", server })}><Plus size={16} />Criar primeiro canal</button>}
         </div>
       ) : <div className="empty-state welcome-state">
         <span className="eyebrow">Seu próximo encontro começa aqui</span>
@@ -356,6 +398,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
 
     {showDetails && <ChannelDetails user={user} selfStatus={myStatus.status} members={members} voiceChannels={voiceChannels} participants={participants}
       voiceState={voiceState} onJoin={joinVoice} onShowMembers={() => setMembersOpen(true)} />}
+    {serverSettingsOpen && server && <ServerSettings server={server} members={members.members} onClose={closeServerSettings} />}
     {membersOpen && server && <MembersDialog server={server} self={user} selfStatus={myStatus.status} members={members.members}
       rooms={roomPresence(voiceChannels, voiceOccupants(participants, voiceState))} onClose={() => setMembersOpen(false)} />}
     {showProfile && conversation && <DirectProfilePanel key={conversation.user.id} user={visibleProfiles[conversation.user.id] || conversation.user}
@@ -378,7 +421,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       }
     }} />}
     {pip.active && pip.screen && <PipView voice={voice} state={voiceState} screen={pip.screen} />}
-  </div></ProfileCardProvider>;
+  </div></ProfileCardProvider></ServerRolesProvider>;
 }
 
 /** The search dialog, inside the profile card host so people results open their card. */

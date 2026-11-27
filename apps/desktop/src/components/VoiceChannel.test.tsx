@@ -7,6 +7,8 @@ import type { Realtime } from "../lib/realtime";
 import type { Voice, VoiceState } from "../lib/voice";
 import { CameraButton, DeafenButton, MicButton, ScreenButton } from "./AppBar";
 import { arrangeTiles, moveTile, signalLevel, VoiceChannel } from "./VoiceChannel";
+import { ServerRolesProvider } from "./ServerRoles";
+import { serverRoles } from "../test/serverRoles";
 
 const channel = { id: "voice-1", serverId: "server-1", name: "conversa", type: "voice" as const };
 const user = { id: "user-1", email: "amigo@example.com", name: "Amigo" };
@@ -356,8 +358,9 @@ describe("VoiceChannel room chat", () => {
   it("loads the room history, shows roles and takes messages live", async () => {
     vi.spyOn(api, "messages").mockResolvedValue({ messages: [sent("1", "Começando a pauta", owner)], hasMore: false });
     const live = realtime();
-    render(<VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online
-      realtime={live.client} revision={1} self={user} roles={{ [owner.id]: "owner" }} />);
+    render(<ServerRolesProvider value={serverRoles(user.id, [{ user: owner, owner: true, roles: [] }])}>
+      <VoiceChannel channel={channel} voice={voice() as unknown as Voice} state={state()} participants={[self, friend]} online
+        realtime={live.client} revision={1} self={user} /></ServerRolesProvider>);
     const panel = screen.getByRole("complementary", { name: "Chat da chamada" });
     expect(await within(panel).findByText("Começando a pauta")).toBeVisible();
     expect(within(panel).getByText("Dono")).toHaveClass("role-badge");

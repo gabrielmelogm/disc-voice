@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import type { Channel, ChatMessage, CloudFile, GifChoice, MemberRole, MessagePage, Reaction, User } from "@disc-voice/shared";
+import type { Channel, ChatMessage, CloudFile, GifChoice, MessagePage, Reaction, User } from "@disc-voice/shared";
 import { FileText, History, MessageSquareText, Plus, SendHorizontal, Smile, Upload, X } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
@@ -7,12 +7,13 @@ import { dayLabel, messageTime } from "../lib/display";
 import { fileProblem, MAX_FILES_PER_MESSAGE, uploadFile } from "../lib/files";
 import type { Realtime } from "../lib/realtime";
 import { encodeMentions, everyoneMatches, mentionMatches, mentionQuery, mentionsEveryone, mentionText } from "../lib/mentions";
+import { nameColor } from "../lib/roles";
 import { EmojiPicker } from "./EmojiPicker";
 import { GifImage, GifPicker } from "./GifPicker";
 import { applyReaction, DeleteMessageDialog, MentionSuggestions, MessageToolbar, Reactions } from "./MessageActions";
 import { Attachments, fileSize, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
-import { RoleBadge } from "./Members";
 import { ProfileButton } from "./ProfileCard";
+import { TopRoleBadge, useCan, useServerRoles } from "./ServerRoles";
 import { Avatar } from "./ui";
 
 const GROUP_WINDOW = 7 * 60_000;
@@ -84,14 +85,14 @@ function focused() {
  * `onRead`: called with the newest message while the user can see it (window
  * focused and the list scrolled to the bottom).
  * `peer`: the other person, when the channel is a direct conversation.
- * `roles`: server roles by user id, shown as a badge next to the author.
+ * Role badges and permissions come from the open server (`ServerRolesProvider`).
  * `members`: people of the server, offered when typing `@` (in a direct
  * conversation, the other person).
  * `room`: the chat of a voice room, in the narrow panel next to the call.
  */
-export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, roles, members = [], room = false }: {
+export function TextChannel({ channel, realtime, revision, self, focusId, onRead, peer, members = [], room = false }: {
   channel: Channel; realtime: Realtime; revision: number; self?: User; focusId?: string;
-  onRead?: (messageId: string) => void; peer?: User; roles?: Record<string, MemberRole>;
+  onRead?: (messageId: string) => void; peer?: User;
   /** People of the server, who can be mentioned with `@`. */
   members?: User[]; room?: boolean;
 }) {
@@ -186,8 +187,12 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   // Members (or the other person) can be mentioned; one's own name stays out of the list.
   const mentionable = (members.length ? members : peer ? [peer] : []).filter(person => person.id !== self?.id);
   // Like Discord, only the owner and moderators reach everyone, and only in servers.
-  const selfRole = self ? roles?.[self.id] : undefined;
-  const canMentionEveryone = !!channel.serverId && !peer && (selfRole === "owner" || selfRole === "moderator");
+  // Roles and permissions of the open server (none in a direct conversation).
+  const { badges } = useServerRoles();
+  const mayMentionEveryone = useCan("mentionEveryone");
+  const mayDeleteAny = useCan("manageMessages");
+  const canMentionEveryone = mayMentionEveryone && !!channel.serverId && !peer;
+  const canDeleteAny = mayDeleteAny && !!channel.serverId && !peer;
   const suggestions = mention ? mentionMatches(mentionable, mention.query) : [];
   const offerEveryone = !!mention && canMentionEveryone && everyoneMatches(mention.query);
   /** The names offered, `everyone` first when it fits. */
@@ -604,7 +609,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
           <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""} ${mentionsMe ? "mentions-me" : ""} ${isEditing ? "is-editing" : ""}`}>
             {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} /></ProfileButton>}
             <div className="message-body">
-              {!grouped && <div className="message-meta"><strong><ProfileButton user={item.author} /></strong><RoleBadge role={roles?.[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
+              {!grouped && <div className="message-meta"><strong style={{ color: nameColor(badges[item.author.id]) }}><ProfileButton user={item.author} /></strong><TopRoleBadge badge={badges[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
               {isEditing && editing ? <form className="message-edit" onSubmit={event => { event.preventDefault(); void saveEdit(item); }}>
                 <label className="sr-only" htmlFor={`edit-${item.id}`}>Editar mensagem</label>
                 <textarea id={`edit-${item.id}`} autoFocus maxLength={4000} rows={Math.min(8, editing.text.split("\n").length)} value={editing.text} disabled={editing.saving}
@@ -626,7 +631,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
               {!!item.reactions?.length && <Reactions reactions={item.reactions} names={names} selfId={self?.id}
                 onToggle={(emoji, add) => void toggleReaction(item, emoji, add)} onAdd={() => openReactions(item.id)} />}
             </div>
-            {self && !isEditing && <MessageToolbar own={own}
+            {self && !isEditing && <MessageToolbar own={own} canDelete={own || canDeleteAny}
               onReact={emoji => void toggleReaction(item, emoji, !item.reactions?.some(r => r.emoji === emoji && r.users.includes(self.id)))}
               onPicker={() => openReactions(item.id)} onEdit={() => startEditing(item)}
               onDelete={immediately => immediately ? void deleteMessage(item) : setDeleting({ message: item, busy: false, error: "" })} />}
@@ -647,7 +652,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       </article>)}
     </div>
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
-    {deleting && <DeleteMessageDialog message={deleting.message} busy={deleting.busy} error={deleting.error}
+    {deleting && <DeleteMessageDialog message={deleting.message} busy={deleting.busy} error={deleting.error} selfId={self?.id}
       onConfirm={() => void deleteMessage(deleting.message)} onClose={() => setDeleting(null)} />}
     {room ? <form className="composer room-composer" onSubmit={submit}>
       {gifPicker}

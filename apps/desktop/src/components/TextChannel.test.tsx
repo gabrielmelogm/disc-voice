@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, RealtimeEvent } from "@disc-voice/shared";
 import { refreshMessages, TextChannel } from "./TextChannel";
+import { ServerRolesProvider } from "./ServerRoles";
 import type { Realtime } from "../lib/realtime";
 import { api } from "../lib/api";
+import { everyone, role, serverRoles } from "../test/serverRoles";
 
 const channel = { id: "channel-1", serverId: "server-1", name: "geral", type: "text" as const };
 const author = { id: "user-1", email: "amigo@example.com", name: "Amigo" };
@@ -225,19 +227,19 @@ describe("text chat", () => {
       expect(screen.queryByRole("option")).not.toBeInTheDocument();
     });
 
-    it("offers @everyone to the owner and moderators only", async () => {
+    it("offers @everyone only to who may mention everyone", async () => {
       const user = userEvent.setup();
       vi.spyOn(api, "messages").mockResolvedValue({ messages: [], hasMore: false });
       const send = vi.spyOn(api, "sendMessage").mockImplementation(async (_, clientId, content) => ({ ...chat("5", content), clientId, author: me }));
-      const { unmount } = render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
-        roles={{ [me.id]: "member", [ana.id]: "owner" }} />);
+      const plain = serverRoles(me.id, [{ user: me, owner: false, roles: [] }, { user: ana, owner: true, roles: [] }]);
+      const { unmount } = render(<ServerRolesProvider value={plain}><TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]} /></ServerRolesProvider>);
       await user.type(screen.getByRole("textbox"), "@ev");
       expect(screen.queryByRole("option", { name: /@everyone/ })).not.toBeInTheDocument();
       expect(screen.getByRole("listbox")).toHaveTextContent("Ninguém encontrado");
       unmount();
 
-      render(<TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]}
-        roles={{ [me.id]: "moderator" }} />);
+      const announcer = serverRoles(me.id, [{ user: me, owner: false, roles: ["mod"] }], [role("mod", "Avisos", 1, 32), everyone()]);
+      render(<ServerRolesProvider value={announcer}><TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} members={[me, ana]} /></ServerRolesProvider>);
       const field = screen.getByRole("textbox");
       await user.type(field, "@");
       expect(screen.getByRole("option", { name: /@everyone/ })).toHaveAttribute("aria-selected", "true");
@@ -307,6 +309,33 @@ describe("text chat", () => {
       await waitFor(() => expect(screen.queryByText("Minha")).not.toBeInTheDocument());
       live.emit({ type: "message.deleted", channelId: channel.id, messageId: "1" });
       expect(screen.queryByText("Dela")).not.toBeInTheDocument();
+    });
+
+    it("lets who manages messages delete others' messages, and colors names by role", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "messages").mockResolvedValue({ messages: [{ ...chat("1", "Dela"), author: ana }], hasMore: false });
+      const remove = vi.spyOn(api, "deleteMessage").mockResolvedValue(undefined);
+      const members = [{ user: me, owner: false, roles: [] }, { user: ana, owner: false, roles: ["vip"] }];
+      const roles = [role("mod", "Moderação", 2, 16), role("vip", "VIP", 1, 0, 0xe91e63), everyone()];
+      const { unmount } = render(<ServerRolesProvider value={serverRoles(me.id, members, roles)}>
+        <TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} /></ServerRolesProvider>);
+      const article = (await screen.findByText("Dela")).closest("article")!;
+      expect(within(article).getByText("VIP")).toHaveClass("role-badge");
+      expect(within(article).getByRole("button", { name: "Ana Souza" }).parentElement).toHaveStyle({ color: "#e91e63" });
+      expect(within(article).queryByRole("button", { name: "Excluir mensagem" })).not.toBeInTheDocument();
+      unmount();
+
+      members[0].roles = ["mod"];
+      render(<ServerRolesProvider value={serverRoles(me.id, members, roles)}>
+        <TextChannel channel={channel} realtime={realtime().client} revision={1} self={me} /></ServerRolesProvider>);
+      const theirs = (await screen.findByText("Dela")).closest("article")!;
+      // Deleting, not editing.
+      expect(within(theirs).queryByRole("button", { name: "Editar mensagem" })).not.toBeInTheDocument();
+      await user.click(within(theirs).getByRole("button", { name: "Excluir mensagem" }));
+      const dialog = screen.getByRole("dialog", { name: "Excluir mensagem" });
+      expect(dialog).toHaveTextContent("A mensagem de Ana Souza some para todo mundo");
+      await user.click(within(dialog).getByRole("button", { name: "Excluir" }));
+      expect(remove).toHaveBeenCalledWith(channel.id, "1");
     });
 
     it("inserts emoji from the composer's picker", async () => {

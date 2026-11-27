@@ -334,6 +334,40 @@ export interface Server {
   ownerId: string;
   /** Icon URL (servers imported from Discord), or null for initials. */
   icon?: string | null;
+  /** Absent from older servers. */
+  description?: string;
+}
+
+/** Bits of `Role.permissions`. */
+export const PERMISSIONS = {
+  manageServer: 1,
+  manageChannels: 2,
+  manageRoles: 4,
+  createInvite: 8,
+  manageMessages: 16,
+  mentionEveryone: 32,
+  banMembers: 64,
+} as const;
+
+export type Permission = keyof typeof PERMISSIONS;
+
+/** A server role. `everyone` is @everyone, which every member has. */
+export interface Role {
+  id: string;
+  name: string;
+  /** `0xRRGGBB`, or null for the default name color. */
+  color: number | null;
+  /** Higher is above in the hierarchy; @everyone is 0. */
+  position: number;
+  permissions: number;
+  everyone: boolean;
+}
+
+/** Someone banned from a server. */
+export interface Ban {
+  user: User;
+  reason: string;
+  createdAt: string;
 }
 
 export interface Invite {
@@ -408,15 +442,23 @@ export type PresenceStatus = "online" | "idle" | "dnd" | "offline";
 /** A status the user can choose for themselves. */
 export type ChosenStatus = Exclude<PresenceStatus, "offline">;
 
-/** `owner` is the server's creator; the owner names moderators. */
-export type MemberRole = "owner" | "moderator" | "member";
-
-/** Someone in a server, with their role and presence. */
+/** Someone in a server, with their roles and presence. */
 export interface ServerMember {
   user: User;
-  role: MemberRole;
+  /** The server's owner, who can do everything. */
+  owner: boolean;
+  /** Ids of the member's roles, without @everyone. */
+  roles: string[];
   status: PresenceStatus;
   joinedAt: string;
+}
+
+/** A server both people are in, with the other person's place in it. */
+export interface MutualServer extends Server {
+  /** Absent from older servers. */
+  owner?: boolean;
+  /** The person's roles there, highest first. Absent from older servers. */
+  roles?: Role[];
 }
 
 export interface Friend {
@@ -447,7 +489,7 @@ export interface UserProfile {
   user: User;
   memberSince: string;
   /** Servers both people are in. */
-  mutualServers: Server[];
+  mutualServers: MutualServer[];
   friendship: Friendship;
   /** Shared between friends and people in a mutual server. */
   status: PresenceStatus | null;
@@ -511,7 +553,8 @@ export type RealtimeEvent =
   | { type: "server.snapshot"; serverId: string | null; channels: Record<string, VoiceParticipant[]> }
   | { type: "voice.participants"; serverId: string; channelId: string; participants: VoiceParticipant[] }
   | { type: "voice.joined"; channelId: string; peerId: string; participants: VoiceParticipant[] }
-  | { type: "voice.left"; channelId: string; reason: "left" | "replaced" }
+  /** `removed`: the user was banned or the server was deleted. */
+  | { type: "voice.left"; channelId: string; reason: "left" | "replaced" | "removed" }
   | { type: "voice.signal"; channelId: string; peerId: string; data: SignalPayload }
   /** Someone entered a voice room of one of the user's servers (sent to every online member). */
   | { type: "voice.member.joined"; serverId: string; serverName: string; channelId: string; channelName: string; user: User }
@@ -531,8 +574,18 @@ export type RealtimeEvent =
   | { type: "presence.updated"; userId: string; status: PresenceStatus }
   /** Someone joined a server the user has open. */
   | { type: "member.joined"; serverId: string; member: ServerMember }
-  /** A member's role changed in a server the user has open. */
-  | { type: "member.updated"; serverId: string; member: ServerMember };
+  /** A member's roles changed in a server the user has open. */
+  | { type: "member.updated"; serverId: string; member: ServerMember }
+  /** Someone was banned from a server the user has open. */
+  | { type: "member.left"; serverId: string; userId: string }
+  /** The roles of a server the user has open changed: all of them, highest first. */
+  | { type: "roles.updated"; serverId: string; roles: Role[] }
+  /** A server of the user was renamed or described. */
+  | { type: "server.updated"; server: Server }
+  /** The owner deleted a server of the user. */
+  | { type: "server.deleted"; serverId: string; serverName: string }
+  /** The user was banned from a server. */
+  | { type: "server.banned"; serverId: string; serverName: string };
 
 export type RealtimeCommand =
   | { type: "ping" }

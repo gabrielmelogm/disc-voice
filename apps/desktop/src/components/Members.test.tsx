@@ -9,6 +9,8 @@ import type { Realtime } from "../lib/realtime";
 import { ChannelHeader, roomPresence } from "./ChannelDetails";
 import { activityText, MembersDialog, PeoplePanel } from "./Members";
 import { ProfileCardProvider } from "./ProfileCard";
+import { ServerRolesProvider } from "./ServerRoles";
+import { everyone, role, serverRoles } from "../test/serverRoles";
 
 const person = (id: string, name: string) => ({ id, email: `${id}@example.com`, name });
 const ana = person("ana", "Ana Lima");
@@ -16,15 +18,17 @@ const joao = person("joao", "João Reis");
 const bia = person("bia", "Bia Souza");
 const caio = person("caio", "Caio Prado");
 const duda = person("duda", "Duda Alves");
-const member = (user: ReturnType<typeof person>, role: ServerMember["role"], status: ServerMember["status"]): ServerMember =>
-  ({ user, role, status, joinedAt: "2026-11-01T00:00:00Z" });
+const member = (user: ReturnType<typeof person>, roles: string[], status: ServerMember["status"], owner = false): ServerMember =>
+  ({ user, owner, roles, status, joinedAt: "2026-11-01T00:00:00Z" });
 const members = [
-  member(ana, "owner", "online"),
-  member(joao, "moderator", "dnd"),
-  member(bia, "member", "online"),
-  member(caio, "member", "offline"),
-  member(duda, "member", "offline"),
+  member(ana, [], "online", true),
+  member(joao, ["mod"], "dnd"),
+  member(bia, [], "online"),
+  member(caio, [], "offline"),
+  member(duda, [], "offline"),
 ];
+// Moderação manages roles and bans; Ajudante is below it.
+const roles = [role("mod", "Moderação", 2, 4 | 64, 0x2ecc71), role("help", "Ajudante", 1), everyone()];
 const room: Channel = { id: "room", serverId: "server", name: "Sala de reunião", type: "voice" };
 const server = { id: "server", name: "Estúdio", ownerId: "ana" };
 
@@ -54,8 +58,8 @@ beforeEach(() => {
 function panel(onShowAll = vi.fn()) {
   const participant = (user: typeof bia, screen: boolean): VoiceParticipant => ({ peerId: `peer-${user.id}`, user, muted: false, deafened: false, screen });
   const rooms = roomPresence([room], () => [participant(bia, false), participant(ana, true)]);
-  render(<ProfileCardProvider profiles={{}}><PeoplePanel self={ana} selfStatus="online" members={members} loading={false} error=""
-    rooms={rooms} onRetry={vi.fn()} onShowAll={onShowAll} /></ProfileCardProvider>);
+  render(<ServerRolesProvider value={serverRoles(ana.id, members, roles)}><ProfileCardProvider profiles={{}}><PeoplePanel self={ana} selfStatus="online" members={members} loading={false} error=""
+    rooms={rooms} onRetry={vi.fn()} onShowAll={onShowAll} /></ProfileCardProvider></ServerRolesProvider>);
   return onShowAll;
 }
 
@@ -67,7 +71,7 @@ describe("people panel", () => {
     expect(online.map(item => item.textContent)).toEqual([
       // Initials, name, role badge and activity.
       "ALAna LimaDonoCompartilhando a tela",
-      "JRJoão ReisModeradorNão perturbe",
+      "JRJoão ReisModeraçãoNão perturbe",
       "BSBia SouzaNa Sala de reunião",
     ]);
     expect(screen.getByText("Offline · 2")).toBeVisible();
@@ -110,29 +114,48 @@ describe("people panel", () => {
 });
 
 describe("members dialog", () => {
-  it("groups everyone by role and status, and lets the owner name moderators", async () => {
+  const open = (self: typeof ana) => render(<ServerRolesProvider value={serverRoles(self.id, members, roles)}><ProfileCardProvider profiles={{}}>
+    <MembersDialog server={server} self={self} selfStatus="idle" members={members} rooms={{}} onClose={vi.fn()} /></ProfileCardProvider></ServerRolesProvider>);
+
+  it("groups everyone by highest role and status, and lets the owner give roles and ban", async () => {
     const user = userEvent.setup();
-    const setRole = vi.spyOn(api, "setRole").mockResolvedValue(member(bia, "moderator", "online"));
-    render(<ProfileCardProvider profiles={{}}><MembersDialog server={server} self={ana} selfStatus="idle" members={members} rooms={{}} onClose={vi.fn()} /></ProfileCardProvider>);
+    const assign = vi.spyOn(api, "assignRole").mockResolvedValue(member(bia, ["help"], "online"));
+    const ban = vi.spyOn(api, "ban").mockResolvedValue(undefined);
+    open(ana);
     const groups = screen.getAllByRole("group").map(group => group.getAttribute("aria-label"));
-    expect(groups).toEqual(["Dono", "Moderadores", "Online", "Offline"]);
+    expect(groups).toEqual(["Dono", "Moderação", "Online", "Offline"]);
     // The user's own status is the one they chose just now.
     expect(within(screen.getByRole("group", { name: "Dono" })).getByText("Ausente")).toBeVisible();
-    expect(within(screen.getByRole("group", { name: "Dono" })).queryByRole("button", { name: /moderador/ })).toBeNull();
-    await user.click(within(screen.getByRole("group", { name: "Online" })).getByRole("button", { name: "Tornar moderador" }));
-    expect(setRole).toHaveBeenCalledWith("server", "bia", "moderator");
-    await user.click(within(screen.getByRole("group", { name: "Moderadores" })).getByRole("button", { name: "Remover moderador" }));
-    expect(setRole).toHaveBeenLastCalledWith("server", "joao", "member");
+    // Nobody acts on the owner.
+    expect(within(screen.getByRole("group", { name: "Dono" })).queryByRole("button", { name: /Banir|Cargos/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cargos de Bia Souza" }));
+    await user.click(within(screen.getByRole("group", { name: "Cargos de Bia Souza" })).getByRole("checkbox", { name: "Ajudante" }));
+    expect(assign).toHaveBeenCalledWith("server", "bia", "help", true);
+    await user.click(screen.getByRole("button", { name: "Banir João Reis" }));
+    const dialog = screen.getByRole("dialog", { name: "Banir João Reis" });
+    await user.type(within(dialog).getByLabelText("Motivo (opcional)"), "spam");
+    await user.click(within(dialog).getByRole("button", { name: "Banir" }));
+    expect(ban).toHaveBeenCalledWith("server", "joao", "spam");
   });
 
-  it("does not offer role changes to other members", () => {
-    render(<ProfileCardProvider profiles={{}}><MembersDialog server={server} self={bia} selfStatus="online" members={members} rooms={{}} onClose={vi.fn()} /></ProfileCardProvider>);
-    expect(screen.queryByRole("button", { name: "Tornar moderador" })).toBeNull();
+  it("offers moderators only roles and people below their own role", async () => {
+    const user = userEvent.setup();
+    open(joao);
+    expect(screen.queryByRole("button", { name: "Banir Ana Lima" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Banir João Reis" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Banir Bia Souza" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cargos de Bia Souza" }));
+    const menu = within(screen.getByRole("group", { name: "Cargos de Bia Souza" }));
+    expect(menu.getAllByRole("checkbox").map(box => box.parentElement?.textContent)).toEqual(["Ajudante"]);
+  });
+
+  it("does not offer role changes or bans to plain members", () => {
+    open(bia);
+    expect(screen.queryByRole("button", { name: /^Cargos de|^Banir/ })).toBeNull();
   });
 });
-
 describe("members state", () => {
-  it("loads the server's members and follows presence, arrivals and role changes", async () => {
+  it("loads the server's members and follows presence, arrivals, role changes and bans", async () => {
     const load = vi.spyOn(api, "members").mockResolvedValue([members[0], members[3]]);
     const live = realtime();
     const { result } = renderHook(() => useMembers(live.client, 1, "server"));
@@ -142,11 +165,13 @@ describe("members state", () => {
     expect(result.current.members[1].status).toBe("idle");
     live.emit({ type: "member.joined", serverId: "server", member: members[2] });
     expect(result.current.members.map(m => m.user.id)).toEqual(["ana", "caio", "bia"]);
-    live.emit({ type: "member.updated", serverId: "server", member: { ...members[2], role: "moderator" } });
-    expect(result.current.members[2].role).toBe("moderator");
+    live.emit({ type: "member.updated", serverId: "server", member: { ...members[2], roles: ["mod"] } });
+    expect(result.current.members[2].roles).toEqual(["mod"]);
     // Another server's news is not this list's.
     live.emit({ type: "member.joined", serverId: "other", member: members[4] });
     expect(result.current.members).toHaveLength(3);
+    live.emit({ type: "member.left", serverId: "server", userId: "caio" });
+    expect(result.current.members.map(m => m.user.id)).toEqual(["ana", "bia"]);
   });
 });
 

@@ -49,9 +49,13 @@ export function Reactions({ reactions, names, selfId, onToggle, onAdd }: {
   </div>;
 }
 
-/** Shown over a message on hover or focus: quick reactions, and editing or deleting one's own. */
-export function MessageToolbar({ own, onReact, onPicker, onEdit, onDelete }: {
+/**
+ * Shown over a message on hover or focus: quick reactions, editing one's own,
+ * and deleting it (or someone else's, for who manages messages).
+ */
+export function MessageToolbar({ own, canDelete = own, onReact, onPicker, onEdit, onDelete }: {
   own: boolean;
+  canDelete?: boolean;
   onReact: (emoji: string) => void;
   onPicker: () => void;
   onEdit: () => void;
@@ -61,22 +65,23 @@ export function MessageToolbar({ own, onReact, onPicker, onEdit, onDelete }: {
     {QUICK_REACTIONS.map(emoji => <button key={emoji} type="button" className="icon-button" aria-label={`Reagir com ${emoji}`} title={`Reagir com ${emoji}`}
       onClick={() => onReact(emoji)}>{emoji}</button>)}
     <button type="button" className="icon-button" aria-label="Adicionar reação" title="Adicionar reação" onClick={onPicker}><SmilePlus size={17} /></button>
-    {own && <>
-      <button type="button" className="icon-button" aria-label="Editar mensagem" title="Editar" onClick={onEdit}><Pencil size={16} /></button>
-      <button type="button" className="icon-button danger" aria-label="Excluir mensagem" title="Excluir (Shift+clique exclui sem perguntar)"
-        onClick={event => onDelete(event.shiftKey)}><Trash2 size={16} /></button>
-    </>}
+    {own && <button type="button" className="icon-button" aria-label="Editar mensagem" title="Editar" onClick={onEdit}><Pencil size={16} /></button>}
+    {canDelete && <button type="button" className="icon-button danger" aria-label="Excluir mensagem" title="Excluir (Shift+clique exclui sem perguntar)"
+      onClick={event => onDelete(event.shiftKey)}><Trash2 size={16} /></button>}
   </div>;
 }
 
 /** Asks before deleting a message for everyone. */
-export function DeleteMessageDialog({ message, busy, error, onConfirm, onClose }: {
+export function DeleteMessageDialog({ message, busy, error, onConfirm, onClose, selfId }: {
   message: ChatMessage;
   busy: boolean;
   error: string;
   onConfirm: () => void;
   onClose: () => void;
+  /** Deleting someone else's message says whose it is. */
+  selfId?: string;
 }) {
+  const others = !!selfId && message.author.id !== selfId;
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -87,7 +92,7 @@ export function DeleteMessageDialog({ message, busy, error, onConfirm, onClose }
   return <dialog ref={ref} className="action-dialog" aria-labelledby="delete-message-title"
     onCancel={event => { event.preventDefault(); onClose(); }}>
     <div className="dialog-heading"><h2 id="delete-message-title">Excluir mensagem</h2></div>
-    <p className="lede">A mensagem some para todo mundo, com as reações. Não dá para desfazer.</p>
+    <p className="lede">{others ? `A mensagem de ${message.author.name} some para todo mundo, com as reações.` : "A mensagem some para todo mundo, com as reações."} Não dá para desfazer.</p>
     <blockquote className="delete-preview">
       <Avatar name={message.author.name} src={message.author.avatar} still={message.author.avatarStill} size="sm" />
       <span>{text || (message.attachments?.length ? "Anexo" : "Mensagem sem texto")}</span>

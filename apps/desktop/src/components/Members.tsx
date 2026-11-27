@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Shield, X } from "lucide-react";
-import type { Activity, Channel, ChosenStatus, MemberRole, PresenceStatus, Server, ServerMember, User } from "@disc-voice/shared";
+import { Ban, Search, Tags, X } from "lucide-react";
+import type { Activity, Channel, ChosenStatus, PresenceStatus, Server, ServerMember, User } from "@disc-voice/shared";
 import { activityLabel } from "../lib/activity";
 import { api, message } from "../lib/api";
-import { isOnline, ROLE_RANK, roleLabel, STATUS_LABELS } from "../lib/presence";
+import { isOnline, STATUS_LABELS } from "../lib/presence";
+import { can, outranksRole, type MemberBadge } from "../lib/roles";
 import { ProfileButton, useActivity } from "./ProfileCard";
+import { BanDialog, TopRoleBadge, useCanBan, useServerRoles } from "./ServerRoles";
 import { Avatar } from "./ui";
 
 /** Where each person is in a voice room of the server, by user id. */
@@ -12,12 +14,6 @@ export type RoomPresence = Record<string, { channel: Channel; screen: boolean }>
 
 /** At most this many offline people show as avatars in the offline row. */
 const OFFLINE_PREVIEW = 6;
-
-export function RoleBadge({ role }: { role: MemberRole | undefined }) {
-  const label = roleLabel(role);
-  if (!label) return null;
-  return <span className={`role-badge role-${role}`} title={label}>{role === "moderator" && <Shield size={11} aria-hidden="true" />}{label}</span>;
-}
 
 /** Search ignores case and accents: "joao" finds "João". */
 export function normalize(text: string) {
@@ -33,8 +29,10 @@ export function activityText(status: PresenceStatus, room: RoomPresence[string] 
   return fallback ?? (status === "offline" ? STATUS_LABELS.offline : "");
 }
 
-function byRoleThenName(a: ServerMember, b: ServerMember) {
-  return ROLE_RANK[a.role] - ROLE_RANK[b.role] || a.user.name.localeCompare(b.user.name, "pt-BR");
+/** Owner first, then by highest role, then by name. */
+function byRank(badges: Record<string, MemberBadge>) {
+  const rank = (m: ServerMember) => m.owner ? Number.MAX_SAFE_INTEGER : badges[m.user.id]?.roles[0]?.position ?? 0;
+  return (a: ServerMember, b: ServerMember) => rank(b) - rank(a) || a.user.name.localeCompare(b.user.name, "pt-BR");
 }
 
 /** Members with the user's own status as they chose it, which is newer than the server's copy. */
@@ -61,14 +59,16 @@ export function PeoplePanel({ self, selfStatus, members, loading, error, rooms, 
   onRetry: () => void;
   onShowAll: () => void;
 }) {
+  const { badges } = useServerRoles();
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   // Until the list arrives, at least the user is shown.
-  const everyone = members.length ? withSelf(members, self, selfStatus) : [{ user: self, role: "member" as const, status: selfStatus, joinedAt: "" }];
+  const everyone = members.length ? withSelf(members, self, selfStatus) : [{ user: self, owner: false, roles: [], status: selfStatus, joinedAt: "" }];
   const q = normalize(query);
   const shown = q ? everyone.filter(m => normalize(m.user.name).includes(q)) : everyone;
-  const online = shown.filter(m => isOnline(m.status)).sort(byRoleThenName);
-  const offline = shown.filter(m => !isOnline(m.status)).sort(byRoleThenName);
+  const order = byRank(badges);
+  const online = shown.filter(m => isOnline(m.status)).sort(order);
+  const offline = shown.filter(m => !isOnline(m.status)).sort(order);
   const onlineCount = everyone.filter(m => isOnline(m.status)).length;
 
   function toggleSearch() {
@@ -103,7 +103,11 @@ export function PeoplePanel({ self, selfStatus, members, loading, error, rooms, 
   </section>;
 }
 
-/** Every member of the server, grouped by role and status. The owner can name moderators. */
+/**
+ * Every member of the server, grouped by highest role, then by status.
+ * Who manages roles gives and takes away roles below theirs; who bans
+ * removes people below them.
+ */
 export function MembersDialog({ server, self, selfStatus, members, rooms, onClose }: {
   server: Server;
   self: User;
@@ -113,10 +117,10 @@ export function MembersDialog({ server, self, selfStatus, members, rooms, onClos
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const { roles, badges, self: access } = useServerRoles();
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [banning, setBanning] = useState<User | null>(null);
   const [error, setError] = useState("");
-  const isOwner = server.ownerId === self.id;
 
   useEffect(() => {
     const dialog = ref.current;
@@ -126,23 +130,18 @@ export function MembersDialog({ server, self, selfStatus, members, rooms, onClos
 
   const groups = useMemo(() => {
     const q = normalize(query);
-    const shown = withSelf(members, self, selfStatus).filter(m => !q || normalize(m.user.name).includes(q)).sort(byRoleThenName);
+    const shown = withSelf(members, self, selfStatus).filter(m => !q || normalize(m.user.name).includes(q)).sort(byRank(badges));
+    const top = (m: ServerMember) => badges[m.user.id]?.roles[0]?.id;
+    const plain = shown.filter(m => !m.owner && !top(m));
     return [
-      { id: "owner", title: "Dono", list: shown.filter(m => m.role === "owner") },
-      { id: "moderator", title: "Moderadores", list: shown.filter(m => m.role === "moderator") },
-      { id: "online", title: "Online", list: shown.filter(m => m.role === "member" && isOnline(m.status)) },
-      { id: "offline", title: "Offline", list: shown.filter(m => m.role === "member" && !isOnline(m.status)) },
+      { id: "owner", title: "Dono", list: shown.filter(m => m.owner) },
+      ...roles.filter(role => !role.everyone).map(role => ({ id: role.id, title: role.name, list: shown.filter(m => !m.owner && top(m) === role.id) })),
+      { id: "online", title: "Online", list: plain.filter(m => isOnline(m.status)) },
+      { id: "offline", title: "Offline", list: plain.filter(m => !isOnline(m.status)) },
     ].filter(group => group.list.length);
-  }, [members, self, selfStatus, query]);
+  }, [members, self, selfStatus, query, roles, badges]);
 
-  async function changeRole(member: ServerMember) {
-    setBusy(member.user.id);
-    setError("");
-    // The list follows the realtime update; the answer only confirms it.
-    try { await api.setRole(server.id, member.user.id, member.role === "moderator" ? "member" : "moderator"); }
-    catch (cause) { setError(message(cause)); }
-    finally { setBusy(null); }
-  }
+  const assignable = can(access, "manageRoles") ? roles.filter(role => !role.everyone && outranksRole(access, role.position)) : [];
 
   return <dialog ref={ref} className="action-dialog members-dialog" aria-labelledby="members-title" onCancel={event => { event.preventDefault(); onClose(); }}>
     <div className="dialog-heading"><h2 id="members-title">Pessoas em {server.name}</h2><button type="button" className="icon-button" aria-label="Fechar" onClick={onClose}><X size={20} /></button></div>
@@ -156,20 +155,64 @@ export function MembersDialog({ server, self, selfStatus, members, rooms, onClos
         {group.list.map(m => <li key={m.user.id} className={m.status === "offline" ? "is-offline" : undefined}>
           <Avatar name={m.user.name} src={m.user.avatar} still={m.user.avatarStill} status={m.status} />
           <MemberDetails member={m} room={rooms[m.user.id]} selfId={self.id} />
-          {isOwner && m.role !== "owner" && <button className="button secondary small" disabled={busy === m.user.id} onClick={() => void changeRole(m)}>
-            {m.role === "moderator" ? "Remover moderador" : "Tornar moderador"}
-          </button>}
+          <MemberActions server={server} member={m} assignable={assignable} onBan={setBanning} onError={setError} />
         </li>)}
       </ul>
     </div>)}
+    {banning && <BanDialog serverId={server.id} serverName={server.name} user={banning} onClose={() => setBanning(null)} />}
   </dialog>;
+}
+
+/** Roles to give or take away, and banning, for one member. */
+function MemberActions({ server, member, assignable, onBan, onError }: {
+  server: Server;
+  member: ServerMember;
+  assignable: { id: string; name: string }[];
+  onBan: (user: User) => void;
+  onError: (error: string) => void;
+}) {
+  const canBan = useCanBan(member.user.id);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const menu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!menu.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  async function toggle(roleId: string, give: boolean) {
+    setBusy(roleId);
+    onError("");
+    // The list follows the realtime update; the answer only confirms it.
+    try { await api.assignRole(server.id, member.user.id, roleId, give); }
+    catch (cause) { onError(message(cause)); }
+    finally { setBusy(null); }
+  }
+
+  if (member.owner || (!assignable.length && !canBan)) return null;
+  return <div className="member-actions" ref={menu}>
+    {!!assignable.length && <button type="button" className="icon-button small" aria-label={`Cargos de ${member.user.name}`} title="Cargos"
+      aria-expanded={open} onClick={() => setOpen(!open)}><Tags size={16} /></button>}
+    {canBan && <button type="button" className="icon-button small danger" aria-label={`Banir ${member.user.name}`} title="Banir"
+      onClick={() => onBan(member.user)}><Ban size={16} /></button>}
+    {open && <div className="role-menu" role="group" aria-label={`Cargos de ${member.user.name}`}>
+      {assignable.map(role => <label key={role.id}>
+        <input type="checkbox" checked={member.roles.includes(role.id)} disabled={busy === role.id}
+          onChange={event => void toggle(role.id, event.target.checked)} />{role.name}
+      </label>)}
+    </div>}
+  </div>;
 }
 
 function MemberDetails({ member, room, selfId }: { member: ServerMember; room?: RoomPresence[string]; selfId: string }) {
   const activity = useActivity(member.user.id);
+  const { badges } = useServerRoles();
   const text = activityText(member.status, room, activity, member.user.id === selfId ? "Você" : undefined);
   return <div>
-    <span className="member-name"><strong><ProfileButton user={member.user} /></strong><RoleBadge role={member.role} /></span>
+    <span className="member-name"><strong><ProfileButton user={member.user} /></strong><TopRoleBadge badge={badges[member.user.id]} /></span>
     {text && <small title={text}>{text}</small>}
   </div>;
 }
