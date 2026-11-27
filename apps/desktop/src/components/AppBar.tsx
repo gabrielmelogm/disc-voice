@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, ChevronUp, Cloud, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
-  MoreHorizontal, PhoneOff, Plus, Search, Settings2, Video, VideoOff, VolumeX,
+  Check, ChevronUp, Cloud, HeadphoneOff, Headphones, Home, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
+  PhoneOff, Plus, Search, Settings2, Video, VideoOff,
 } from "lucide-react";
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
 import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
@@ -72,6 +72,61 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
   </div>;
 }
 
+/**
+ * Mutes or unmutes the microphone. The arrow opens the input and output
+ * devices, which switch in the middle of the call without leaving it.
+ */
+export function MicButton({ voice, state, menuOpen, onMenu, onPicked, onVoiceSettings }: {
+  voice: Voice; state: VoiceState; menuOpen: boolean; onMenu: () => void; onPicked: () => void; onVoiceSettings: () => void;
+}) {
+  const silent = state.muted || state.deafened;
+  const label = state.muted ? "Ativar microfone" : "Silenciar microfone";
+  const pick = (action: () => void) => () => { onPicked(); action(); };
+  const inputs = state.devices.filter(device => device.kind === "audioinput" && device.deviceId);
+  const outputs = state.devices.filter(device => device.kind === "audiooutput" && device.deviceId);
+  // The native call engine opens any output itself.
+  const sinkSupported = state.native || (typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype);
+  const inputMissing = !!state.inputId && !inputs.some(device => device.deviceId === state.inputId);
+  const outputMissing = !!state.outputId && !outputs.some(device => device.deviceId === state.outputId);
+  const inputLocked = state.deviceBusy || state.status === "connecting";
+  const option = (device: MediaDeviceInfo, index: number, current: string, fallback: string, choose: (id: string) => Promise<void>, disabled: boolean) =>
+    <button key={device.deviceId} role="menuitemradio" aria-checked={device.deviceId === current} disabled={disabled} onClick={pick(() => void choose(device.deviceId))}>
+      <span>{device.label || `${fallback} ${index + 1}`}</span>{device.deviceId === current && <Check size={16} />}
+    </button>;
+  return <div className="split-button">
+    <button className={`bar-button ${silent ? "off" : ""}`} aria-pressed={state.muted} aria-label={label} title={label} onClick={voice.toggleMute}>
+      {silent ? <MicOff size={20} /> : <Mic size={20} />}
+    </button>
+    <div className="menu-anchor">
+      <button className={`bar-button narrow ${silent ? "off" : ""}`} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher microfone e saída de áudio" title="Microfone e saída de áudio"
+        onClick={() => { if (!menuOpen) void voice.refreshDevices(); onMenu(); }}><ChevronUp size={16} /></button>
+      {menuOpen && <div className="popover-menu" role="menu" aria-label="Microfone e saída de áudio">
+        <span className="menu-label">Entrada</span>
+        <button role="menuitemradio" aria-checked={!state.inputId} disabled={inputLocked} onClick={pick(() => void voice.setInput(""))}><span>Padrão do sistema</span>{!state.inputId && <Check size={16} />}</button>
+        {inputs.map((device, index) => option(device, index, state.inputId, "Microfone", voice.setInput, inputLocked))}
+        {inputMissing && <p className="menu-empty">O microfone escolhido não está conectado.</p>}
+        <hr />
+        <span className="menu-label">Saída</span>
+        {sinkSupported ? <>
+          <button role="menuitemradio" aria-checked={!state.outputId} disabled={state.deviceBusy} onClick={pick(() => void voice.setOutput(""))}><span>Padrão do sistema</span>{!state.outputId && <Check size={16} />}</button>
+          {outputs.map((device, index) => option(device, index, state.outputId, "Saída", voice.setOutput, state.deviceBusy))}
+          {outputMissing && <p className="menu-empty">A saída escolhida não está conectada.</p>}
+        </> : <p className="menu-empty">Este ambiente usa a saída padrão do sistema.</p>}
+        <hr />
+        <button role="menuitem" onClick={pick(onVoiceSettings)}><span className="menu-icon"><Settings2 size={16} /></span>Dispositivos de voz</button>
+      </div>}
+    </div>
+  </div>;
+}
+
+/** Turns off (and back on) the audio we hear from the call. */
+export function DeafenButton({ voice, state }: { voice: Voice; state: VoiceState }) {
+  const label = state.deafened ? "Ativar áudio recebido" : "Desativar áudio recebido";
+  return <button className={`bar-button ${state.deafened ? "off" : ""}`} aria-pressed={state.deafened} aria-label={label} title={label} onClick={voice.toggleDeafen}>
+    {state.deafened ? <HeadphoneOff size={20} /> : <Headphones size={20} />}
+  </button>;
+}
+
 /** Floating app bar: server switcher, call controls and global shortcuts. */
 export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
   user: User;
@@ -99,7 +154,7 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   /** Opens the drawer with the user's files in the cloud. */
   onFiles?: () => void;
 }) {
-  const [menu, setMenu] = useState<"servers" | "call" | "camera" | "account" | null>(null);
+  const [menu, setMenu] = useState<"servers" | "mic" | "camera" | "account" | null>(null);
   const ref = useRef<HTMLElement>(null);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
 
@@ -137,16 +192,10 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
     {inCall && <>
       <span className="bar-divider" />
       <div role="toolbar" aria-label="Controles da chamada" className="bar-group">
-        <button className={`bar-button ${voiceState.muted || voiceState.deafened ? "off" : ""}`} aria-pressed={voiceState.muted} aria-label={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} title={voiceState.muted ? "Ativar microfone" : "Silenciar microfone"} onClick={voice.toggleMute}>{voiceState.muted || voiceState.deafened ? <MicOff size={20} /> : <Mic size={20} />}</button>
+        <MicButton voice={voice} state={voiceState} menuOpen={menu === "mic"} onMenu={() => setMenu(menu === "mic" ? null : "mic")} onPicked={() => setMenu(null)} onVoiceSettings={onVoiceSettings} />
+        <DeafenButton voice={voice} state={voiceState} />
         <CameraButton voice={voice} state={voiceState} menuOpen={menu === "camera"} onMenu={() => setMenu(menu === "camera" ? null : "camera")} onPicked={() => setMenu(null)} />
         <ScreenButton voice={voice} state={voiceState} />
-        <div className="menu-anchor">
-          <button className="bar-button" aria-haspopup="menu" aria-expanded={menu === "call"} aria-label="Mais opções da chamada" title="Mais opções" onClick={() => setMenu(menu === "call" ? null : "call")}><MoreHorizontal size={20} /></button>
-          {menu === "call" && <div className="popover-menu" role="menu" aria-label="Opções da chamada">
-            <button role="menuitemcheckbox" aria-checked={voiceState.deafened} onClick={pick(voice.toggleDeafen)}><span className="menu-icon">{voiceState.deafened ? <VolumeX size={16} /> : <Headphones size={16} />}</span>{voiceState.deafened ? "Ativar áudio recebido" : "Desativar áudio recebido"}</button>
-            <button role="menuitem" onClick={pick(onVoiceSettings)}><span className="menu-icon"><Settings2 size={16} /></span>Dispositivos de voz</button>
-          </div>}
-        </div>
         <button className="bar-button danger wide" aria-label="Sair da chamada" title="Sair da chamada" onClick={voice.hangUp}><PhoneOff size={20} /></button>
       </div>
     </>}
