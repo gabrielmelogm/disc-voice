@@ -16,11 +16,15 @@ export interface NotificationPrefs {
 }
 
 const KEY = "discvoice.notifications";
-const SOUND_URL = "/songs/notification.mp3";
-const VOICE_CONNECT_URL = "/songs/user-voicecall-connect.mp3";
-const MIC_URL = "/songs/mic-control-notification.mp3";
-const SCREEN_URL = "/songs/share-media-voicecall-notification.mp3";
-const LEAVE_URL = "/songs/notification-beep.mp3";
+/** Each sound's file for `<audio>`; the key is the name the native player knows it by. */
+const SOUNDS = {
+  "notification": "/songs/notification.mp3",
+  "voice-connect": "/songs/user-voicecall-connect.mp3",
+  "mic": "/songs/mic-control-notification.mp3",
+  "screen": "/songs/share-media-voicecall-notification.mp3",
+  "leave": "/songs/notification-beep.mp3",
+} as const;
+type SoundName = keyof typeof SOUNDS;
 /** Bursts (several messages at once) play the sound only once. */
 const SOUND_GAP_MS = 750;
 const defaults: NotificationPrefs = { desktop: true, messageSounds: true, voiceJoin: true };
@@ -56,47 +60,61 @@ export function useNotificationPrefs() {
   return [value, setNotificationPrefs] as const;
 }
 
-const sounds = new Map<string, { audio: HTMLAudioElement | null; last: number }>();
+const sounds = new Map<SoundName, { audio: HTMLAudioElement | null; last: number }>();
+/**
+ * WebKitGTK (Linux) plays `<audio>` through GStreamer, which usually has no MP3
+ * decoder there, so the app plays the sounds itself. Asked once.
+ */
+let nativeSounds: Promise<boolean> | undefined;
 
-function playSound(url: string, gap = SOUND_GAP_MS) {
-  const sound = sounds.get(url) ?? { audio: null, last: -Infinity };
-  sounds.set(url, sound);
+function soundsAreNative() {
+  return nativeSounds ??= isTauri()
+    ? invoke<boolean>("sound_native").catch(() => false)
+    : Promise.resolve(false);
+}
+
+function playSound(name: SoundName, gap = SOUND_GAP_MS) {
+  const sound = sounds.get(name) ?? { audio: null, last: -Infinity };
+  sounds.set(name, sound);
   const now = Date.now();
   if (now - sound.last < gap) return;
   sound.last = now;
-  try {
-    const audio = sound.audio ??= new Audio(url);
-    let output = "";
-    try { output = localStorage.getItem("discvoice.voice.output") || ""; } catch { /* Default output. */ }
+  let output = "";
+  try { output = localStorage.getItem("discvoice.voice.output") || ""; } catch { /* Default output. */ }
+  void soundsAreNative().then(native => {
     // Follow the output chosen for calls; if that device is gone, the default one plays it.
-    if (output && "setSinkId" in audio) void audio.setSinkId(output).catch(() => {});
-    audio.currentTime = 0;
-    void audio.play()?.catch(() => {});
-  } catch { /* Sounds are best effort. */ }
+    if (native) return void invoke("play_sound", { name, output }).catch(() => {});
+    try {
+      const audio = sound.audio ??= new Audio(SOUNDS[name]);
+      if (output && "setSinkId" in audio) void audio.setSinkId(output).catch(() => {});
+      audio.currentTime = 0;
+      void audio.play()?.catch(() => {});
+    } catch { /* Sounds are best effort. */ }
+  });
 }
 
 export function playNotificationSound() {
-  playSound(SOUND_URL);
+  playSound("notification");
 }
 
 /** Someone connected to the call we are in. */
 export function playVoiceConnectSound() {
-  playSound(VOICE_CONNECT_URL);
+  playSound("voice-connect");
 }
 
 /** We muted or unmuted ourselves: every click answers, so no throttle (it restarts instead). */
 export function playMicSound() {
-  playSound(MIC_URL, 0);
+  playSound("mic", 0);
 }
 
 /** We started or stopped sharing the screen in a call. */
 export function playScreenSound() {
-  playSound(SCREEN_URL, 0);
+  playSound("screen", 0);
 }
 
 /** We left the call. */
 export function playLeaveSound() {
-  playSound(LEAVE_URL, 0);
+  playSound("leave", 0);
 }
 
 async function allowed() {
@@ -153,7 +171,8 @@ export async function showDesktopNotification(title: string, body: string, from?
   } catch { /* Notifications are best effort. */ }
 }
 
-/** Test hook: forgets the throttles and the cached audio elements. */
+/** Test hook: forgets the throttles, the cached audio elements and the platform check. */
 export function resetNotificationSound() {
   sounds.clear();
+  nativeSounds = undefined;
 }

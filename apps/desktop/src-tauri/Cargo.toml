@@ -30,6 +30,10 @@ winreg = "0.56"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 disc-call = { path = "../../../packages/call-engine" }
+# App sounds: WebKitGTK's <audio> needs a GStreamer MP3 decoder most distros lack (sounds.rs).
+libpulse-binding = "2.30.1"
+libpulse-simple-binding = "2.29.0"
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 webkit2gtk = { version = "2.0", features = ["v2_38"] }
 # Checks for the AppIndicator library before the tray uses it (it panics without it).
 libloading = "0.8"
