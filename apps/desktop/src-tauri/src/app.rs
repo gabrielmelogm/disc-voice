@@ -1,4 +1,4 @@
-use crate::{browser, call, camera, discord_rpc, notify, pip, screen, tray};
+use crate::{browser, call, camera, discord_rpc, notify, pip, screen, sounds, tray};
 use disc_audio::{AudioAction, AudioDevices, AudioEngine, AudioStatus};
 use tauri::Manager;
 
@@ -167,6 +167,8 @@ pub fn run() {
             call::native::call_camera_stop,
             call::native::call_video_frame,
             notify::show_notification,
+            sounds::sound_native,
+            sounds::native::play_sound,
             discord_rpc::discord_presence,
             browser::open_url,
             save_theme_template,

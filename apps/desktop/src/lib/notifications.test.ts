@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const tauri = vi.hoisted(() => ({ isTauri: vi.fn(() => false), invoke: vi.fn(async (..._args: unknown[]) => {}) }));
+const tauri = vi.hoisted(() => ({ isTauri: vi.fn(() => false), invoke: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined) }));
 const plugin = vi.hoisted(() => ({
   isPermissionGranted: vi.fn(async () => true),
   requestPermission: vi.fn(async () => "granted"),
@@ -8,6 +8,9 @@ const plugin = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => tauri);
 vi.mock("@tauri-apps/plugin-notification", () => plugin);
+
+/** Sounds start once the platform check resolves. */
+const flush = () => new Promise(resolve => setTimeout(resolve));
 
 async function load() {
   vi.resetModules();
@@ -50,10 +53,12 @@ describe("notifications", () => {
     const { playNotificationSound } = await load();
     playNotificationSound();
     playNotificationSound();
+    await flush();
     expect(play).toHaveBeenCalledTimes(1);
     expect(Audio).toHaveBeenCalledWith("/songs/notification.mp3");
     now.mockReturnValue(11_000);
     playNotificationSound();
+    await flush();
     expect(play).toHaveBeenCalledTimes(2);
     expect(Audio).toHaveBeenCalledTimes(1);
     now.mockRestore();
@@ -66,6 +71,7 @@ describe("notifications", () => {
     const { playNotificationSound, playVoiceConnectSound } = await load();
     playNotificationSound();
     playVoiceConnectSound();
+    await flush();
     expect(Audio).toHaveBeenCalledWith("/songs/user-voicecall-connect.mp3");
     expect(play).toHaveBeenCalledTimes(2);
   });
@@ -78,17 +84,39 @@ describe("notifications", () => {
     const { playMicSound, playScreenSound } = await load();
     playMicSound();
     playMicSound();
+    await flush();
     expect(Audio).toHaveBeenCalledWith("/songs/mic-control-notification.mp3");
     expect(Audio).toHaveBeenCalledTimes(1);
     expect(play).toHaveBeenCalledTimes(2);
     playScreenSound();
     playScreenSound();
+    await flush();
     expect(Audio).toHaveBeenCalledWith("/songs/share-media-voicecall-notification.mp3");
     expect(play).toHaveBeenCalledTimes(4);
     const { playLeaveSound } = await import("./notifications");
     playLeaveSound();
+    await flush();
     expect(Audio).toHaveBeenCalledWith("/songs/notification-beep.mp3");
     vi.mocked(Date.now).mockRestore();
+  });
+
+  it("plays the sounds natively where the webview cannot (Linux), on the chosen output", async () => {
+    const Audio = vi.fn();
+    vi.stubGlobal("Audio", Audio);
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async (command: unknown) => command === "sound_native" ? true : undefined);
+    localStorage.setItem("discvoice.voice.output", "alsa_output.usb");
+    const { playMicSound, playNotificationSound } = await load();
+    playMicSound();
+    playMicSound();
+    playNotificationSound();
+    await flush();
+    expect(tauri.invoke).toHaveBeenCalledTimes(4);
+    expect(tauri.invoke).toHaveBeenCalledWith("sound_native");
+    expect(tauri.invoke).toHaveBeenCalledWith("play_sound", { name: "mic", output: "alsa_output.usb" });
+    expect(tauri.invoke).toHaveBeenCalledWith("play_sound", { name: "notification", output: "alsa_output.usb" });
+    expect(Audio).not.toHaveBeenCalled();
+    tauri.invoke.mockImplementation(async () => undefined);
   });
 
   it("only sends OS notifications inside the desktop app, through the native command", async () => {

@@ -19,6 +19,8 @@ mod pip;
 #[cfg(any(windows, target_os = "linux"))]
 mod screen;
 #[cfg(any(windows, target_os = "linux"))]
+mod sounds;
+#[cfg(any(windows, target_os = "linux"))]
 mod tray;
 
 #[cfg(any(windows, target_os = "linux"))]
