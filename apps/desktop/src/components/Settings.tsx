@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, RefreshCw, Search, Upload, UserRound, X, type LucideIcon } from "lucide-react";
+import { Download, ExternalLink, IdCard, KeyRound, Link2, LogOut, Mic, Palette, RefreshCw, Search, Sparkles, Upload, UserRound, X, type LucideIcon } from "lucide-react";
 import type { BannerColor, DiscordStatus, GifChoice, ProfileUpdate, User } from "@disc-voice/shared";
 import { DeviceSettings } from "../DeviceSettings";
+import { version as bundledVersion } from "../../package.json";
 import { api, message } from "../lib/api";
+import { CHANGELOG, releaseDate } from "../lib/changelog";
 import { maskEmail } from "../lib/display";
 import { openExternal } from "../lib/external";
 import type { Realtime } from "../lib/realtime";
@@ -19,7 +21,7 @@ import { GifPicker } from "./GifPicker";
 import { BANNER_COLORS, ProfileBanner, ProfileSummary } from "./ProfileCard";
 import { Avatar, RadioCards, SoonTag, Switch } from "./ui";
 
-export type SettingsPage = "overview" | "voice" | "profile" | "connections" | "themes";
+export type SettingsPage = "overview" | "voice" | "profile" | "connections" | "themes" | "whatsnew";
 
 const pages: { id: SettingsPage; label: string; icon: LucideIcon; keywords: string }[] = [
   { id: "overview", label: "Visão geral", icon: UserRound, keywords: "conta e-mail login aparência idioma notificações janela bandeja segundo plano fechar excluir atualizações versão canal" },
@@ -27,6 +29,7 @@ const pages: { id: SettingsPage; label: string; icon: LucideIcon; keywords: stri
   { id: "connections", label: "Conexões", icon: Link2, keywords: "discord conta vincular atividade jogo jogando música presença privacidade" },
   { id: "voice", label: "Voz e vídeo", icon: Mic, keywords: "microfone saída áudio câmera webcam tela compartilhar" },
   { id: "themes", label: "Temas", icon: Palette, keywords: "cores claro escuro sistema importar aparência" },
+  { id: "whatsnew", label: "Novidades", icon: Sparkles, keywords: "novidades changelog atualização versão o que mudou" },
 ];
 
 const appearanceOptions: { value: Appearance; label: string }[] = [
@@ -98,12 +101,14 @@ export function Settings({ user, page, onPage, onClose, onLogout, leaving, error
             <h1>{title}</h1>
             {page === "themes" && <p className="lede">Escolha como o Disc Voice aparece. O tema muda só as cores; fontes e tamanhos continuam os mesmos.</p>}
             {page === "connections" && <p className="lede">Vincule outras contas para trazer o que você já faz nelas para o Disc Voice.</p>}
+            {page === "whatsnew" && <p className="lede">O que você pode fazer de novo no Disc Voice a cada versão.</p>}
           </header>
           {page === "overview" && <Overview user={user} onEditProfile={() => onPage("profile")} onThemes={() => onPage("themes")} />}
           {page === "voice" && <DeviceSettings inCall={inCall} callDevices={callDevices} userName={user.name} />}
           {page === "profile" && <Profile key={user.id} user={user} onUserChange={onUserChange} />}
           {page === "connections" && <Connections realtime={realtime} />}
           {page === "themes" && <Themes />}
+          {page === "whatsnew" && <WhatsNew />}
         </div>
       </main>
     </div>
@@ -194,6 +199,33 @@ function Updates() {
       </div>
     </> : <p className="field-help">Esta instalação não se atualiza sozinha (pacote .deb ou .rpm): atualize pelo gerenciador de pacotes ou baixe a nova versão no site.</p>}
   </section>;
+}
+
+const changeGroups: { key: "added" | "improved" | "fixed"; title: string }[] = [
+  { key: "added", title: "Novo" },
+  { key: "improved", title: "Melhorias" },
+  { key: "fixed", title: "Correções" },
+];
+
+/** The changelog in plain language, newest first, marking the installed version. */
+function WhatsNew() {
+  // The app reports its own version; the web build uses the one it was built with.
+  const installed = useAppVersion() ?? bundledVersion;
+  return <>{CHANGELOG.map(entry => {
+    const current = entry.version === installed;
+    const id = `release-${entry.version.replace(/\W/g, "-")}`;
+    return <section key={entry.version} className={`release-card ${current ? "current" : ""}`} aria-labelledby={id}>
+      <div className="section-row">
+        <h2 id={id} className="settings-section-title">Versão {entry.version}</h2>
+        {current && <span className="status-chip brand">Sua versão</span>}
+      </div>
+      <p className="field-help"><time dateTime={entry.date}>{releaseDate(entry.date)}</time></p>
+      {changeGroups.filter(group => entry[group.key]?.length).map(group => <div key={group.key} className="release-group">
+        <h3>{group.title}</h3>
+        <ul>{entry[group.key]!.map(change => <li key={change}>{change}</li>)}</ul>
+      </div>)}
+    </section>;
+  })}</>;
 }
 
 function collapse(value: string) {
