@@ -541,9 +541,17 @@ describe("webcam in a call (webview)", () => {
     const cams = [camera("cam-1"), camera("cam-2")];
     let next = 0;
     const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => constraints.video ? cams[next++].media : mic.media);
+    const enumerate = vi.fn().mockResolvedValue([webcam("cam-1", "Webcam integrada")]);
+    const addEventListener = vi.fn();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
-      getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      getUserMedia, enumerateDevices: enumerate, addEventListener, removeEventListener: vi.fn(),
     } });
+    /** Plugs or unplugs webcams, as the system tells the webview. */
+    const plug = async (...devices: MediaDeviceInfo[]) => {
+      enumerate.mockResolvedValue(devices);
+      for (const [type, listener] of addEventListener.mock.calls) if (type === "devicechange") listener();
+      await vi.advanceTimersByTimeAsync(0);
+    };
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     CameraPeer.all = [];
     vi.stubGlobal("RTCPeerConnection", CameraPeer);
@@ -553,8 +561,11 @@ describe("webcam in a call (webview)", () => {
     call.event({ type: "voice.joined", channelId: channel.id, peerId: "a-self", participants: [
       { ...participant, peerId: "a-self" }, { ...participant, peerId: "remote" },
     ] });
-    return { ...call, getUserMedia, cams };
+    await vi.waitFor(() => expect(call.voice.getSnapshot().cameraPresence).toBe("ready"));
+    return { ...call, getUserMedia, cams, enumerate, plug };
   }
+
+  const webcam = (deviceId: string, label: string) => ({ kind: "videoinput", deviceId, label, groupId: "", toJSON: () => ({}) }) as MediaDeviceInfo;
 
   const cameraSenders = (peer: CameraPeer, track: unknown) => peer.addTrack.mock.calls.filter(([sent]) => sent === track);
 
@@ -599,7 +610,43 @@ describe("webcam in a call (webview)", () => {
     const { voice, cams } = await inCall();
     await voice.startCamera();
     cams[0].track.onended!();
-    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: expect.stringMatching(/desconectada/) });
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: "", cameraError: expect.stringMatching(/desconectada/) });
+    voice.dispose();
+  });
+
+  it("keeps camera errors off the call status and dims the button until a webcam is plugged in", async () => {
+    const { voice, getUserMedia, enumerate, plug } = await inCall();
+    enumerate.mockResolvedValue([]);
+    getUserMedia.mockRejectedValueOnce(new DOMException("none", "NotFoundError"));
+    await voice.startCamera();
+    expect(voice.getSnapshot()).toMatchObject({ error: "", camera: "idle", cameraPresence: "none", cameraError: expect.stringMatching(/Nenhuma webcam/) });
+
+    // Dimmed: a click looks again instead of failing once more.
+    const calls = getUserMedia.mock.calls.length;
+    await voice.startCamera();
+    expect(getUserMedia).toHaveBeenCalledTimes(calls);
+
+    await plug(webcam("cam-1", "Webcam integrada"));
+    expect(voice.getSnapshot()).toMatchObject({ cameraPresence: "ready", cameraError: "" });
+    voice.dispose();
+  });
+
+  it("names the chosen webcam once it's unplugged, and the arrow can pick another", async () => {
+    const { voice, getUserMedia, plug } = await inCall();
+    await plug(webcam("cam-1", "Webcam integrada"), webcam("cam-9", "Logitech C920"));
+    voice.setCamera("cam-9");
+    expect(localStorage.getItem("discvoice.voice.cameraLabel")).toBe("Logitech C920");
+
+    await plug(webcam("cam-1", "Webcam integrada"));
+    expect(voice.getSnapshot()).toMatchObject({ cameraPresence: "missing", cameraLabel: "Logitech C920", error: "" });
+    const calls = getUserMedia.mock.calls.length;
+    await voice.startCamera();
+    expect(getUserMedia).toHaveBeenCalledTimes(calls);
+
+    voice.setCamera("cam-1");
+    expect(voice.getSnapshot().cameraPresence).toBe("ready");
+    await voice.startCamera();
+    expect(voice.getSnapshot().camera).toBe("live");
     voice.dispose();
   });
 
@@ -786,7 +833,7 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     expect(send.mock.calls.every(([command]) => command.type !== "voice.state" || command.camera)).toBe(true);
 
     engine.emit({ type: "videoEnded", source: "camera", message: "A webcam parou de enviar vídeo." });
-    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", localCamera: null, error: "A webcam parou de enviar vídeo." });
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", localCamera: null, error: "", cameraError: "A webcam parou de enviar vídeo." });
     expect(stopCamera).toHaveBeenCalled();
 
     engine.emit({ type: "video", peerId: "remote", source: "camera", active: true });
@@ -841,13 +888,37 @@ describe("native calls (Linux: WebKitGTK has no WebRTC)", () => {
     voice.dispose();
   });
 
+  it("dims the camera when the engine finds none, then brings it back when one shows up", async () => {
+    vi.spyOn(nativeCamera, "startForCall").mockRejectedValue("A câmera selecionada não está disponível. Atualize os dispositivos.");
+    const devices = vi.spyOn(nativeCamera, "devices").mockResolvedValue([]);
+    const { voice } = await inNativeCall();
+    await voice.startCamera();
+    await vi.waitFor(() => expect(voice.getSnapshot().cameraPresence).toBe("none"));
+    expect(voice.getSnapshot()).toMatchObject({ error: "", camera: "idle" });
+
+    devices.mockResolvedValue([{ id: "camera-1", name: "Webcam" }]);
+    await voice.refreshCameras();
+    expect(voice.getSnapshot()).toMatchObject({ cameraPresence: "ready", cameraError: "" });
+    voice.dispose();
+  });
+
+  it("keeps a failure that isn't about a missing webcam on the camera button", async () => {
+    vi.spyOn(nativeCamera, "startForCall").mockRejectedValue("Acesso à câmera negado.");
+    vi.spyOn(nativeCamera, "devices").mockResolvedValue([{ id: "camera-1", name: "Webcam" }]);
+    const { voice } = await inNativeCall();
+    await voice.startCamera();
+    await vi.waitFor(() => expect(voice.getSnapshot().cameraPresence).toBe("ready"));
+    expect(voice.getSnapshot()).toMatchObject({ error: "", cameraError: "Acesso à câmera negado." });
+    voice.dispose();
+  });
+
   it("the settings test taking the camera turns the call's camera off without stopping the test", async () => {
     vi.spyOn(nativeCamera, "startForCall").mockResolvedValue({ deviceId: "camera-1", width: 640, height: 360, frameRate: 30, passthrough: true });
     const stopCamera = vi.spyOn(nativeCamera, "stop").mockResolvedValue(undefined);
     const { voice, send, engine } = await inNativeCall();
     await voice.startCamera();
     const test = nativeCamera.claim(() => {});
-    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: expect.stringMatching(/teste de câmera/) });
+    expect(voice.getSnapshot()).toMatchObject({ camera: "idle", error: "", cameraError: expect.stringMatching(/teste de câmera/) });
     expect(engine.stopCamera).toHaveBeenCalledOnce();
     expect(stopCamera).not.toHaveBeenCalled();
     expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "voice.state", camera: false }));
