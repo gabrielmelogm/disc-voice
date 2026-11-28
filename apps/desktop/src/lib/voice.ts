@@ -86,6 +86,8 @@ export const DEFAULT_SCREEN_VOLUME: ScreenVolume = { volume: 1, muted: false };
 export interface VoiceState {
   status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
   channel: Channel | null;
+  /** When we joined the current call (ms since the epoch), for its elapsed time. */
+  since: number | null;
   participants: VoiceParticipant[];
   muted: boolean;
   deafened: boolean;
@@ -268,7 +270,7 @@ export function voiceError(error: unknown): string {
 
 export class Voice {
   private state: VoiceState = {
-    status: "idle", channel: null, participants: [], muted: false, deafened: false, error: "",
+    status: "idle", channel: null, since: null, participants: [], muted: false, deafened: false, error: "",
     speaking: [], devices: [], inputId: preference("input"), outputId: preference("output"), playbackBlocked: false, deviceBusy: false,
     peerId: "", screenSupported: false, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: preference("screenAudio") !== "off", screenAudio: false, screenVolumes: savedScreenVolumes(),
@@ -403,7 +405,7 @@ export class Voice {
     if (channel.type !== "voice") return;
     this.leave();
     const generation = this.generation;
-    this.update({ channel, status: "connecting", error: "" });
+    this.update({ channel, since: Date.now(), status: "connecting", error: "" });
     try {
       if (this.realtime.getSnapshot().status !== "connected") throw new Error("Aguarde a conexão em tempo real antes de entrar.");
       const native = await this.isNative();
@@ -443,7 +445,7 @@ export class Voice {
       try { this.send({ type: "voice.leave" }); } catch { /* Socket closed concurrently. */ }
     }
     this.cleanup();
-    this.update({ status: "idle", channel: null, participants: [], speaking: [], error: "", playbackBlocked: false, deviceBusy: false, peerId: "" });
+    this.update({ status: "idle", channel: null, since: null, participants: [], speaking: [], error: "", playbackBlocked: false, deviceBusy: false, peerId: "" });
   };
 
   /** The user hangs up: the cue plays here, not on the leaves the app does on its own. */

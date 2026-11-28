@@ -305,7 +305,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
 .menu-anchor { position: relative; display: flex; }
 .popover-menu { position: absolute; left: 0; bottom: calc(100% + 12px); z-index: 10; display: flex; flex-direction: column; gap: 2px; width: 280px; max-height: 60vh; padding: 8px; overflow-y: auto; border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-md), 0 0 0 1px var(--line); }
 .popover-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 8px; border: 0; border-radius: var(--radius-md); background: none; color: var(--ink); font-weight: 600; text-align: left; }
-.popover-menu button span:not(.avatar):not(.menu-icon) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.popover-menu button span:not(.avatar):not(.menu-icon):not(.call-mark-host):not(.call-mark):not(.call-tag):not(.call-tag-dot) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popover-menu button:hover { background: var(--fill); }
 .popover-menu button > svg:last-child:not(:first-child) { color: var(--brand-text); }
 .menu-label { padding: 6px 8px 4px; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -1087,3 +1087,73 @@ button.cloud-thumb { cursor: zoom-in; }
   .servers-drawer { padding-bottom: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .servers-drawer { animation: none; } }
+
+/* ---------- In a call, browsing the app (green = you are in voice) ---------- */
+.call-mark-host { position: relative; display: inline-flex; flex: none; }
+.call-mark { position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: var(--radius-full); background: var(--speaking); color: #fff; box-shadow: 0 0 0 2px var(--fill); }
+.popover-menu .call-mark { box-shadow: 0 0 0 2px var(--surface-raised); }
+.popover-menu button .menu-text .call-sub { color: var(--success-text); font-weight: 600; }
+.call-tag { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: var(--radius-full); background: var(--success-soft); color: var(--success-text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.call-tag-dot { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--speaking); }
+
+.call-chip { display: flex; flex: none; align-items: center; gap: 4px; height: 44px; padding: 0 6px; border-radius: var(--radius-full); background: var(--success-soft); }
+.call-chip-main { display: flex; align-items: center; gap: 8px; height: 44px; min-width: 0; padding: 0 8px 0 0; border: 0; background: none; color: var(--ink); text-align: left; }
+.call-chip-icon { display: grid; flex: none; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-full); background: var(--speaking); color: #fff; }
+.call-chip-text { display: flex; flex-direction: column; min-width: 0; }
+.call-chip-text strong { max-width: 180px; font-size: 13px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-chip-text span { color: var(--success-text); font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.call-chip-text span.is-muted { color: var(--danger-text); }
+.call-chip-main:hover strong { text-decoration: underline; }
+/* Quick controls: the strip grows from the arrow and the buttons come out of it, right to left.
+   Closing plays it backwards: the buttons shrink back into the arrow, then the strip closes.
+   Only the left side clips, so a button can slide under the arrow on its way in. */
+.call-chip-controls { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 4px; max-width: 0; margin-left: -4px; clip-path: inset(-6px -48px -6px 0); transition: max-width .26s cubic-bezier(.4, 0, .2, 1) .14s, margin-left .26s cubic-bezier(.4, 0, .2, 1) .14s; }
+.call-chip-controls.open { max-width: 76px; margin-left: 0; transition-timing-function: cubic-bezier(.2, .8, .2, 1); transition-delay: 0s; }
+.call-chip-controls .chip-button { --from: 36px; opacity: 0; transform: translateX(var(--from)) scale(.3); transform-origin: right center; transition: transform .3s cubic-bezier(.36, 0, .66, -.56), opacity .16s ease-in .14s; }
+.call-chip-controls .chip-button:first-child { --from: 72px; }
+.call-chip-controls.open .chip-button { opacity: 1; transform: none; transition: transform .36s cubic-bezier(.34, 1.56, .64, 1), opacity .2s ease-out; }
+/* Opening: the one next to the arrow first. Closing: the farthest goes back first. */
+.call-chip-controls.open .chip-button:first-child { transition-delay: .07s; }
+.call-chip-controls:not(.open) .chip-button:last-child { transition-delay: .06s, .2s; }
+.chip-button.toggle { position: relative; z-index: 1; }
+.chip-button.toggle svg { transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.chip-button.toggle.open svg { transform: rotate(180deg); }
+.chip-button { display: grid; flex: none; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-full); background: var(--surface-raised); color: var(--ink); }
+.chip-button:hover { background: var(--fill-hover); }
+.chip-button.off { background: var(--danger-soft); color: var(--danger-text); }
+.chip-button.danger { background: var(--danger); color: var(--on-danger); }
+.chip-button.danger:hover { background: var(--danger-hover); }
+
+.call-banner { display: flex; flex: none; align-items: center; gap: 10px; width: 100%; padding: 10px 12px 10px 10px; border: 0; border-radius: var(--radius-lg); background: var(--success-soft); color: var(--ink); text-align: left; }
+.call-banner-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.call-banner-text strong { font-size: 13px; line-height: 18px; }
+.call-banner-text span { color: var(--success-text); font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-banner-cta { color: var(--success-text); font-size: 13px; font-weight: 700; }
+.call-banner:hover .call-banner-cta { text-decoration: underline; }
+
+.room-card.is-here { --avatar-cutout: var(--success-soft); border-color: var(--speaking); background: var(--success-soft); }
+.room-card.is-here .avatar-stack .avatar { box-shadow: 0 0 0 2px var(--success-soft); }
+.room-meta .link-button.room-back { color: var(--success-text); font-weight: 700; white-space: nowrap; }
+
+.call-left h2 { margin: 0; font-size: 22px; line-height: 28px; }
+.call-left .button-row { justify-content: center; gap: 8px; padding-top: 4px; }
+.button.on-video { background: var(--video-surface); color: var(--on-video); }
+.button.on-video:hover:not(:disabled) { filter: brightness(1.15); }
+
+.mini-call { position: absolute; top: 72px; right: 16px; z-index: 4; display: flex; flex-direction: column; gap: 10px; width: 280px; padding: 12px; border-radius: var(--radius-lg); background: var(--video-bg); color: var(--on-video); box-shadow: var(--shadow-md); --avatar-cutout: var(--video-bg); }
+.mini-call-head { display: flex; align-items: center; gap: 8px; }
+.mini-call-dot { flex: none; width: 10px; height: 10px; border-radius: var(--radius-full); background: var(--speaking); }
+.mini-call-title { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.mini-call-title strong { font-size: 13px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-call-title span { color: var(--on-video-muted); font-size: 12px; line-height: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.mini-tile { position: relative; display: grid; place-items: center; overflow: hidden; aspect-ratio: 16 / 9; border: 2px solid transparent; border-radius: var(--radius-md); background: var(--video-surface); }
+.mini-tile.is-speaking { border-color: var(--speaking); }
+.mini-tile .tile-name { z-index: 1; left: 6px; bottom: 6px; font-size: 12px; }
+.mini-call-people { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--on-video-muted); font-size: 12px; font-weight: 500; }
+.mini-call-people .avatar-stack .avatar { box-shadow: 0 0 0 2px var(--video-bg); }
+.mini-call-back { width: 100%; background: var(--surface-raised); color: var(--ink); font-size: 13px; }
+.mini-call-back:hover { background: var(--fill-hover); }
+@media (max-width: 720px) {
+  .call-chip-text span { display: none; }
+  .mini-call { top: 64px; width: 220px; }
+}

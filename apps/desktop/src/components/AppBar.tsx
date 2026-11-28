@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check, ChevronUp, Cloud, HeadphoneOff, Headphones, Home, LayoutGrid, LoaderCircle, LogIn, MessageCircle, Mic, MicOff, MonitorOff, MonitorUp,
   PhoneOff, Plus, Search, Settings2, Video, VideoOff,
@@ -6,6 +6,7 @@ import {
 import type { ChosenStatus, Server, User } from "@disc-voice/shared";
 import { CHOSEN_STATUSES, STATUS_LABELS } from "../lib/presence";
 import { CAMERA_QUALITIES, screenLabel, type CameraQuality, type Voice, type VoiceState } from "../lib/voice";
+import { CallChip } from "./CallNav";
 import { ScreenShareDialog } from "./ScreenShareDialog";
 import { UpdateButton } from "./UpdateDialog";
 import { Avatar, Badge, unreadLabel } from "./ui";
@@ -127,8 +128,17 @@ export function DeafenButton({ voice, state }: { voice: Voice; state: VoiceState
   </button>;
 }
 
-/** Floating app bar: server switcher, call controls and global shortcuts. */
-export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onManageServers, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
+/** Small green headphones on a server's icon: the call is there. */
+function CallMark({ children, on }: { children: ReactNode; on: boolean }) {
+  return <span className="call-mark-host">{children}{on && <span className="call-mark" aria-hidden="true"><Headphones size={10} /></span>}</span>;
+}
+
+/**
+ * Floating app bar: server switcher, call controls and global shortcuts.
+ * In a call it shows the full controls on the call screen (`call`) and
+ * shrinks them into a green chip anywhere else (`away`).
+ */
+export function AppBar({ user, status = "online", chosenStatus = status, onStatus = () => {}, servers, server, view, voice, voiceState, viewingCall = false, onOpenCall, canJoinVoice, dmUnread = 0, onSelectServer, onCreateServer, onJoinServer, onManageServers, onDms, onVoice, onSettings, onVoiceSettings, onSearch, onFiles }: {
   user: User;
   /** The status others see (an idle "online" shows as idle). */
   status?: ChosenStatus;
@@ -142,6 +152,10 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   view: "server" | "dms";
   voice: Voice;
   voiceState: VoiceState;
+  /** The call's room is the screen open now. */
+  viewingCall?: boolean;
+  /** Back to the call's room, from anywhere. */
+  onOpenCall?: () => void;
   canJoinVoice: boolean;
   onSelectServer: (server: Server) => void;
   onCreateServer: () => void;
@@ -159,6 +173,9 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
   const [menu, setMenu] = useState<"servers" | "mic" | "camera" | "account" | null>(null);
   const ref = useRef<HTMLElement>(null);
   const inCall = !!voiceState.channel && voiceState.status !== "error";
+  const mode = !inCall ? "app" : viewingCall ? "call" : "away";
+  const callServerId = inCall ? voiceState.channel?.serverId : undefined;
+  const callServerName = servers.find(s => s.id === callServerId)?.name;
 
   useEffect(() => {
     if (!menu) return;
@@ -174,16 +191,22 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
 
   return <nav ref={ref} className="app-bar" aria-label="Barra do app">
     <div className="menu-anchor">
-      <button className="server-switch" aria-haspopup="menu" aria-expanded={menu === "servers"} aria-label={`Trocar de servidor. Atual: ${server?.name || "nenhum"}`} title="Trocar de servidor" onClick={() => setMenu(menu === "servers" ? null : "servers")}>
-        {server ? <Avatar name={server.name} src={server.icon} size="sm" /> :<span className="avatar avatar-sm"><Home size={15} /></span>}
-        {!inCall && <span className="server-switch-name">{server?.name || "Início"}</span>}
+      <button className="server-switch" aria-haspopup="menu" aria-expanded={menu === "servers"} aria-label={`Trocar de servidor. Atual: ${server?.name || "nenhum"}${callServerName ? `. Em chamada em ${callServerName}` : ""}`} title="Trocar de servidor" onClick={() => setMenu(menu === "servers" ? null : "servers")}>
+        {server ? <CallMark on={!!server && server.id === callServerId}><Avatar name={server.name} src={server.icon} size="sm" /></CallMark> :<span className="avatar avatar-sm"><Home size={15} /></span>}
+        {mode !== "call" && <span className="server-switch-name">{server?.name || "Início"}</span>}
         <ChevronUp size={16} />
       </button>
       {menu === "servers" && <div className="popover-menu" role="menu" aria-label="Servidores">
         <span className="menu-label">Seus servidores</span>
-        {servers.map(item => <button key={item.id} role="menuitem" aria-label={`Abrir servidor ${item.name}`} onClick={pick(() => onSelectServer(item))}>
-          <Avatar name={item.name} src={item.icon} size="sm" /><span>{item.name}</span>{item.id === server?.id && view === "server" && <Check size={16} />}
-        </button>)}
+        {servers.map(item => {
+          const here = item.id === callServerId;
+          return <button key={item.id} role="menuitem" aria-label={`Abrir servidor ${item.name}${here ? ", em chamada" : ""}`} onClick={pick(() => onSelectServer(item))}>
+            <CallMark on={here}><Avatar name={item.name} src={item.icon} size="sm" /></CallMark>
+            {here ? <span className="menu-text"><span>{item.name}</span><small className="call-sub">{voiceState.channel?.name} · você está lá</small></span> : <span>{item.name}</span>}
+            {here && <span className="call-tag"><span className="call-tag-dot" />Em chamada</span>}
+            {item.id === server?.id && view === "server" && <Check size={16} />}
+          </button>;
+        })}
         {!servers.length && <p className="menu-empty">Você ainda não está em nenhum servidor.</p>}
         <hr />
         {onManageServers && <button role="menuitem" onClick={pick(onManageServers)}><span className="menu-icon"><LayoutGrid size={16} /></span>Gerenciar servidores</button>}
@@ -192,7 +215,12 @@ export function AppBar({ user, status = "online", chosenStatus = status, onStatu
       </div>}
     </div>
 
-    {inCall && <>
+    {mode === "away" && <>
+      <span className="bar-divider" />
+      <CallChip voice={voice} state={voiceState} serverName={callServerName} onOpen={onOpenCall ?? onVoice} />
+    </>}
+
+    {mode === "call" && <>
       <span className="bar-divider" />
       <div role="toolbar" aria-label="Controles da chamada" className="bar-group">
         <MicButton voice={voice} state={voiceState} menuOpen={menu === "mic"} onMenu={() => setMenu(menu === "mic" ? null : "mic")} onPicked={() => setMenu(null)} onVoiceSettings={onVoiceSettings} />
