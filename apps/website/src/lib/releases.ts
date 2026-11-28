@@ -16,6 +16,7 @@ export const DOWNLOADS = {
   appimage: "DiscVoice_x86_64.AppImage",
   deb: "DiscVoice_amd64.deb",
   rpm: "DiscVoice_x86_64.rpm",
+  flatpak: "DiscVoice_x86_64.flatpak",
 } as const;
 
 export type Download = keyof typeof DOWNLOADS;

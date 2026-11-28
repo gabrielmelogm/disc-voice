@@ -57,7 +57,7 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
 | Plataforma | Instalação | Disponibilidade |
 |:--|:--|:--|
 | **Windows 10/11 (x64)** | Instalador **`.exe` (NSIS)** | ✅ App completo |
-| **Linux (x86_64)** | **AppImage**, sem instalação | ✅ App completo (novo) |
+| **Linux (x86_64)** | **AppImage** sem instalação, `.deb`, `.rpm` ou **Flatpak** | ✅ App completo (novo) |
 | **Web** | Nenhuma — abra no navegador | ✅ Mesma conta e servidores |
 | **macOS** | Nenhuma — use a versão web | ⚠️ Sem aplicativo nativo |
 
@@ -85,6 +85,11 @@ Ao criar um canal, escolha **Texto** ou **Voz**. As chamadas continuam enquanto 
    Funciona em distros com glibc 2.35 ou mais nova (Ubuntu 22.04, Fedora 36, Debian 12 em diante).
 3. **Ícone na bandeja:** no GNOME, instale a extensão AppIndicator. Se a janela ficar em
    branco (comum com placas NVIDIA), abra com `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+
+**Prefere Flatpak?** Baixe `DiscVoice_0.1.0-alpha.3_x86_64.flatpak` na mesma página e instale com
+`flatpak install --user ./DiscVoice_*.flatpak` (o runtime do GNOME vem do Flathub). Quando sai
+uma versão nova, o app avisa e o botão de atualização baixa o novo `.flatpak`: abra o arquivo
+para atualizar, sem perder a conta nem as configurações.
 
 Os pacotes também podem ser gerados localmente. No Windows:
 

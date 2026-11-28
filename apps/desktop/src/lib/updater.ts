@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { openExternal } from "./external";
 import type { Realtime } from "./realtime";
 
 // Self-update. The app only learns that a version exists: the API announces
@@ -13,6 +14,10 @@ import type { Realtime } from "./realtime";
 // the website's /api/update route, which signs a short-lived link to the
 // installer. The download's signature is checked against the public key in
 // tauri.conf.json before installing, and the app relaunches.
+//
+// The Flatpak cannot replace its own files: it gets the same notice, and the
+// click opens a signed link to the new .flatpak in the browser; opening the
+// file updates the install in place (GNOME Software, Discover).
 
 export const SITE_URL = "https://get-discvoice.devgabrielmelo.shop";
 
@@ -37,6 +42,8 @@ export interface UpdateState {
   error: string;
   /** When the last look for a version finished. */
   checkedAt: number | null;
+  /** The user installs the update by hand (Flatpak): the click downloads it in the browser. */
+  manual: boolean;
 }
 
 const KEY = "discvoice.updates";
@@ -48,7 +55,7 @@ export const FIRST_CHECK_DELAY = 10 * 1000;
 export const ANNOUNCEMENT_JITTER = 20 * 1000;
 
 const initial: UpdateState = {
-  status: "idle", version: null, notes: "", date: null, downloaded: 0, total: null, error: "", checkedAt: null,
+  status: "idle", version: null, notes: "", date: null, downloaded: 0, total: null, error: "", checkedAt: null, manual: false,
 };
 
 let state = initial;
@@ -141,13 +148,22 @@ export function useAppVersion() {
 }
 
 /**
- * This install's update platform ("windows-x86_64"), or null when it does not
- * update itself (in a browser, a dev build or a .deb/.rpm).
+ * This install's update platform ("windows-x86_64", "linux-x86_64-flatpak"),
+ * or null when it does not update itself (in a browser, a dev build or a
+ * .deb/.rpm).
  */
 export function updaterPlatform() {
   return isTauri()
     ? invoke<string | null>("updater_platform").then(value => (typeof value === "string" && value ? value : null), () => null)
     : Promise.resolve(null);
+}
+
+/** The Flatpak is updated by installing the new bundle, not by the app. */
+export const isManualPlatform = (platform: string) => platform.endsWith("-flatpak");
+
+/** The website's signed link to this platform's package of the channel's newest version. */
+export function downloadUrl(platform: string, channel: UpdateChannel) {
+  return `${SITE_URL}/api/update/download/${encodeURIComponent(platform)}?channel=${channel}`;
 }
 
 export function useUpdaterSupported() {
@@ -186,7 +202,7 @@ async function look() {
     return;
   }
   set({
-    status: "available", version, error: "", checkedAt: Date.now(),
+    status: "available", version, error: "", checkedAt: Date.now(), manual: isManualPlatform(platform),
     notes: typeof latest?.notes === "string" ? latest.notes.trim() : "",
     date: typeof latest?.pub_date === "string" ? latest.pub_date : null,
   });
@@ -213,6 +229,7 @@ function errorText(error: unknown) {
  */
 export async function installUpdate(beforeInstall: () => void | Promise<void> = () => {}) {
   if (state.status !== "available" && state.status !== "error") return false;
+  if (state.manual) return downloadByHand();
   set({ status: "downloading", downloaded: 0, total: null, error: "" });
   try {
     const current = await getVersion();
@@ -235,6 +252,21 @@ export async function installUpdate(beforeInstall: () => void | Promise<void> = 
   } catch (error) {
     console.warn("Could not update.", error);
     set({ status: "error", error: errorText(error) });
+    return false;
+  }
+}
+
+/** Flatpak: the browser downloads the new .flatpak; the app and the call keep running. */
+async function downloadByHand() {
+  try {
+    const platform = await updaterPlatform();
+    if (!platform) return false;
+    await openExternal(downloadUrl(platform, updateChannel(await getVersion())));
+    set({ status: "available", error: "" });
+    return true;
+  } catch (error) {
+    console.warn("Could not open the update download.", error);
+    set({ status: "error", error: "Não foi possível abrir o download. Baixe a nova versão no site." });
     return false;
   }
 }

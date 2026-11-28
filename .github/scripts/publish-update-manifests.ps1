@@ -1,7 +1,8 @@
 # Publishes the self-update manifests the website's /api/update routes read
 # (apps/website/src/lib/updates.ts): releases/channels/<channel>.json. Then
 # asks the API to tell every open app (POST /api/releases/notify), which shows
-# a discreet "update available" button; nothing is forced.
+# a discreet "update available" button; nothing is forced. The Flatpak entry
+# has no signature: the user downloads and opens the new .flatpak.
 #
 # A release goes to its own channel and to the less stable ones: a stable
 # release reaches stable, beta and alpha; a beta (or rc) beta and alpha; an
@@ -34,6 +35,9 @@ $notes = ((($body -join "`n") -split [regex]::Escape('<!-- downloads -->'))[0]).
 $platforms = [ordered]@{
   'windows-x86_64' = [ordered]@{ key = "releases/$env:TAG/DiscVoice-Setup.exe"; signature = (Get-Content $env:INSTALLER_SIG -Raw).Trim() }
   'linux-x86_64' = [ordered]@{ key = "releases/$env:TAG/DiscVoice_x86_64.AppImage"; signature = (Get-Content $env:APPIMAGE_SIG -Raw).Trim() }
+  # No signature: the Flatpak does not update itself. The app tells of the
+  # version and the website's /api/update/download/ signs a link to this file.
+  'linux-x86_64-flatpak' = [ordered]@{ key = "releases/$env:TAG/DiscVoice_x86_64.flatpak" }
 }
 
 $published = @()

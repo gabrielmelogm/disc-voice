@@ -9,12 +9,14 @@ const mocks = vi.hoisted(() => {
     getVersion: vi.fn(async () => state.version),
     check: vi.fn(),
     relaunch: vi.fn(async () => {}),
+    openExternal: vi.fn(async () => {}),
   };
 });
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri, invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("./external", () => ({ openExternal: mocks.openExternal }));
 
 type Event = { event: "Started"; data: { contentLength?: number } } | { event: "Progress"; data: { chunkLength: number } } | { event: "Finished" };
 
@@ -128,6 +130,31 @@ describe("updater", () => {
     expect(update.download).toHaveBeenCalledOnce();
     expect(order).toEqual(["leave call", "install"]);
     expect(mocks.relaunch).toHaveBeenCalledOnce();
+  });
+
+  it("opens the new .flatpak in the browser instead of installing, keeping the call", async () => {
+    mocks.state.platform = "linux-x86_64-flatpak";
+    mocks.openExternal.mockClear();
+    site({ ...latest, platforms: [...latest.platforms, "linux-x86_64-flatpak"] });
+    const updater = await load();
+    await updater.lookForUpdates();
+    expect(updater.updateState()).toMatchObject({ status: "available", version: "0.1.0-alpha.4", manual: true });
+
+    const leave = vi.fn();
+    expect(await updater.installUpdate(leave)).toBe(true);
+    expect(mocks.openExternal).toHaveBeenCalledWith(`${updater.SITE_URL}/api/update/download/linux-x86_64-flatpak?channel=alpha`);
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    expect(leave).not.toHaveBeenCalled();
+    expect(updater.updateState().status).toBe("available");
+  });
+
+  it("does not offer a Flatpak update that the release did not ship", async () => {
+    mocks.state.platform = "linux-x86_64-flatpak";
+    site(latest);
+    const updater = await load();
+    await updater.lookForUpdates();
+    expect(updater.updateState().status).toBe("idle");
   });
 
   it("rejects an update whose signature does not match, keeping the call", async () => {

@@ -1,19 +1,24 @@
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { BUCKET, s3 } from "./releases";
+import { BUCKET, RELEASES_PAGE, s3 } from "./releases";
 
 // The desktop app's updater (tauri-plugin-updater) asks here whether there is
 // a newer version. .github/workflows/desktop.yml publishes one manifest per
 // channel in releases/channels/<channel>.json:
 //
 //   { version, notes, pub_date,
-//     platforms: { "windows-x86_64": { key, signature }, "linux-x86_64": { key, signature } } }
+//     platforms: { "windows-x86_64": { key, signature }, "linux-x86_64": { key, signature },
+//                  "linux-x86_64-flatpak": { key } } }
 //
 // /api/update/latest only tells the app that a version exists (no link). The
 // app calls /api/update/{target}/{arch}/{version} when the user clicks to
 // update; only that answer carries a short-lived signed link to the
 // installer (`key` is its object in the private bucket). Editing a manifest
 // in the bucket holds back or rolls out a version.
+//
+// The Flatpak cannot update itself: its entry has no signature, and its
+// button opens /api/update/download/{platform} in the browser, a signed link
+// to the channel's newest .flatpak.
 
 export const CHANNELS = ["alpha", "beta", "stable"] as const;
 export type Channel = (typeof CHANNELS)[number];
@@ -96,6 +101,28 @@ export async function latestResponse(requested: string | null): Promise<Response
     pub_date: manifest.pub_date,
     platforms: Object.keys(manifest.platforms ?? {}),
   }, { headers });
+}
+
+/**
+ * Redirects to a signed download of the platform's package of the channel's
+ * newest version, or to the GitHub releases page when there is none.
+ */
+export async function downloadResponse(platform: string, requested: string | null): Promise<Response> {
+  const channel = CHANNELS.find(name => name === requested) ?? "stable";
+  const manifest = await readManifest(channel);
+  const key = manifest?.platforms?.[platform]?.key;
+  if (!key) return redirect(RELEASES_PAGE);
+  const name = key.split("/").pop()!;
+  const url = await getSignedUrl(
+    s3()!,
+    new GetObjectCommand({ Bucket: BUCKET, Key: key, ResponseContentDisposition: `attachment; filename="${name}"` }),
+    { expiresIn: LINK_EXPIRES_IN },
+  );
+  return redirect(url);
+}
+
+function redirect(location: string): Response {
+  return new Response(null, { status: 302, headers: { Location: location, "Cache-Control": "no-store" } });
 }
 
 /**

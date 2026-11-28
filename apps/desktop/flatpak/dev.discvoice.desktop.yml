@@ -1,0 +1,58 @@
+# Flatpak of the Linux app, attached to each release as
+# DiscVoice_<version>_x86_64.flatpak (.github/workflows/desktop.yml, job
+# build-flatpak). It repackages the binary of the release's .deb instead of
+# building from source: copy that .deb here as disc-voice.deb, then
+#
+#   flatpak-builder --user --force-clean --repo=repo build dev.discvoice.desktop.yml
+#   flatpak build-bundle repo DiscVoice.flatpak dev.discvoice.desktop \
+#     --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+#
+# The GNOME runtime ships everything the binary links (WebKitGTK 4.1,
+# GStreamer with the PipeWire plugin, PulseAudio); only the tray library is
+# built here.
+id: dev.discvoice.desktop
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: disc-voice-desktop
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Microphone, speakers and the screen's system audio (PulseAudio/PipeWire).
+  - --socket=pulseaudio
+  # API, WebRTC and the localhost redirect of the Google sign-in.
+  - --share=network
+  # Tray icon (AppIndicator) and notifications (notify-rust talks to the
+  # daemon directly, not through the portal).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+  # Discord Rich Presence: the socket of the Discord client, native or Flatpak
+  # (src-tauri/src/discord_rpc.rs).
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/app/com.discordapp.Discord
+  # The camera and the screen go through the XDG portals (disc-video), links
+  # through the OpenURI portal: no permission needed.
+modules:
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
+
+  - name: disc-voice
+    buildsystem: simple
+    sources:
+      - type: file
+        path: disc-voice.deb
+      - type: file
+        path: dev.discvoice.desktop.desktop
+      - type: file
+        path: dev.discvoice.desktop.metainfo.xml
+    build-commands:
+      - ar x disc-voice.deb
+      - tar -xf data.tar.gz
+      - install -Dm755 usr/bin/disc-voice-desktop -t /app/bin
+      - install -Dm644 usr/share/icons/hicolor/32x32/apps/disc-voice-desktop.png /app/share/icons/hicolor/32x32/apps/dev.discvoice.desktop.png
+      - install -Dm644 usr/share/icons/hicolor/128x128/apps/disc-voice-desktop.png /app/share/icons/hicolor/128x128/apps/dev.discvoice.desktop.png
+      # Tauri names the 256 px icon "256x256@2".
+      - install -Dm644 usr/share/icons/hicolor/256x256@2/apps/disc-voice-desktop.png /app/share/icons/hicolor/256x256/apps/dev.discvoice.desktop.png
+      - install -Dm644 dev.discvoice.desktop.desktop -t /app/share/applications
+      - install -Dm644 dev.discvoice.desktop.metainfo.xml -t /app/share/metainfo

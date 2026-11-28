@@ -1,0 +1,6 @@
+# The release's .deb and flatpak-builder output (dev.discvoice.desktop.yml).
+/disc-voice.deb
+/.flatpak-builder/
+/build/
+/repo/
+/*.flatpak
