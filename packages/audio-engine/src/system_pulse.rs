@@ -7,7 +7,9 @@
 //! are followed through server events. Everything runs on one thread, with
 //! a standard (non-threaded) mainloop: callbacks only queue events.
 
-use crate::system::{parent_from_stat, ChunkSink, Mixer, CHANNELS, CHUNK_SAMPLES, RATE};
+use crate::system::{
+    flatpak_instance, parent_from_stat, ChunkSink, Mixer, CHANNELS, CHUNK_SAMPLES, RATE,
+};
 use libpulse_binding::{
     callbacks::ListResult,
     context::{
@@ -26,7 +28,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, OnceLock,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -39,6 +41,8 @@ const SERVER_TIMEOUT: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(5);
 const SAMPLE_BYTES: usize = std::mem::size_of::<f32>();
 const PROCESS_ID: &str = "application.process.id";
+/// Set by PipeWire on the streams of a Flatpak app: its sandbox instance.
+const FLATPAK_INSTANCE: &str = "pipewire.access.portal.instance_id";
 
 enum Event {
     /// A sink input appeared or changed: look it up.
@@ -47,6 +51,8 @@ enum Event {
         index: u32,
         sink: u32,
         pid: Option<u32>,
+        /// The Flatpak instance that plays it, if any.
+        instance: Option<String>,
     },
     Removed(u32),
     Monitor {
@@ -57,9 +63,27 @@ enum Event {
 
 type Events = Rc<RefCell<VecDeque<Event>>>;
 
-/// Whether `pid` is this process or one it started (WebKit's web process
-/// plays the notification sounds).
-fn ours(pid: Option<u32>) -> bool {
+/// This app's Flatpak instance, when it runs in one.
+fn own_instance() -> Option<&'static str> {
+    static INSTANCE: OnceLock<Option<String>> = OnceLock::new();
+    INSTANCE
+        .get_or_init(|| {
+            std::fs::read_to_string("/.flatpak-info")
+                .ok()
+                .as_deref()
+                .and_then(flatpak_instance)
+        })
+        .as_deref()
+}
+
+/// Whether a stream is played by this process or one it started (WebKit's
+/// web process plays the notification sounds). A Flatpak app reports the PID
+/// of its own sandbox, where the main process is always 2, so another
+/// Flatpak's stream would pass for ours: those are told apart by instance.
+fn ours(pid: Option<u32>, instance: Option<&str>) -> bool {
+    if let Some(instance) = instance {
+        return own_instance() == Some(instance);
+    }
     let Some(mut pid) = pid else {
         return false;
     };
@@ -88,6 +112,7 @@ fn input_event(info: &SinkInputInfo) -> Event {
             .proplist
             .get_str(PROCESS_ID)
             .and_then(|pid| pid.trim().parse().ok()),
+        instance: info.proplist.get_str(FLATPAK_INSTANCE),
     }
 }
 
@@ -241,8 +266,13 @@ impl Session {
                             }
                         });
                 }
-                Event::Input { index, sink, pid } => {
-                    if ours(pid) {
+                Event::Input {
+                    index,
+                    sink,
+                    pid,
+                    instance,
+                } => {
+                    if ours(pid, instance.as_deref()) {
                         continue;
                     }
                     if self

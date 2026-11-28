@@ -252,6 +252,25 @@ pub(crate) fn parent_from_stat(stat: &str) -> Option<u32> {
         .ok()
 }
 
+/// The sandbox instance in a `/.flatpak-info` file (`instance-id` in the
+/// `[Instance]` group), the same id PipeWire puts on the instance's streams.
+#[allow(dead_code)]
+pub(crate) fn flatpak_instance(info: &str) -> Option<String> {
+    let mut group = "";
+    for line in info.lines().map(str::trim) {
+        if line.starts_with('[') {
+            group = line;
+        } else if group == "[Instance]" {
+            if let Some(("instance-id", value)) =
+                line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+            {
+                return (!value.is_empty()).then(|| value.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +297,14 @@ mod tests {
         );
         assert_eq!(parent_from_stat("55 (Web (Content)) R 54 55"), Some(54));
         assert_eq!(parent_from_stat("garbage"), None);
+    }
+
+    #[test]
+    fn reads_the_flatpak_instance() {
+        let info = "[Application]\nname=dev.discvoice.desktop\n\n[Instance]\ninstance-id=4156316714\ninstance-path=/home/u/.var/app/dev.discvoice.desktop\n";
+        assert_eq!(flatpak_instance(info).as_deref(), Some("4156316714"));
+        assert_eq!(flatpak_instance("[Application]\ninstance-id=1\n"), None);
+        assert_eq!(flatpak_instance(""), None);
     }
 
     fn recorder() -> (ChunkSink, Arc<Mutex<Vec<Vec<f32>>>>) {
