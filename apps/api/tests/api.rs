@@ -4549,6 +4549,47 @@ async fn reactions_mentions_edits_and_deletes() {
     assert_eq!(everyone["content"], "<@everyone> reunião às 15h");
     assert!(everyone.get("mentions").is_none());
 
+    // Replies show the message they answer, from the same channel only.
+    let reply = |body: Value| {
+        let (app, guest, messages) = (app.clone(), guest.clone(), messages.clone());
+        async move { call(&app, "POST", &messages, Some(&guest), Some(body)).await }
+    };
+    let original = send(&owner, format!("<@{guest_id}> topa?")).await.1;
+    let original_id = original["id"].as_str().unwrap().to_owned();
+    let (status, answer) = reply(json!({
+        "clientId": Uuid::new_v4(), "content": "Bora", "replyTo": original_id
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["replyTo"]["id"], original_id);
+    assert_eq!(answer["replyTo"]["author"]["name"], "Ana");
+    assert_eq!(answer["replyTo"]["content"], format!("<@{guest_id}> topa?"));
+    assert_eq!(answer["replyTo"]["mentions"][0]["name"], "Levi");
+    assert!(answer["replyTo"].get("deleted").is_none());
+    for missing in [json!(id), json!("abc")] {
+        let (status, _) = reply(json!({
+            "clientId": Uuid::new_v4(), "content": "?", "replyTo": missing
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+    }
+    // Deleting the original leaves the reply pointing to nothing.
+    call(
+        &app,
+        "DELETE",
+        &format!("{messages}/{original_id}"),
+        Some(&owner),
+        None,
+    )
+    .await;
+    let page = call(&app, "GET", &messages, Some(&guest), None).await.1;
+    let listed = page["messages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(listed["id"], answer["id"]);
+    assert_eq!(
+        listed["replyTo"],
+        json!({ "id": original_id, "deleted": true })
+    );
+
     // In a direct conversation, only its two people can be mentioned.
     let dm = call(
         &app,

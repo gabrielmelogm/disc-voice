@@ -387,6 +387,8 @@ pub(crate) async fn profile(
             owner_id: row.try_get("", "owner_id")?,
             icon: row.try_get("", "icon_url")?,
             description: row.try_get("", "description")?,
+            member_count: None,
+            online_count: None,
         });
     }
     let ids: Vec<Uuid> = found.iter().map(|s| s.id).collect();

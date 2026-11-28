@@ -348,7 +348,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
     void messagePerson(person).catch(cause => { setDmError(message(cause)); show("dms"); });
   };
 
-  return <ServerRolesProvider value={view === "server" ? rolesValue : null}><ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
+  return <ServerRolesProvider value={view === "server" ? rolesValue : null}><ProfileCardProvider profiles={visibleProfiles} activities={activities} selfId={user.id} onMessage={profileMessage} friends={friends}><div className={`app-shell workspace-shell ${showDetails || showProfile ? "with-details" : ""}`}>
     {view === "dms" ? <DirectMessagesSidebar conversations={dms.conversations} selectedId={dmId} selfId={user.id} unread={unread.counts} presence={presence}
       friendsOpen={!dmId} requests={friends.incoming.length} loading={dms.loading}
       error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onFriends={() => { setDmError(""); setDmId(null); }}

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Ban, Search, Tags, X } from "lucide-react";
 import type { Activity, Channel, ChosenStatus, PresenceStatus, Server, ServerMember, User } from "@disc-voice/shared";
 import { activityLabel } from "../lib/activity";
 import { api, message } from "../lib/api";
 import { isOnline, STATUS_LABELS } from "../lib/presence";
 import { can, outranksRole, type MemberBadge } from "../lib/roles";
-import { ProfileButton, useActivity } from "./ProfileCard";
+import { ProfileButton, useActivity, useUserMenu } from "./ProfileCard";
 import { BanDialog, TopRoleBadge, useCanBan, useServerRoles } from "./ServerRoles";
 import { Avatar } from "./ui";
 
@@ -41,10 +41,14 @@ function withSelf(members: ServerMember[], self: User, selfStatus: ChosenStatus)
   return members.map(m => m.user.id === self.id ? { ...m, user: self, status: selfStatus } : m);
 }
 
-function MemberRow({ member, room, selfId }: { member: ServerMember; room?: RoomPresence[string]; selfId: string }) {
-  return <li className={member.status === "offline" ? "is-offline" : undefined}>
+/** `children`: actions shown at the end of the row. Right-clicking the row opens the user menu. */
+function MemberRow({ member, room, selfId, children }: { member: ServerMember; room?: RoomPresence[string]; selfId: string; children?: ReactNode }) {
+  const menu = useUserMenu();
+  return <li className={member.status === "offline" ? "is-offline" : undefined} onContextMenu={event => menu.open(event, member.user)}>
     <Avatar name={member.user.name} src={member.user.avatar} still={member.user.avatarStill} status={member.status} />
     <MemberDetails member={member} room={room} selfId={selfId} />
+    {children}
+    {menu.element}
   </li>;
 }
 
@@ -152,11 +156,9 @@ export function MembersDialog({ server, self, selfStatus, members, rooms, onClos
     {groups.map(group => <div key={group.id} role="group" aria-label={group.title} className="member-group">
       <h3 className="eyebrow">{group.title} · {group.list.length}</h3>
       <ul className="people-list">
-        {group.list.map(m => <li key={m.user.id} className={m.status === "offline" ? "is-offline" : undefined}>
-          <Avatar name={m.user.name} src={m.user.avatar} still={m.user.avatarStill} status={m.status} />
-          <MemberDetails member={m} room={rooms[m.user.id]} selfId={self.id} />
+        {group.list.map(m => <MemberRow key={m.user.id} member={m} room={rooms[m.user.id]} selfId={self.id}>
           <MemberActions server={server} member={m} assignable={assignable} onBan={setBanning} onError={setError} />
-        </li>)}
+        </MemberRow>)}
       </ul>
     </div>)}
     {banning && <BanDialog serverId={server.id} serverName={server.name} user={banning} onClose={() => setBanning(null)} />}

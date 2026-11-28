@@ -7,7 +7,7 @@ import type { Channel, User, VoiceParticipant } from "@disc-voice/shared";
 import type { Realtime } from "../lib/realtime";
 import { DEFAULT_SCREEN_VOLUME, effectiveVolume, screenLabel, type ScreenFeed, type ScreenVolume, type VideoFeed, type Voice, type VoiceState } from "../lib/voice";
 import { NativeFramePreview } from "./NativeFramePreview";
-import { ProfileButton } from "./ProfileCard";
+import { ProfileButton, useUserMenu } from "./ProfileCard";
 import { TextChannel } from "./TextChannel";
 import { Avatar, LiveTag } from "./ui";
 
@@ -218,8 +218,9 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
 }) {
   const name = participant.user.name;
   const video = camera && feed;
+  const menu = useUserMenu();
   const classes = ["call-tile", speaking && "is-speaking", video && "has-video", reorder.dragging && "is-dragging", reorder.target && "drop-target"];
-  return <li className={classes.filter(Boolean).join(" ")} draggable tabIndex={0}
+  return <li className={classes.filter(Boolean).join(" ")} draggable tabIndex={0} onContextMenu={event => menu.open(event, participant.user)}
     aria-label={`${name}${self ? " (você)" : ""}. Arraste ou use Alt e as setas para mudar a posição.`}
     onDragStart={event => { event.dataTransfer?.setData("text/plain", participant.user.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = "move"; reorder.onDragStart(); }}
     onDragEnter={reorder.onDragEnter}
@@ -246,6 +247,7 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
       <span><ProfileButton user={participant.user} />{self ? " (você)" : ""}</span>
     </span>
     {speaking && <span className="sr-only">Falando</span>}
+    {menu.element}
   </li>;
 }
 

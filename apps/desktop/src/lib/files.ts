@@ -61,6 +61,42 @@ export function uploadFile(file: File, onProgress?: (fraction: number) => void, 
   });
 }
 
+/** The name to save media under, with an extension that matches its type. */
+export function mediaFileName(name: string, type: string) {
+  const extension = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "video/mp4": "mp4", "video/webm": "webm" }[type.split(";")[0].trim().toLowerCase()];
+  const base = name.replace(/\.(png|jpe?g|gif|webp|avif|mp4|webm)$/i, "").trim() || "imagem";
+  return extension ? `${base}.${extension}` : name;
+}
+
+/**
+ * "Fazer download" of an image, GIF or video in the chat. The app writes it to
+ * the Downloads folder (the webview ignores `<a download>`); the browser
+ * downloads it. When the file can't be fetched here (another site refuses),
+ * it opens in the browser instead. Resolves to where it was saved, if known.
+ */
+export async function saveMedia(url: string, name: string): Promise<string | null> {
+  let blob: Blob;
+  try {
+    const response = await fetch(url, { referrerPolicy: "no-referrer" });
+    if (!response.ok) throw new Error(String(response.status));
+    blob = await response.blob();
+  } catch {
+    if (url.includes("/api/files/")) downloadFile(url); else await openExternal(url);
+    return null;
+  }
+  const fileName = mediaFileName(name, blob.type);
+  if ("__TAURI_INTERNALS__" in window) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("save_media", new Uint8Array(await blob.arrayBuffer()), { headers: { "x-file-name": encodeURIComponent(fileName) } });
+  }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+  return null;
+}
+
 /** Saves a file to the computer: the browser downloads it from the API. */
 export function downloadFile(url: string) {
   const target = new URL(url, window.location.href);

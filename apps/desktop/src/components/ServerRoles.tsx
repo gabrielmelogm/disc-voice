@@ -33,11 +33,15 @@ export function useCan(permission: Permission) {
   return !!serverId && can(self, permission);
 }
 
-/** Whether the user may ban this person from the open server. */
-export function useCanBan(userId: string) {
-  const { serverId, self, access } = useServerRoles();
+/** Whether the user may ban this person from the server of `roles`. */
+export function canBanUser({ serverId, self, access }: ServerRoles, userId: string) {
   const other = access[userId];
   return !!serverId && !!other && can(self, "banMembers") && outranks(self, other);
+}
+
+/** Whether the user may ban this person from the open server. */
+export function useCanBan(userId: string) {
+  return canBanUser(useServerRoles(), userId);
 }
 
 export function OwnerBadge() {

@@ -229,6 +229,8 @@ pub mod message {
         pub attachments: Json,
         /// When the author last changed the text.
         pub edited_at: Option<DateTimeUtc>,
+        /// The message this one answers, in the same channel.
+        pub reply_to: Option<i64>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
