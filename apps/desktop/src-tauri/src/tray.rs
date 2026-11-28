@@ -57,6 +57,10 @@ mod platform {
     pub fn shows_icons() -> bool {
         true
     }
+
+    pub fn icon_dir() -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -64,6 +68,20 @@ mod platform {
     use std::sync::OnceLock;
     use webkit2gtk::gio;
     use webkit2gtk::glib::{ToVariant, VariantTy};
+
+    /// Where tray-icon writes the icon, whose path it hands to the panel. Its default,
+    /// `$XDG_RUNTIME_DIR/tray-icon`, is private to a Flatpak sandbox, so the panel
+    /// would find no image; `$XDG_RUNTIME_DIR/app/<app id>` is shared with the host.
+    pub fn icon_dir() -> Option<std::path::PathBuf> {
+        let app = std::env::var_os("FLATPAK_ID")?;
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
+        Some(
+            std::path::Path::new(&runtime)
+                .join("app")
+                .join(app)
+                .join("tray-icon"),
+        )
+    }
 
     /// tray-icon loads the AppIndicator library on first use and panics if it is missing.
     pub fn can_build() -> bool {
@@ -299,7 +317,11 @@ fn build<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let entries = menu_entries(&status);
     let menu = Menu::new(handle)?;
     fill(handle, &menu, &entries)?;
-    TrayIconBuilder::with_id(TRAY_ID)
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID);
+    if let Some(dir) = platform::icon_dir() {
+        builder = builder.temp_dir_path(dir);
+    }
+    builder
         .icon(icon(false)?)
         .tooltip(tooltip(&status))
         .menu(&menu)
