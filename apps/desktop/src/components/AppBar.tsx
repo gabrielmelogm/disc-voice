@@ -33,9 +33,22 @@ export function ScreenButton({ voice, state }: { voice: Voice; state: VoiceState
   </>;
 }
 
+/** Why the camera button is dimmed (or failed), as a title and a hint; null when it's fine. */
+export function cameraNotice(state: VoiceState): { title: string; hint: string } | null {
+  if (state.camera !== "idle") return null;
+  if (state.cameraPresence === "none") return { title: "Nenhuma câmera encontrada", hint: "Conecte uma câmera. Ela aparece aqui sozinha." };
+  if (state.cameraPresence === "missing") {
+    return { title: `${state.cameraLabel || "A câmera selecionada"} não está disponível`, hint: "Reconecte a câmera ou escolha outra na seta ao lado." };
+  }
+  if (state.cameraError) return { title: "Não foi possível ligar a câmera", hint: state.cameraError };
+  return null;
+}
+
 /**
  * Turns our webcam on or off in the call. The arrow opens the camera and
  * quality to use; they apply the next time it turns on (or at once, if on).
+ * Without a webcam the button dims and says why on hover or focus; the arrow
+ * stays usable to pick another one.
  */
 export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
   voice: Voice; state: VoiceState; menuOpen: boolean; onMenu: () => void; onPicked: () => void;
@@ -44,16 +57,27 @@ export function CameraButton({ voice, state, menuOpen, onMenu, onPicked }: {
     return <button className="bar-button" disabled aria-label="Ligar câmera (indisponível)" title="A câmera não está disponível neste ambiente."><Video size={20} /></button>;
   }
   const on = state.camera !== "idle";
-  const label = state.camera === "starting" ? "Cancelar câmera" : on ? "Desligar câmera" : "Ligar câmera";
+  const notice = cameraNotice(state);
+  const unavailable = !on && (state.cameraPresence === "none" || state.cameraPresence === "missing");
+  const label = state.camera === "starting" ? "Cancelar câmera" : on ? "Desligar câmera" : unavailable ? "Câmera indisponível" : "Ligar câmera";
   const pick = (action: () => void) => () => { onPicked(); action(); };
   const hasChosen = !state.cameraId || state.cameras.some(camera => camera.deviceId === state.cameraId);
+  const off = !on && !unavailable;
+  // Clicking a dimmed button only looks for the webcam again (and turns it on if it's back).
+  const toggle = () => (on ? voice.stopCamera() : void voice.startCamera());
   return <div className="split-button">
-    <button className={`bar-button ${state.camera === "live" ? "current" : ""}`} aria-label={label} aria-pressed={on} title={label}
-      disabled={!on && state.status !== "connected"} onClick={() => (on ? voice.stopCamera() : void voice.startCamera())}>
-      {state.camera === "starting" ? <LoaderCircle size={20} className="spin" /> : on ? <VideoOff size={20} /> : <Video size={20} />}
-    </button>
+    <span className="bar-tip-anchor">
+      <button className={`bar-button ${off ? "off" : ""} ${unavailable ? "unavailable" : ""}`} aria-label={label} aria-pressed={on}
+        aria-disabled={unavailable || undefined} aria-describedby={notice ? "camera-notice" : undefined} title={notice ? undefined : label}
+        disabled={!on && state.status !== "connected"} onClick={toggle}>
+        {state.camera === "starting" ? <LoaderCircle size={20} className="spin" /> : on ? <Video size={20} /> : <VideoOff size={20} />}
+      </button>
+      {notice && <span id="camera-notice" role="tooltip" className="bar-tip">
+        <strong>{notice.title}</strong><span>{notice.hint}</span>
+      </span>}
+    </span>
     <div className="menu-anchor">
-      <button className={`bar-button narrow ${state.camera === "live" ? "current" : ""}`} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher câmera e qualidade" title="Câmera e qualidade"
+      <button className={`bar-button narrow ${off ? "off" : ""}`} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Escolher câmera e qualidade" title="Câmera e qualidade"
         onClick={() => { if (!menuOpen) void voice.refreshCameras(); onMenu(); }}><ChevronUp size={16} /></button>
       {menuOpen && <div className="popover-menu" role="menu" aria-label="Câmera e qualidade">
         <span className="menu-label">Câmera</span>

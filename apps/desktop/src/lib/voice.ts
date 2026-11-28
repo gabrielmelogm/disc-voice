@@ -47,6 +47,8 @@ const SCREEN_TAKEN = "O teste de compartilhamento de tela assumiu a captura.";
 const CAMERA_TAKEN = "O teste de câmera nas configurações assumiu a webcam.";
 const CAMERA_LOST = "A webcam foi desconectada ou o acesso à câmera foi interrompido.";
 const CAMERA_FRAME_RATE = 30;
+/** How often to look for a webcam again while the button is dimmed (Linux has no devicechange for it). */
+const CAMERA_WATCH_MS = 3_000;
 /** How often the webview reads each peer connection's round trip. */
 const LATENCY_EVERY_MS = 2_000;
 
@@ -82,6 +84,8 @@ export interface ScreenVolume {
 }
 
 export const DEFAULT_SCREEN_VOLUME: ScreenVolume = { volume: 1, muted: false };
+
+export type CameraPresence = "unknown" | "ready" | "none" | "missing";
 
 export interface VoiceState {
   status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
@@ -133,6 +137,15 @@ export interface VoiceState {
   localCamera: VideoFeed | null;
   /** Webcams received, by peer ID. */
   remoteCameras: Record<string, VideoFeed>;
+  /** Why the webcam failed; shown on the camera button, never with the call's `error`. */
+  cameraError: string;
+  /**
+   * Whether there is a webcam to turn on: `none` (no webcam at all) and
+   * `missing` (the chosen one is gone) dim the camera button.
+   */
+  cameraPresence: CameraPresence;
+  /** Name of the chosen webcam (saved), to name it once it's unplugged. */
+  cameraLabel: string;
   /** Round trip to each peer in ms, once measured. */
   latency: Record<string, number>;
   /** Round trip to the server in ms; shown on our own tile. */
@@ -275,6 +288,7 @@ export class Voice {
     screenQuality: savedScreenQuality(), screenFrameRate: savedScreenFrameRate(), screenShare: null,
     cameraSupported: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
     camera: "idle", cameraId: preference("camera"), cameraQuality: savedQuality(), cameras: [], localCamera: null, remoteCameras: {},
+    cameraError: "", cameraPresence: "unknown", cameraLabel: preference("cameraLabel"),
     latency: {}, serverLatency: null,
   };
   private changes = new Set<() => void>();
@@ -314,6 +328,8 @@ export class Voice {
   private cameraAttempt = 0;
   /** The native engine is sending our webcam. */
   private nativeCamera = false;
+  /** Looks for a webcam again while none is there to turn on. */
+  private cameraWatch?: ReturnType<typeof setInterval>;
   private latencyTimer?: ReturnType<typeof setInterval>;
   private offLatency?: () => void;
 
@@ -352,7 +368,7 @@ export class Voice {
     this.wasConnected = this.realtime.getSnapshot().status === "connected";
     this.update({ serverLatency: this.realtime.latency });
     this.offLatency = this.realtime.onLatency(serverLatency => this.update({ serverLatency }));
-    navigator.mediaDevices?.addEventListener("devicechange", this.refreshDevices);
+    navigator.mediaDevices?.addEventListener("devicechange", this.deviceChange);
     window.addEventListener("pagehide", this.leave);
     void this.refreshDevices();
     void nativeScreen.supported().then(screenSupported => this.update({ screenSupported }), () => {});
@@ -369,10 +385,16 @@ export class Voice {
     this.offEvent?.();
     this.offStatus?.();
     this.offLatency?.();
-    navigator.mediaDevices?.removeEventListener("devicechange", this.refreshDevices);
+    navigator.mediaDevices?.removeEventListener("devicechange", this.deviceChange);
     window.removeEventListener("pagehide", this.leave);
     this.leave();
   }
+
+  /** A device was plugged or unplugged: microphones, outputs and, in a call, webcams. */
+  private deviceChange = () => {
+    void this.refreshDevices();
+    if (this.joined) void this.listCameras().catch(() => {});
+  };
 
   refreshDevices = async () => {
     try {
@@ -731,7 +753,12 @@ export class Voice {
 
   setCamera = (cameraId: string) => {
     savePreference("camera", cameraId);
-    this.update({ cameraId });
+    const cameraLabel = this.state.cameras.find(camera => camera.deviceId === cameraId)?.label ?? "";
+    savePreference("cameraLabel", cameraLabel);
+    // A camera picked from the list is there; the default one is checked on the next refresh.
+    const cameraPresence = cameraId && cameraLabel ? "ready" : this.state.cameraPresence === "missing" ? "unknown" : this.state.cameraPresence;
+    this.update({ cameraId, cameraLabel, cameraPresence, cameraError: "" });
+    this.watchCameras();
     if (this.state.camera !== "idle") this.restartCamera();
   };
 
@@ -744,15 +771,66 @@ export class Voice {
 
   /** Webcams to choose from (asking for camera access on Linux). */
   refreshCameras = async () => {
-    try {
-      const cameras = this.state.native || await nativeCamera.supported().catch(() => false)
-        ? (await nativeCamera.devices()).map(device => ({ deviceId: device.id, label: device.name }))
-        : (await navigator.mediaDevices?.enumerateDevices() ?? [])
-          .filter(device => device.kind === "videoinput" && device.deviceId)
-          .map((device, index) => ({ deviceId: device.deviceId, label: device.label || `Webcam ${index + 1}` }));
-      this.update({ cameras });
-    } catch (error) { this.update({ error: cameraError(error) }); }
+    try { await this.listCameras(); }
+    catch (error) { this.update({ cameraError: cameraError(error) }); }
   };
+
+  /** Reads the webcams, and whether the chosen one (or any) is there. */
+  private async listCameras() {
+    try {
+      let cameras: CameraOption[];
+      let found: number;
+      if (this.state.native || await nativeCamera.supported().catch(() => false)) {
+        cameras = (await nativeCamera.devices()).map(device => ({ deviceId: device.id, label: device.name }));
+        found = cameras.length;
+      } else {
+        const inputs = (await navigator.mediaDevices?.enumerateDevices() ?? []).filter(device => device.kind === "videoinput");
+        found = inputs.length;
+        cameras = inputs.filter(device => device.deviceId)
+          .map((device, index) => ({ deviceId: device.deviceId, label: device.label || `Webcam ${index + 1}` }));
+      }
+      const chosen = cameras.find(camera => camera.deviceId === this.state.cameraId);
+      // Before camera access the browser hides the IDs: a chosen one can't be told missing then.
+      const hidden = found > 0 && !cameras.length;
+      const cameraPresence: CameraPresence = !found ? "none"
+        : hidden ? (this.state.cameraPresence === "missing" ? "missing" : "ready")
+        : this.state.cameraId && !chosen ? "missing" : "ready";
+      const next: Partial<VoiceState> = { cameras, cameraPresence };
+      // The webcam is back (or another is there): its old error no longer applies.
+      if (cameraPresence === "ready" && this.cameraDimmed) next.cameraError = "";
+      if (chosen && chosen.label !== this.state.cameraLabel) {
+        savePreference("cameraLabel", chosen.label);
+        next.cameraLabel = chosen.label;
+      }
+      this.update(next);
+    } finally { this.watchCameras(); }
+  }
+
+  /** No webcam to turn on: none at all, or the chosen one is gone. */
+  private get cameraDimmed() {
+    return this.state.cameraPresence === "none" || this.state.cameraPresence === "missing";
+  }
+
+  /** Looks for a webcam every few seconds while the button is dimmed in a call. */
+  private watchCameras() {
+    const dimmed = this.joined && this.cameraDimmed;
+    if (dimmed && !this.cameraWatch) this.cameraWatch = setInterval(() => void this.listCameras().catch(() => {}), CAMERA_WATCH_MS);
+    if (!dimmed && this.cameraWatch) {
+      clearInterval(this.cameraWatch);
+      this.cameraWatch = undefined;
+    }
+  }
+
+  /** The webcam failed: dims the button when it's not there, else keeps why. */
+  private cameraFailed(error: unknown) {
+    const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : "";
+    const cameraPresence: CameraPresence | undefined = name === "NotFoundError" ? "none"
+      : name === "OverconstrainedError" ? (this.state.cameraId ? "missing" : "none") : undefined;
+    this.update({ cameraError: cameraError(error), ...(cameraPresence ? { cameraPresence } : {}) });
+    // The native engine only says so in words: the device list tells.
+    if (cameraPresence) this.watchCameras();
+    else void this.listCameras().catch(() => {});
+  }
 
   /** Applies a new camera or quality: the others keep seeing the camera on. */
   private restartCamera() {
@@ -766,18 +844,23 @@ export class Voice {
    */
   startCamera = async () => {
     if (!this.joined || this.state.camera !== "idle") return;
+    // Dimmed: look again first, in case the webcam is back.
+    if (this.cameraDimmed) {
+      await this.refreshCameras();
+      if (this.cameraDimmed || !this.joined || this.state.camera !== "idle") return;
+    }
     const generation = this.generation;
     const attempt = ++this.cameraAttempt;
     const quality = CAMERA_QUALITIES[this.state.cameraQuality];
     const current = () => generation === this.generation && attempt === this.cameraAttempt;
-    this.update({ camera: "starting", error: "" });
+    this.update({ camera: "starting", cameraError: "" });
     try {
       if (this.nativeId !== undefined) {
         const claim: CameraClaim = nativeCamera.claim(() => {
           if (this.cameraClaim !== claim) return;
           this.cameraClaim = undefined;
           this.endCamera();
-          this.update({ error: CAMERA_TAKEN });
+          this.update({ cameraError: CAMERA_TAKEN });
           this.syncControls();
         });
         this.cameraClaim = claim;
@@ -805,7 +888,7 @@ export class Voice {
         track.onended = () => {
           if (this.cameraShare?.track !== track) return;
           this.stopCamera();
-          this.update({ error: CAMERA_LOST });
+          this.cameraFailed(CAMERA_LOST);
         };
         this.cameraShare = { stream, track };
         this.peers.forEach(peer => this.sendCamera(peer));
@@ -815,7 +898,7 @@ export class Voice {
     } catch (error) {
       if (!current()) return;
       this.endCamera();
-      this.update({ error: cameraError(error) });
+      this.cameraFailed(error);
       this.syncControls();
     }
   };
@@ -917,11 +1000,12 @@ export class Voice {
         if (event.source === "screen") {
           if (!this.nativeShare) return;
           this.stopScreen();
+          this.update({ error: event.message });
         } else {
           if (!this.nativeCamera) return;
           this.stopCamera();
+          this.cameraFailed(event.message);
         }
-        this.update({ error: event.message });
         return;
       case "error":
         this.fail(event.message);
@@ -1020,6 +1104,8 @@ export class Voice {
       this.peerId = event.peerId;
       this.joined = true;
       this.update({ peerId: event.peerId });
+      // The webview lists webcams without asking; Linux's portal would ask, so it waits for the camera button.
+      if (!this.state.native) void this.listCameras().catch(() => {});
       if (this.stream) this.analyse(this.peerId, this.stream);
       this.participants(event.participants);
       if (this.nativeId === undefined && !this.latencyTimer) {
@@ -1241,6 +1327,8 @@ export class Voice {
     this.endCamera();
     this.generation++;
     this.joined = false;
+    this.watchCameras();
+    if (this.state.cameraError) this.update({ cameraError: "" });
     clearTimeout(this.deadline);
     this.deadline = undefined;
     clearInterval(this.meter);

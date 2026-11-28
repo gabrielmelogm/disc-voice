@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 import type { Realtime } from "../lib/realtime";
 import type { Voice, VoiceState } from "../lib/voice";
 import { CameraButton, DeafenButton, MicButton, ScreenButton } from "./AppBar";
-import { arrangeTiles, moveTile, signalLevel, VoiceChannel } from "./VoiceChannel";
+import { arrangeTiles, CallStatus, moveTile, signalLevel, VoiceChannel } from "./VoiceChannel";
 import { ServerRolesProvider } from "./ServerRoles";
 import { serverRoles } from "../test/serverRoles";
 
@@ -22,6 +22,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
     screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
+    cameraError: "", cameraPresence: "unknown", cameraLabel: "",
     latency: {}, serverLatency: null, ...overrides,
   };
 }
@@ -244,6 +245,35 @@ describe("VoiceChannel webcam", () => {
     view.rerender(<CameraButton voice={controls as unknown as Voice} state={state({ camera: "live" })} menuOpen={false} onMenu={vi.fn()} onPicked={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "Desligar câmera" }));
     expect(controls.stopCamera).toHaveBeenCalledOnce();
+  });
+
+  it("shows the camera off in red, and dims it with the reason when the webcam is missing", async () => {
+    const controls = voice();
+    const props = { voice: controls as unknown as Voice, menuOpen: false, onMenu: vi.fn(), onPicked: vi.fn() };
+    const view = render(<CameraButton {...props} state={state()} />);
+    expect(screen.getByRole("button", { name: "Ligar câmera" })).toHaveClass("off");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    view.rerender(<CameraButton {...props} state={state({ cameraId: "cam-9", cameraLabel: "Logitech C920", cameraPresence: "missing" })} />);
+    const button = screen.getByRole("button", { name: "Câmera indisponível" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toBeEnabled();
+    expect(button).toHaveAccessibleDescription("Logitech C920 não está disponívelReconecte a câmera ou escolha outra na seta ao lado.");
+    expect(screen.getByRole("button", { name: "Escolher câmera e qualidade" })).toBeEnabled();
+
+    view.rerender(<CameraButton {...props} state={state({ cameraPresence: "none" })} />);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Nenhuma câmera encontrada");
+
+    // Other failures keep the button usable and say why.
+    view.rerender(<CameraButton {...props} state={state({ cameraPresence: "ready", cameraError: "Acesso à câmera negado." })} />);
+    expect(screen.getByRole("button", { name: "Ligar câmera" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Acesso à câmera negado.");
+  });
+
+  it("keeps camera errors out of the call status", () => {
+    render(<CallStatus voice={voice() as unknown as Voice} state={state({ cameraError: "A câmera selecionada não está disponível.", cameraPresence: "missing" })} onOpen={vi.fn()} />);
+    expect(screen.queryByText(/câmera/)).toBeNull();
+    expect(screen.queryByLabelText("Chamada atual")).toBeNull();
   });
 
   it("chooses the camera and the quality before turning it on", async () => {
