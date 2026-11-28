@@ -18,6 +18,7 @@ import { useRealtime } from "../hooks/useRealtime";
 import { useUnread } from "../hooks/useUnread";
 import { useVoice } from "../hooks/useVoice";
 import { AppBar } from "./AppBar";
+import { MiniCall } from "./CallNav";
 import { ChannelDetails, ChannelHeader, roomPresence, voiceOccupants } from "./ChannelDetails";
 import { MembersDialog } from "./Members";
 import { ChannelSidebar } from "./ChannelSidebar";
@@ -336,7 +337,10 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
   const visibleProfiles = { ...profiles, [user.id]: user };
   const search = searching && <SearchResultsHost onClose={() => setSearching(false)} onPick={pickResult} />;
 
-  const viewingCall = view === "server" && channel?.type === "voice";
+  const viewingRoom = view === "server" && channel?.type === "voice";
+  // On the screen of the room the user is talking in (not just any room).
+  const viewingCall = viewingRoom && inCall && voiceState.channel?.id === channel?.id;
+  const callServerName = servers.find(s => s.id === voiceState.channel?.serverId)?.name;
   const showDetails = view === "server" && channel?.type === "text";
   const showProfile = view === "dms" && !!conversation;
 
@@ -350,7 +354,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       error={dmError || dms.error} onSelect={next => { setDmError(""); setDmId(next.channel.id); }} onFriends={() => { setDmError(""); setDmId(null); }}
       onNew={() => setNewDm(true)} onRetry={() => { setDmError(""); dms.retry(); }} />
     : server ? <ChannelSidebar server={server} channels={channels} channelId={channelId} unread={unread.counts}
-      participants={participants} voiceState={voiceState} loading={channelLoading} error={channelError}
+      participants={participants} voiceState={voiceState} callServerName={callServerName} viewingCall={viewingCall} onOpenCall={goToVoice} loading={channelLoading} error={channelError}
       onSelect={openChannel} onJoin={joinVoice}
       onCreate={selfAccess && can(selfAccess, "manageChannels") ? type => setDialog({ kind: "channel", server, channelType: type }) : undefined}
       onInvite={selfAccess && can(selfAccess, "createInvite") ? () => setDialog({ kind: "invite", server }) : undefined} onReload={() => setChannelReload(n => n + 1)}
@@ -359,7 +363,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
       <p className="sidebar-status">{loading ? "Carregando…" : "Crie um servidor ou entre pelo link de um amigo."}</p>
     </aside>}
 
-    <div className={`stage ${viewingCall ? "dark-stage" : ""}`}>
+    <div className={`stage ${viewingRoom ? "dark-stage" : ""}`}>
       {realtime.status !== "connected" && !loading && <p className="connection-banner" role="status"><WifiOff size={15} />{realtime.status === "reconnecting" ? "Reconectando ao servidor…" : "Conectando ao servidor…"}</p>}
       {notice && <p className="notice-banner" role="status">{notice}<button type="button" className="icon-button small" aria-label="Fechar aviso" onClick={() => setNotice("")}><X size={15} /></button></p>}
       {error && <div className="workspace-error"><p className="error-banner" role="alert">{error}</p><button className="button secondary" onClick={() => setReload(n => n + 1)} disabled={loading}>Tentar novamente</button></div>}
@@ -374,6 +378,7 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
           members={people} focusId={focusMessage?.channelId === channel.id ? focusMessage.messageId : undefined} onRead={messageId => unread.markRead(channel.id, messageId)} /></main>
         : channel?.type === "voice" ? <VoiceChannel channel={channel} voice={voice} state={voiceState} online={realtime.status === "connected"} pip={pip.active}
           realtime={realtime.client} revision={realtime.revision} self={user} members={people}
+          onBack={() => { const text = channels.find(c => c.type === "text"); if (text) openChannel(text); }}
           participants={voiceState.channel?.id === channel.id && inCall ? voiceState.participants : participants[channel.id] || []} />
         : <div className="empty-state">
           <span className="empty-icon"><MessageSquareText size={34} /></span>
@@ -388,10 +393,12 @@ export function ServerWorkspace({ user, joinedServer, onLogout, onUserChange }: 
         <div className="button-row"><button className="button primary large" onClick={() => setDialog({ kind: "create" })}><Plus size={18} />Criar meu servidor</button><button className="button secondary large" onClick={() => setDialog({ kind: "join" })}><LogIn size={18} />Tenho um convite</button></div>
       </div>}
 
+      {view === "dms" && inCall && <MiniCall state={voiceState} serverName={callServerName} onOpen={goToVoice} />}
+
       <div className="bar-dock">
-        <CallStatus voice={voice} state={voiceState} serverName={servers.find(s => s.id === voiceState.channel?.serverId)?.name} onOpen={goToVoice} />
+        <CallStatus voice={voice} state={voiceState} serverName={callServerName} onOpen={goToVoice} />
         <AppBar user={user} status={myStatus.status} chosenStatus={myStatus.chosen} onStatus={myStatus.choose} servers={servers} server={server} view={view} voice={voice} voiceState={voiceState}
-          canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
+          viewingCall={viewingCall} onOpenCall={goToVoice} canJoinVoice={voiceChannels.length > 0} dmUnread={unread.dmUnread} onSelectServer={selectServer}
           onCreateServer={() => setDialog({ kind: "create" })} onJoinServer={() => setDialog({ kind: "join" })}
           onManageServers={() => setServersOpen(true)}
           onDms={() => show(view === "dms" ? "server" : "dms")} onVoice={goToVoice}

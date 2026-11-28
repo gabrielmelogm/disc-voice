@@ -70,7 +70,7 @@ function useFullscreen(element: RefObject<HTMLElement | null>) {
 }
 
 /** A webcam: a media stream (webview) or JPEG frames from a native engine. */
-function CameraVideo({ feed, label, mirrored }: { feed: VideoFeed; label: string; mirrored: boolean }) {
+export function CameraVideo({ feed, label, mirrored }: { feed: VideoFeed; label: string; mirrored: boolean }) {
   return <div className="tile-video">
     {"pull" in feed
       ? <NativeFramePreview active pull={feed.pull} label={label} mirrored={mirrored} onError={ignoreFrameError} />
@@ -250,16 +250,26 @@ function Tile({ participant, speaking, self, camera, feed, ping, reorder }: {
 }
 
 /** `realtime`, `revision`, `self` and `members` feed the room chat, as in a text channel. */
-export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, members, pip = false }: {
+export function VoiceChannel({ channel, voice, state, participants, online, realtime, revision, self, members, pip = false, onBack }: {
   channel: Channel; voice: Voice; state: VoiceState; participants: VoiceParticipant[]; online: boolean;
   realtime: Realtime; revision: number; self?: User; members?: User[];
   /** The window floats one screen in picture-in-picture meanwhile. */
   pip?: boolean;
+  /** "Voltar para geral" after leaving: the server's first text channel. */
+  onBack?: () => void;
 }) {
   const active = state.channel?.id === channel.id && state.status !== "error";
   const [chatOpen, setChatOpen] = useState(true);
-  const [since, setSince] = useState<Date | null>(null);
-  useEffect(() => { setSince(active ? new Date() : null); }, [active]);
+  const since = active && state.since !== null ? new Date(state.since) : null;
+  // Left the call from this screen: say so (with a way back in) instead of the lobby.
+  const [left, setLeft] = useState(false);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (wasActive.current && !active && !state.channel) setLeft(true);
+    if (active) setLeft(false);
+    wasActive.current = active;
+  }, [active, state.channel]);
+  useEffect(() => { setLeft(false); wasActive.current = state.channel?.id === channel.id; }, [channel.id]);
   const [order, setOrder] = useState(() => tileOrders.get(channel.id) ?? []);
   useEffect(() => { setOrder(tileOrders.get(channel.id) ?? []); }, [channel.id]);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -287,7 +297,7 @@ export function VoiceChannel({ channel, voice, state, participants, online, real
       </header>
 
       {active && <CallScreens voice={voice} state={state} participants={participants} paused={pip} />}
-      {participants.length > 0 && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
+      {participants.length > 0 && !left && <ul className={`call-grid ${sharing ? "compact" : `count-${Math.min(participants.length, 9)}`}`} aria-label="Participantes do canal de voz">
         {tiles.map((p, index) => {
           const self = !!state.peerId && p.peerId === state.peerId;
           const camera = active && (self ? state.camera === "live" : !!p.camera);
@@ -307,7 +317,15 @@ export function VoiceChannel({ channel, voice, state, participants, online, real
         })}
       </ul>}
 
-      {!active && <div className="call-lobby">
+      {!active && left && <div className="call-lobby call-left">
+        <h2>{`Você saiu da ${channel.name}`}</h2>
+        <p>A conversa continua no chat ao lado.</p>
+        <div className="button-row">
+          <button className="button primary" disabled={!online} onClick={() => void voice.join(channel)}>Entrar de novo</button>
+          {onBack && <button className="button on-video" onClick={onBack}>Voltar para geral</button>}
+        </div>
+      </div>}
+      {!active && !left && <div className="call-lobby">
         {!participants.length && <><span className="lobby-icon"><Headphones size={30} /></span><h2>Ninguém na sala ainda</h2></>}
         <p>{state.channel?.id === channel.id && state.status === "error" ? state.error : "Entre para conversar por voz com quem está no servidor."}</p>
         <button className="button primary large" disabled={!online} onClick={() => void voice.join(channel)}><Headphones size={18} />Entrar no canal de voz</button>

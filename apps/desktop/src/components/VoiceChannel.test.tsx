@@ -17,7 +17,7 @@ const friend: VoiceParticipant = { peerId: "friend", user: { ...user, id: "user-
 
 function state(overrides: Partial<VoiceState> = {}): VoiceState {
   return {
-    status: "connected", channel, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
+    status: "connected", channel, since: null, participants: [self, friend], muted: false, deafened: false, error: "", speaking: [],
     devices: [], inputId: "", outputId: "", playbackBlocked: false, deviceBusy: false, peerId: "self",
     screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,

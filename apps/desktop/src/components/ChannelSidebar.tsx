@@ -1,9 +1,10 @@
 import { History, MessageSquareText, Plus, RefreshCw, Settings, UserPlus, Volume2 } from "lucide-react";
 import type { Channel, Server, VoiceParticipant } from "@disc-voice/shared";
 import type { VoiceState } from "../lib/voice";
+import { CallBanner } from "./CallNav";
 import { Avatar, Badge, LiveTag, unreadLabel } from "./ui";
 
-export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onSettings }: {
+export function ChannelSidebar({ server, channels, channelId, unread = {}, participants, voiceState, callServerName, viewingCall = false, onOpenCall, loading, error, onSelect, onJoin, onCreate, onInvite, onReload, onSettings }: {
   server: Server;
   channels: Channel[];
   channelId: string | null;
@@ -11,6 +12,12 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
   unread?: Record<string, number>;
   participants: Record<string, VoiceParticipant[]>;
   voiceState: VoiceState;
+  /** Name of the server the call is on, for the banner when it is another one. */
+  callServerName?: string;
+  /** The call's room is the screen open now. */
+  viewingCall?: boolean;
+  /** Back to the call's room (on this server or another). */
+  onOpenCall?: () => void;
   loading: boolean;
   error: string;
   onSelect: (channel: Channel) => void;
@@ -26,8 +33,10 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
   const text = channels.filter(item => item.type === "text");
   const voice = channels.filter(item => item.type === "voice");
   const connectedId = voiceState.channel && voiceState.status !== "error" ? voiceState.channel.id : null;
+  const callElsewhere = !!connectedId && voiceState.channel?.serverId !== server.id;
 
   return <aside className="sidebar" aria-label={`Canais de ${server.name}`}>
+    {callElsewhere && voiceState.channel && onOpenCall && <CallBanner room={voiceState.channel.name} serverName={callServerName} onOpen={onOpenCall} />}
     <div className="sidebar-title"><h2 title={server.name}>{server.name}</h2>
       {onSettings && <button className="icon-button small" aria-label="Configurações do servidor" title="Configurações do servidor" onClick={onSettings}><Settings size={17} /></button>}</div>
     {server.description && <p className="server-description">{server.description}</p>}
@@ -61,8 +70,10 @@ export function ChannelSidebar({ server, channels, channelId, unread = {}, parti
             {people.length > 0 ? <span className="avatar-stack" aria-label={people.map(p => p.user.name).join(", ")}>
               {people.slice(0, 4).map(p => <Avatar key={p.peerId} name={p.user.name} src={p.user.avatar} still={p.user.avatarStill} size="xs" speaking={voiceState.speaking.includes(p.peerId)} />)}
             </span> : null}
-            <span className="room-count">{people.length ? `${people.length} na sala` : "Ninguém por aqui"}</span>
-            {here ? <span className="room-here">Você está aqui</span> : <button className="link-button" aria-label={`Entrar em ${item.name}`} onClick={() => onJoin(item)}>Entrar</button>}
+            <span className="room-count">{here ? `${people.length} na sala, com você` : people.length ? `${people.length} na sala` : "Ninguém por aqui"}</span>
+            {here && viewingCall ? <span className="room-here">Você está aqui</span>
+              : here ? <button className="link-button room-back" aria-label={`Em chamada em ${item.name}. Voltar para a chamada`} onClick={() => (onOpenCall ? onOpenCall() : onSelect(item))}>Em chamada · voltar</button>
+              : <button className="link-button" aria-label={`Entrar em ${item.name}`} onClick={() => onJoin(item)}>Entrar</button>}
           </div>
         </div>;
       })}
