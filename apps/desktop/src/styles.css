@@ -1104,7 +1104,18 @@ button.cloud-thumb { cursor: zoom-in; }
 .call-chip-text span { color: var(--success-text); font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .call-chip-text span.is-muted { color: var(--danger-text); }
 .call-chip-main:hover strong { text-decoration: underline; }
-.call-chip-controls { display: flex; align-items: center; gap: 4px; }
+/* Quick controls: the strip grows from the arrow and the buttons come out of it, right to left. */
+.call-chip-controls { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 4px; max-width: 0; margin: -4px 0 -4px -4px; padding: 4px 0; overflow: hidden; transition: max-width .3s cubic-bezier(.2, .8, .2, 1), margin-left .3s cubic-bezier(.2, .8, .2, 1); }
+.call-chip-controls.open { max-width: 76px; margin-left: 0; }
+.call-chip-controls .chip-button { --from: 36px; opacity: 0; transform: translateX(var(--from)) scale(.3); transform-origin: right center; transition: transform .22s ease-in, opacity .18s ease-in; }
+.call-chip-controls .chip-button:first-child { --from: 72px; }
+.call-chip-controls.open .chip-button { opacity: 1; transform: none; transition: transform .36s cubic-bezier(.34, 1.56, .64, 1), opacity .2s ease-out; }
+/* Opening: the one next to the arrow first; closing: the farthest goes back first. */
+.call-chip-controls.open .chip-button:first-child { transition-delay: .07s; }
+.call-chip-controls:not(.open) .chip-button:last-child { transition-delay: .05s; }
+.chip-button.toggle { position: relative; z-index: 1; }
+.chip-button.toggle svg { transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.chip-button.toggle.open svg { transform: rotate(180deg); }
 .chip-button { display: grid; flex: none; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-full); background: var(--surface-raised); color: var(--ink); }
 .chip-button:hover { background: var(--fill-hover); }
 .chip-button.off { background: var(--danger-soft); color: var(--danger-text); }

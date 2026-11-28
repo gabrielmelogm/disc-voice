@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Headphones, Maximize2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { ChevronRight, Headphones, Maximize2, Mic, MicOff, PhoneOff } from "lucide-react";
 import type { VoiceParticipant } from "@disc-voice/shared";
 import type { Voice, VoiceState } from "../lib/voice";
 import { CameraVideo } from "./VoiceChannel";
@@ -49,14 +49,15 @@ export function CallChip({ voice, state, serverName, onOpen }: {
         <span className={silent ? "is-muted" : undefined}>{caption}</span>
       </span>
     </button>
-    {open && <div id="call-quick-controls" className="call-chip-controls">
+    {/* Always there, so it can grow out of (and shrink back into) the arrow. */}
+    <div id="call-quick-controls" className={`call-chip-controls ${open ? "open" : ""}`} inert={!open} aria-hidden={!open}>
       <button className={`chip-button ${silent ? "off" : ""}`} aria-pressed={state.muted} aria-label={micLabel} title={micLabel} onClick={voice.toggleMute}>
         {silent ? <MicOff size={16} /> : <Mic size={16} />}
       </button>
       <button className="chip-button danger" aria-label="Sair da chamada" title="Sair da chamada" onClick={voice.hangUp}><PhoneOff size={16} /></button>
-    </div>}
-    <button className="chip-button toggle" aria-expanded={open} aria-controls="call-quick-controls" aria-label={toggleLabel} title={toggleLabel} onClick={() => setOpen(!open)}>
-      {open ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+    </div>
+    <button className={`chip-button toggle ${open ? "open" : ""}`} aria-expanded={open} aria-controls="call-quick-controls" aria-label={toggleLabel} title={toggleLabel} onClick={() => setOpen(!open)}>
+      <ChevronRight size={16} />
     </button>
   </div>;
 }
