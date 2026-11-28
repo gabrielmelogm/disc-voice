@@ -31,7 +31,7 @@ export const PLATFORMS: Record<Platform, { name: string; detail: string; href: s
   },
   linux: {
     name: "Linux",
-    detail: "AppImage, .deb ou .rpm · x86_64",
+    detail: "AppImage, .deb, .rpm ou Flatpak · x86_64",
     // The Linux button opens LINUX_PACKAGES instead of linking here.
     href: process.env.NEXT_PUBLIC_DOWNLOAD_LINUX || RELEASES,
     status: "alpha",
@@ -46,6 +46,7 @@ export const LINUX_PACKAGES = [
   { id: "appimage", label: "AppImage", ext: ".AppImage", hint: "Qualquer distro · sem instalação", href: "/download/linux/appimage" },
   { id: "deb", label: "Debian / Ubuntu", ext: ".deb", hint: "Ubuntu, Debian, Mint, Pop!_OS", href: "/download/linux/deb" },
   { id: "rpm", label: "Fedora / RHEL", ext: ".rpm", hint: "Fedora, RHEL, openSUSE", href: "/download/linux/rpm" },
+  { id: "flatpak", label: "Flatpak", ext: ".flatpak", hint: "Silverblue, Bazzite, SteamOS · isolado", href: "/download/linux/flatpak" },
 ] as const;
 
 export const isAvailable = (platform: Platform) => PLATFORMS[platform].status !== "soon";

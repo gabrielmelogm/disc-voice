@@ -2,7 +2,7 @@ name: Desktop
 
 # - Pull request (or a manual run): lint + tests on Windows and Linux.
 # - Push to main: also builds the Windows installer and the Linux packages
-#   (AppImage, .deb, .rpm), unsigned, as workflow artifacts.
+#   (AppImage, .deb, .rpm, .flatpak), unsigned, as workflow artifacts.
 # - GitHub release published (by the /release skill or by hand in the Releases
 #   tab): builds signed installers and publishes them: they are attached to the
 #   release with one SHA256SUMS and uploaded to the private Lightsail bucket
@@ -244,8 +244,49 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Repackages the .deb's binary in the GNOME runtime, which ships the same
+  # libraries the AppImage bundles (apps/desktop/flatpak/dev.discvoice.desktop.yml).
+  build-flatpak:
+    needs: build-linux
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+      - name: Use the .deb of this build
+        run: |
+          deb=$(ls linux/DiscVoice_*_amd64.deb | head -n 1)
+          if [ -z "$deb" ]; then
+            echo 'No .deb in the linux artifact.' >&2
+            exit 1
+          fi
+          version=${deb#linux/DiscVoice_}
+          version=${version%_amd64.deb}
+          cp "$deb" apps/desktop/flatpak/disc-voice.deb
+          echo "BUNDLE=DiscVoice_${version}_x86_64.flatpak" >> "$GITHUB_ENV"
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: apps/desktop/flatpak/dev.discvoice.desktop.yml
+          bundle: ${{ env.BUNDLE }}
+          # Only the tray library is compiled; it changes with these files.
+          cache-key: flatpak-${{ hashFiles('apps/desktop/flatpak/shared-modules/**') }}
+          upload-artifact: false
+      - run: ls -lh "$BUNDLE" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: ${{ env.BUNDLE }}
+          if-no-files-found: error
+
   publish:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-flatpak]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -273,8 +314,9 @@ jobs:
           $appimage = Get-ChildItem dist/*.AppImage | Select-Object -First 1
           $deb = Get-ChildItem dist/*.deb | Select-Object -First 1
           $rpm = Get-ChildItem dist/*.rpm | Select-Object -First 1
-          if (-not $installer -or -not $appimage -or -not $deb -or -not $rpm) { throw 'Missing build artifacts.' }
-          $packages = @($installer, $appimage, $deb, $rpm)
+          $flatpak = Get-ChildItem dist/*.flatpak | Select-Object -First 1
+          if (-not $installer -or -not $appimage -or -not $deb -or -not $rpm -or -not $flatpak) { throw 'Missing build artifacts.' }
+          $packages = @($installer, $appimage, $deb, $rpm, $flatpak)
 
           $lines = foreach ($file in $packages) {
             "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
@@ -290,6 +332,7 @@ jobs:
           "APPIMAGE=$($appimage.FullName)" >> $env:GITHUB_ENV
           "DEB=$($deb.FullName)" >> $env:GITHUB_ENV
           "RPM=$($rpm.FullName)" >> $env:GITHUB_ENV
+          "FLATPAK=$($flatpak.FullName)" >> $env:GITHUB_ENV
           foreach ($file in @($installer, $appimage)) {
             if (-not (Test-Path "$($file.FullName).sig")) { throw "Missing the updater signature of $($file.Name)." }
           }
@@ -338,7 +381,8 @@ jobs:
             @{ Path = $env:INSTALLER; Name = 'DiscVoice-Setup.exe'; Type = 'application/vnd.microsoft.portable-executable' },
             @{ Path = $env:APPIMAGE; Name = 'DiscVoice_x86_64.AppImage'; Type = 'application/vnd.appimage' },
             @{ Path = $env:DEB; Name = 'DiscVoice_amd64.deb'; Type = 'application/vnd.debian.binary-package' },
-            @{ Path = $env:RPM; Name = 'DiscVoice_x86_64.rpm'; Type = 'application/x-rpm' }
+            @{ Path = $env:RPM; Name = 'DiscVoice_x86_64.rpm'; Type = 'application/x-rpm' },
+            @{ Path = $env:FLATPAK; Name = 'DiscVoice_x86_64.flatpak'; Type = 'application/vnd.flatpak' }
           )
 
           # The objects stay private: the website signs a short-lived link.
@@ -391,6 +435,7 @@ jobs:
           $image = Split-Path $env:APPIMAGE -Leaf
           $deb = Split-Path $env:DEB -Leaf
           $rpm = Split-Path $env:RPM -Leaf
+          $flatpak = Split-Path $env:FLATPAK -Leaf
           $site = if ($env:UPDATE_LATEST -eq 'true') {
             "O botão de download do [site]($env:SITE) já entrega esta versão para Windows e Linux."
           } else {
@@ -406,6 +451,7 @@ jobs:
             "| Linux (x86_64), qualquer distro | ``$image``: dê permissão de execução (``chmod +x``) e abra |",
             "| Ubuntu, Debian, Mint, Pop!_OS | ``$deb``: ``sudo apt install ./$deb`` |",
             "| Fedora, RHEL, openSUSE | ``$rpm``: ``sudo dnf install ./$rpm`` |",
+            "| Linux com Flatpak (Bazzite, Silverblue, SteamOS...) | ``$flatpak``: ``flatpak install --user ./$flatpak`` |",
             "| macOS | Sem app nativo: use a versão web em [$($env:SITE -replace '^https://', '')]($env:SITE) |",
             '',
             "$site Atualizar pelo instalador mantém sua conta e suas configurações.",

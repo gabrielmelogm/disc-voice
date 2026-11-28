@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.discvoice.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>Disc Voice</name>
+  <summary>Seu espaço para amigos e comunidades</summary>
+  <developer id="dev.discvoice">
+    <name>Disc Voice</name>
+  </developer>
+  <description>
+    <p>Crie servidores, converse por texto e voz com seus amigos, ligue a webcam e compartilhe a tela, com áudio do sistema.</p>
+  </description>
+  <launchable type="desktop-id">dev.discvoice.desktop.desktop</launchable>
+  <url type="homepage">https://get-discvoice.devgabrielmelo.shop</url>
+  <url type="bugtracker">https://github.com/gabrielmelogm/disc-voice/issues</url>
+  <url type="vcs-browser">https://github.com/gabrielmelogm/disc-voice</url>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+  </content_rating>
+  <requires>
+    <display_length compare="ge">800</display_length>
+  </requires>
+</component>

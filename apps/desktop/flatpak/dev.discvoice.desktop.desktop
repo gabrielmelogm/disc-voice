@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Disc Voice
+Comment=Seu espaço para amigos e comunidades
+Exec=disc-voice-desktop
+Icon=dev.discvoice.desktop
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=chat;voz;voice;chamada;servidor;comunidade;
+# The window's app id is the binary's name, not the Flatpak id.
+StartupWMClass=disc-voice-desktop

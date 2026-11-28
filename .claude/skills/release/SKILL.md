@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README e acrescenta as Novidades da versão ao changelog do app, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e o AppImage do Linux e envia o instalador ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
+description: Cria uma release do Disc Voice no GitHub. Pergunta o estágio (alpha, beta ou stable; padrão alpha), calcula a próxima versão SemVer pelos commits convencionais desde a última release, abre uma PR `release(<estágio>): vX.Y.Z` que só muda a versão nos package.json, Cargo.toml e README e acrescenta as Novidades da versão ao changelog do app, espera o usuário revisar e dar merge e então publica a release, cujo workflow gera o instalador do Windows e os pacotes do Linux (AppImage, .deb, .rpm e Flatpak) e os envia ao bucket do site. Use quando pedirem para criar, publicar ou lançar uma release/versão.
 argument-hint: "[alpha|beta|stable]"
 ---
 
@@ -21,11 +21,12 @@ O que roda no GitHub em cada passo:
   `api.yml`, `website.yml` e `desktop.yml`. O deploy da API e a imagem do site são pulados.
   Por isso o título da PR (que vira a mensagem do squash) precisa começar com `release(`.
 - **Release publicada** (pela skill ou à mão na aba Releases): `desktop.yml` roda os testes
-  de novo no Windows e no Linux, gera os dois pacotes (`build-windows`, `build-linux`) e o job
-  `publish`:
-  - anexa à release `DiscVoice_<versão>_x64-setup.exe` e `DiscVoice_<versão>_x86_64.AppImage`,
-    junto com um `SHA256SUMS` dos dois;
-  - envia o instalador ao bucket em `releases/v<versão>/`;
+  de novo no Windows e no Linux, gera os pacotes (`build-windows`; `build-linux`, com AppImage,
+  `.deb` e `.rpm`; `build-flatpak`, que reempacota o `.deb`) e o job `publish`:
+  - anexa à release `DiscVoice_<versão>_x64-setup.exe`, `DiscVoice_<versão>_x86_64.AppImage`,
+    `DiscVoice_<versão>_amd64.deb`, `DiscVoice_<versão>_x86_64.rpm` e
+    `DiscVoice_<versão>_x86_64.flatpak`, junto com um `SHA256SUMS` de todos;
+  - envia os pacotes ao bucket em `releases/v<versão>/`;
   - atualiza `releases/latest/`, que o botão de download do site usa, quando a release é
     stable ou quando ainda não existe nenhuma stable (fase alpha), e nunca com uma versão mais
     antiga que a mais nova;

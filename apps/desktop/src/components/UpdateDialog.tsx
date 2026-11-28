@@ -45,7 +45,9 @@ export function UpdateDialog({ state, inCall, onLeaveCall, onClose }: {
   }, []);
 
   // Leaving the call happens only after the download, right before restarting.
+  // The Flatpak only opens the download: the call goes on.
   const update = () => void installUpdate(() => { if (inCall) onLeaveCall(); });
+  const leavesCall = inCall && !state.manual;
 
   return <dialog ref={ref} className="action-dialog update-dialog" aria-labelledby="update-title"
     onCancel={event => { event.preventDefault(); onClose(); }}>
@@ -58,14 +60,16 @@ export function UpdateDialog({ state, inCall, onLeaveCall, onClose }: {
       <span>{state.status === "installing" ? "Instalando…" : percent === null ? "Baixando…" : `Baixando… ${percent}%`}</span>
     </div>}
     {state.status === "error" && <p className="inline-error" role="alert">{state.error || "Não foi possível atualizar."}</p>}
-    {inCall && !busy && <p className="field-help" role="status">Você está em uma chamada. Ela continua durante o download e é encerrada só na hora de reiniciar.</p>}
-    {!busy && <p className="field-help">O app reinicia sozinho na nova versão, e você continua conectado.</p>}
+    {leavesCall && !busy && <p className="field-help" role="status">Você está em uma chamada. Ela continua durante o download e é encerrada só na hora de reiniciar.</p>}
+    {!busy && <p className="field-help">{state.manual
+      ? "O navegador baixa a nova versão (.flatpak). Abra o arquivo para atualizar o app: você continua conectado."
+      : "O app reinicia sozinho na nova versão, e você continua conectado."}</p>}
 
     <div className="dialog-actions">
       <button type="button" className="button secondary" onClick={onClose}>{busy ? "Fechar" : "Depois"}</button>
       <button type="button" className="button primary" autoFocus disabled={busy} onClick={update}>
-        {busy ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
-        {state.status === "error" ? "Tentar de novo" : inCall ? "Atualizar e sair da chamada" : "Atualizar agora"}
+        {busy ? <LoaderCircle size={16} className="spin" /> : state.manual ? <ArrowDownToLine size={16} /> : <RefreshCw size={16} />}
+        {state.status === "error" ? "Tentar de novo" : state.manual ? "Baixar a nova versão" : leavesCall ? "Atualizar e sair da chamada" : "Atualizar agora"}
       </button>
     </div>
   </dialog>;

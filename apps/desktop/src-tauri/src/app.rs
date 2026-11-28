@@ -59,10 +59,11 @@ fn save_theme_template<R: tauri::Runtime>(
     Ok(path.display().to_string())
 }
 
-/// The update platform of this install (`windows-x86_64`, `linux-x86_64`), as
-/// the update manifests name it, or `None` when it cannot update itself: a
-/// .deb or .rpm is updated by the package manager, and development builds
-/// never update.
+/// The update platform of this install (`windows-x86_64`, `linux-x86_64`,
+/// `linux-x86_64-flatpak`), as the update manifests name it, or `None` when it
+/// cannot update itself: a .deb or .rpm is updated by the package manager, and
+/// development builds never update. The Flatpak cannot replace its own files:
+/// it only tells of a new version, and the user installs the new .flatpak.
 #[tauri::command]
 fn updater_platform() -> Option<String> {
     if cfg!(debug_assertions) {
@@ -70,6 +71,10 @@ fn updater_platform() -> Option<String> {
     }
     #[cfg(target_os = "linux")]
     let os = {
+        // Set by Flatpak inside the sandbox.
+        if std::env::var_os("FLATPAK_ID").is_some() {
+            return Some(format!("linux-{}-flatpak", std::env::consts::ARCH));
+        }
         // Set by the AppImage runtime to the path the update replaces.
         std::env::var_os("APPIMAGE")?;
         "linux"
