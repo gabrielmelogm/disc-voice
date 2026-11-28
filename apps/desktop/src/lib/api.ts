@@ -145,11 +145,11 @@ export const api = {
   createChannel: (serverId: string, name: string, type: Channel["type"] = "text") => request<Channel>(`/servers/${serverId}/channels`, { method: "POST", body: { name, type } }),
   messages: (channelId: string, cursor: { before?: string; after?: string } = {}, signal?: AbortSignal) =>
     request<MessagePage>(`/channels/${channelId}/messages?${new URLSearchParams(cursor)}`, { signal }),
-  /** `files`: ids from `uploadFile`, sent with the text (which may then be empty). */
-  sendMessage: (channelId: string, clientId: string, content: string, gif?: GifChoice, files?: string[]) =>
+  /** `files`: ids from `uploadFile`, sent with the text (which may then be empty). `replyTo`: the message it answers. */
+  sendMessage: (channelId: string, clientId: string, content: string, gif?: GifChoice, files?: string[], replyTo?: string) =>
     request<ChatMessage>(`/channels/${channelId}/messages`, {
       method: "POST",
-      body: { clientId, content, ...(gif ? { gif } : {}), ...(files?.length ? { files } : {}) },
+      body: { clientId, content, ...(gif ? { gif } : {}), ...(files?.length ? { files } : {}), ...(replyTo ? { replyTo } : {}) },
     }),
   /** The author changes the text (mentions as `<@id>`). */
   editMessage: (channelId: string, messageId: string, content: string) =>

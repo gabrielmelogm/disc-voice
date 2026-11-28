@@ -138,6 +138,28 @@ pub(crate) struct MessageView {
     mentions: Vec<UserView>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     reactions: Vec<ReactionView>,
+    /// The message this one answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to: Option<ReplyView>,
+}
+
+/// The message a reply answers, shown above it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReplyView {
+    id: String,
+    /// The original (or its author's account) was deleted: only the id is left.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    deleted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<UserView>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<UserView>,
+    /// It has files or a GIF, which the preview names when there is no text.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    attachments: bool,
 }
 
 /// An emoji on a message and who reacted with it, in the order of the first
@@ -213,24 +235,68 @@ fn group_reactions(rows: Vec<reaction::Model>) -> HashMap<i64, Vec<ReactionView>
     grouped
 }
 
-/// Everything needed to show a page of messages: authors, mentioned people
-/// and reactions.
+/// Everything needed to show a page of messages: authors, mentioned people,
+/// reactions and the messages they answer.
 pub(crate) struct Views {
     authors: Authors,
     reactions: HashMap<i64, Vec<ReactionView>>,
+    replied: HashMap<i64, message::Model>,
 }
 
 impl Views {
     pub(crate) async fn load(db: &DatabaseConnection, rows: &[message::Model]) -> ApiResult<Self> {
+        let answered: Vec<i64> = rows.iter().filter_map(|m| m.reply_to).collect();
+        let replied: HashMap<i64, message::Model> = if answered.is_empty() {
+            HashMap::new()
+        } else {
+            message::Entity::find()
+                .filter(message::Column::Id.is_in(answered))
+                .all(db)
+                .await?
+                .into_iter()
+                .map(|m| (m.id, m))
+                .collect()
+        };
+        let shown = || rows.iter().chain(replied.values());
         let authors = Authors::load(
             db,
-            rows.iter()
-                .map(|m| (m.author_id, m.discord_author.as_ref())),
-            rows.iter().flat_map(|m| mentioned(&m.content)),
+            shown().map(|m| (m.author_id, m.discord_author.as_ref())),
+            shown().flat_map(|m| mentioned(&m.content)),
         )
         .await?;
         let reactions = reactions_of(db, rows.iter().map(|m| m.id).collect()).await?;
-        Ok(Self { authors, reactions })
+        Ok(Self {
+            authors,
+            reactions,
+            replied,
+        })
+    }
+
+    /// The preview of the message `id` answers, from the same channel.
+    fn reply(&self, channel: Uuid, id: i64) -> ReplyView {
+        let original = self
+            .replied
+            .get(&id)
+            .filter(|r| r.channel_id == channel)
+            .and_then(|r| Some((r, self.authors.get(r.author_id, r.discord_author.as_ref())?)));
+        match original {
+            Some((r, author)) => ReplyView {
+                id: id.to_string(),
+                deleted: false,
+                author: Some(author),
+                content: r.content.clone(),
+                mentions: self.authors.mentions(&r.content),
+                attachments: r.attachments.as_array().is_some_and(|a| !a.is_empty()),
+            },
+            None => ReplyView {
+                id: id.to_string(),
+                deleted: true,
+                author: None,
+                content: String::new(),
+                mentions: Vec::new(),
+                attachments: false,
+            },
+        }
     }
 
     /// None when the author no longer exists.
@@ -238,6 +304,7 @@ impl Views {
         let author = self.authors.get(m.author_id, m.discord_author.as_ref())?;
         let mentions = self.authors.mentions(&m.content);
         let reactions = self.reactions.remove(&m.id).unwrap_or_default();
+        let reply_to = m.reply_to.map(|id| self.reply(m.channel_id, id));
         Some(MessageView {
             id: m.id.to_string(),
             channel_id: m.channel_id,
@@ -250,6 +317,7 @@ impl Views {
             attachments: serde_json::from_value(m.attachments).unwrap_or_default(),
             mentions,
             reactions,
+            reply_to,
         })
     }
 }
@@ -397,6 +465,8 @@ pub(crate) struct SendMessage {
     /// Ids of files the sender uploaded with `POST /files`.
     #[serde(default)]
     files: Vec<Uuid>,
+    /// Id of a message of the same channel that this one answers.
+    reply_to: Option<String>,
 }
 
 pub(crate) async fn send(
@@ -430,6 +500,10 @@ pub(crate) async fn send(
     }
     check_content(content, !attachments.is_empty())?;
     check_mentions(&state.db, &channel, user.id, content).await?;
+    let reply_to = match input.reply_to.as_deref() {
+        Some(original) => Some(answered(&state.db, id, original).await?),
+        None => None,
+    };
     let attachments = serde_json::to_value(&attachments).map_err(ApiError::internal)?;
     let tx = state.db.begin().await?;
     lock_channel(&tx, id).await?;
@@ -442,6 +516,7 @@ pub(crate) async fn send(
         if existing.channel_id != id
             || existing.content != content
             || existing.attachments != attachments
+            || existing.reply_to != reply_to
         {
             return Err(ApiError(
                 StatusCode::CONFLICT,
@@ -457,6 +532,7 @@ pub(crate) async fn send(
             content: Set(content.into()),
             created_at: Set(Utc::now()),
             attachments: Set(attachments),
+            reply_to: Set(reply_to),
             ..Default::default()
         }
         .insert(&tx)
@@ -478,6 +554,18 @@ pub(crate) async fn send(
         }
     }
     Ok(Json(view))
+}
+
+/// The id of the message a reply answers, which must be in the same channel.
+async fn answered(db: &DatabaseConnection, channel: Uuid, original: &str) -> ApiResult<i64> {
+    let gone = || ApiError::bad("A mensagem que você está respondendo não existe mais.");
+    let id: i64 = original.parse().map_err(|_| gone())?;
+    message::Entity::find_by_id(id)
+        .filter(message::Column::ChannelId.eq(channel))
+        .one(db)
+        .await?
+        .map(|m| m.id)
+        .ok_or_else(gone)
 }
 
 async fn publish_to_members(

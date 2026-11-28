@@ -407,6 +407,20 @@ export interface ChatMessage {
   /** People mentioned as `<@id>` in the text, to show their names. */
   mentions?: User[];
   reactions?: Reaction[];
+  /** The message this one answers. */
+  replyTo?: ReplyPreview;
+}
+
+/** The message a reply answers, shown above it. */
+export interface ReplyPreview {
+  id: string;
+  /** The original (or its author's account) was deleted: only the id is left. */
+  deleted?: boolean;
+  author?: User;
+  content?: string;
+  mentions?: User[];
+  /** It has files or a GIF, which the preview names when there is no text. */
+  attachments?: boolean;
 }
 
 /** An emoji on a message, in the order of the first reaction. */

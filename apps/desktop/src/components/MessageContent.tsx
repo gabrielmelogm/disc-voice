@@ -1,10 +1,30 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Download, ExternalLink, FileText, FileX, X } from "lucide-react";
 import type { Attachment, User } from "@disc-voice/shared";
-import { mediaUrl } from "../lib/api";
+import { mediaUrl, message } from "../lib/api";
 import { openExternal } from "../lib/external";
-import { downloadFile } from "../lib/files";
+import { downloadFile, saveMedia } from "../lib/files";
+import { useContextMenu } from "./ContextMenu";
 import { GifImage } from "./GifPicker";
+
+/** The right-click menu of an image, GIF or video: "Fazer download". Render `element` next to where `open` is called. */
+export function useMediaMenu() {
+  const menu = useContextMenu();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(""), 5000);
+    return () => clearTimeout(timer);
+  }, [error]);
+  const open = useCallback((event: ReactMouseEvent, url: string, name: string) => {
+    menu.open(event, `Ações de ${name}`, [{
+      label: "Fazer download", icon: Download,
+      onSelect: () => { setError(""); void saveMedia(url, name).catch(cause => setError(message(cause))); },
+    }]);
+  }, [menu.open]);
+  const element = <>{menu.element}{error && <div className="floating-notice" role="alert">{error}</div>}</>;
+  return { open, element };
+}
 
 /** Something shown in the media viewer. */
 export interface Media {
@@ -169,18 +189,25 @@ function DeletedFile({ file }: { file: Attachment }) {
 
 export function ImageThumb({ url, name, width, height, onView }: { url: string; name: string; width?: number | null; height?: number | null; onView: (media: Media) => void }) {
   const [failed, setFailed] = useState(false);
+  const menu = useMediaMenu();
   if (failed) return null;
-  return <button type="button" className="media-thumb" style={thumbStyle(width, height)} aria-label={`Ver imagem ${name}`} onClick={() => onView({ url, name, kind: "image" })}>
-    <img src={url} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
-  </button>;
+  return <>
+    <button type="button" className="media-thumb" style={thumbStyle(width, height)} aria-label={`Ver imagem ${name}`} onClick={() => onView({ url, name, kind: "image" })}
+      onContextMenu={event => menu.open(event, url, name)}>
+      <img src={url} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+    </button>
+    {menu.element}
+  </>;
 }
 
 /** A GIF sent from the Klipy picker: plays inline (paused under reduced motion). */
 export function GifAttachment({ file, onView }: { file: Attachment; onView: (media: Media) => void }) {
   const [failed, setFailed] = useState(false);
+  const menu = useMediaMenu();
   const name = file.filename.replace(/\.(gif|webp)$/i, "") || "GIF";
   if (failed) return <p className="muted"><em>Não foi possível carregar o GIF.</em></p>;
-  return <figure className="message-gif" style={thumbStyle(file.width, file.height)}>
+  return <figure className="message-gif" style={thumbStyle(file.width, file.height)} onContextMenu={event => menu.open(event, file.url, file.filename)}>
+    {menu.element}
     <GifImage url={file.url} still={file.still} alt={name} onError={() => setFailed(true)}
       onOpen={() => onView({ url: file.url, name, kind: "image" })} openLabel={`Ver GIF ${name}`} />
     <figcaption className="sr-only">GIF via KLIPY</figcaption>
@@ -188,7 +215,9 @@ export function GifAttachment({ file, onView }: { file: Attachment; onView: (med
 }
 
 export function Attachments({ files, onView }: { files: Attachment[]; onView: (media: Media) => void }) {
+  const menu = useMediaMenu();
   return <div className="attachment-list" aria-label="Anexos">
+    {menu.element}
     {files.map(file => {
       if (file.provider === "klipy") return <GifAttachment key={file.id} file={file} onView={onView} />;
       if (file.deleted) return <DeletedFile key={file.id} file={file} />;
@@ -199,7 +228,8 @@ export function Attachments({ files, onView }: { files: Attachment[]; onView: (m
         <ImageThumb url={url} name={file.filename} width={file.width} height={file.height} onView={onView} />{download}
       </div>;
       if (kind === "video") return <div key={file.id} className="media-video">
-        <video src={url} controls preload="metadata" style={thumbStyle(file.width, file.height)} aria-label={file.filename} />
+        <video src={url} controls preload="metadata" style={thumbStyle(file.width, file.height)} aria-label={file.filename}
+          onContextMenu={event => menu.open(event, url, file.filename)} />
         <span className="media-actions">
           <button type="button" className="link-button subtle" onClick={() => onView({ url, name: file.filename, kind: "video" })}>Ampliar</button>
           {stored(file) && <button type="button" className="link-button subtle" onClick={() => downloadFile(url)}><Download size={14} />Baixar</button>}
@@ -215,6 +245,7 @@ export function Attachments({ files, onView }: { files: Attachment[]; onView: (m
 /** Shows an image or video in the app, over everything else. */
 export function MediaViewer({ media, onClose }: { media: Media; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const menu = useMediaMenu();
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
@@ -230,7 +261,8 @@ export function MediaViewer({ media, onClose }: { media: Media; onClose: () => v
       <button type="button" className="icon-button" aria-label="Fechar" title="Fechar (Esc)" onClick={onClose}><X size={20} /></button>
     </header>
     {media.kind === "image"
-      ? <img src={media.url} alt={media.name} referrerPolicy="no-referrer" />
-      : <video src={media.url} controls autoPlay aria-label={media.name} />}
+      ? <img src={media.url} alt={media.name} referrerPolicy="no-referrer" onContextMenu={event => menu.open(event, media.url, media.name)} />
+      : <video src={media.url} controls autoPlay aria-label={media.name} onContextMenu={event => menu.open(event, media.url, media.name)} />}
+    {menu.element}
   </dialog>;
 }

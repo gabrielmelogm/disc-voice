@@ -24,6 +24,7 @@ function state(overrides: Partial<VoiceState> = {}): VoiceState {
     screenSupported: true, native: false, screen: "idle", screenInfo: null, localScreen: null, remoteScreens: {}, focusedScreen: null,
     shareAudio: true, screenAudio: false, screenVolumes: {}, screenQuality: "1080p", screenFrameRate: 30, screenShare: null,
     cameraSupported: true, camera: "idle", cameraId: "", cameraQuality: "360p", cameras: [], localCamera: null, remoteCameras: {},
+    cameraError: "", cameraPresence: "unknown", cameraLabel: "",
     latency: {}, serverLatency: null, ...overrides,
   };
 }

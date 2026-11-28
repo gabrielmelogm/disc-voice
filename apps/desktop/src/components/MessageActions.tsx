@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef } from "react";
-import { AtSign, Pencil, SmilePlus, Trash2 } from "lucide-react";
-import type { ChatMessage, Reaction, User } from "@disc-voice/shared";
+import { AtSign, CornerUpLeft, Pencil, SmilePlus, Trash2 } from "lucide-react";
+import type { ChatMessage, Reaction, ReplyPreview, User } from "@disc-voice/shared";
 import { QUICK_REACTIONS } from "../lib/emoji";
 import { EVERYONE_NAME, mentionText } from "../lib/mentions";
 import { Avatar } from "./ui";
@@ -17,6 +17,33 @@ export function applyReaction(reactions: Reaction[] = [], emoji: string, userId:
   if (!existing?.users.includes(userId)) return reactions;
   return reactions.flatMap(r => r !== existing ? [r]
     : r.count > 1 ? [{ ...r, count: r.count - 1, users: r.users.filter(id => id !== userId) }] : []);
+}
+
+/** How a message shows above a reply to it. */
+export function previewOf(message: ChatMessage): ReplyPreview {
+  return { id: message.id, author: message.author, content: message.content, mentions: message.mentions, attachments: !!message.attachments?.length };
+}
+
+/** One line of the answered message's text, mentions as names. */
+export function replySnippet(reply: ReplyPreview) {
+  const text = mentionText(reply.content || "", reply.mentions).replace(/\s+/g, " ").trim();
+  return text || (reply.attachments ? "Anexo" : "Mensagem sem texto");
+}
+
+/** The message a reply answers, above it: who wrote it and the start of the text. `onJump` scrolls to it. */
+export function ReplyQuote({ reply, onJump }: { reply: ReplyPreview; onJump?: () => void }) {
+  if (reply.deleted || !reply.author) {
+    return <div className="message-reply deleted"><CornerUpLeft size={14} aria-hidden="true" /><em>Mensagem original excluída</em></div>;
+  }
+  const text = replySnippet(reply);
+  const content = <>
+    <CornerUpLeft size={14} aria-hidden="true" />
+    <Avatar name={reply.author.name} src={reply.author.avatar} still={reply.author.avatarStill} size="xs" />
+    <strong>{reply.author.name}</strong><span className="message-reply-text">{text}</span>
+  </>;
+  return onJump
+    ? <button type="button" className="message-reply" aria-label={`Resposta a ${reply.author.name}: ${text}. Ir para a mensagem`} onClick={onJump}>{content}</button>
+    : <div className="message-reply" aria-label={`Resposta a ${reply.author.name}: ${text}`}>{content}</div>;
 }
 
 /** "Ana, Bruno e mais 2 reagiram com 🔥". */

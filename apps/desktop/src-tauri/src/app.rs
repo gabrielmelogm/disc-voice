@@ -59,6 +59,121 @@ fn save_theme_template<R: tauri::Runtime>(
     Ok(path.display().to_string())
 }
 
+/// Media that "Fazer download" may save: what the chat shows as an image or video.
+const MEDIA_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "mp4", "webm"];
+
+/// A file name safe for any file system, from the name the chat shows. Only
+/// media extensions are kept, so nothing saved here can run as a program.
+fn media_file_name(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    // Windows drops trailing dots and spaces; a leading dot would hide the file.
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    let (stem, extension) = cleaned.rsplit_once('.')?;
+    let stem = stem.trim().trim_start_matches('.').trim();
+    let extension = extension.to_ascii_lowercase();
+    if !MEDIA_EXTENSIONS.contains(&extension.as_str()) {
+        return None;
+    }
+    let stem: String = stem.trim().chars().take(100).collect();
+    let stem = if stem.is_empty() {
+        "imagem".into()
+    } else {
+        stem
+    };
+    Some(format!("{stem}.{extension}"))
+}
+
+/// Decodes the `%XX` escapes of `encodeURIComponent`.
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = value.get(index + 1..index + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Saves media from the chat ("Fazer download") in the Downloads folder and
+/// shows it in the file manager. The body is the file; the `x-file-name`
+/// header, its name as `encodeURIComponent` gives it.
+#[tauri::command]
+fn save_media<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    const MAX_BYTES: usize = 64 * 1024 * 1024;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Arquivo inválido.".into());
+    };
+    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+        return Err("Arquivo inválido.".into());
+    }
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .and_then(percent_decode)
+        .and_then(|name| media_file_name(&name))
+        .ok_or("Só é possível baixar imagens e vídeos.")?;
+    let paths = app.path();
+    let folder = paths
+        .download_dir()
+        .or_else(|_| paths.document_dir())
+        .map_err(|_| "Não foi possível encontrar a pasta Downloads.".to_string())?;
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((&name, ""));
+    let mut path = folder.join(&name);
+    let mut copy = 2;
+    while path.exists() {
+        path = folder.join(format!("{stem} ({copy}).{extension}"));
+        copy += 1;
+    }
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Não foi possível salvar o arquivo: {error}"))?;
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&path);
+    Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_names_are_safe() {
+        assert_eq!(
+            media_file_name("Gato dançando.GIF").as_deref(),
+            Some("Gato dançando.gif")
+        );
+        assert_eq!(
+            media_file_name("../../etc/foto.png").as_deref(),
+            Some("_.._etc_foto.png")
+        );
+        assert_eq!(media_file_name(".webp").as_deref(), Some("imagem.webp"));
+        assert_eq!(media_file_name("script.exe"), None);
+        assert_eq!(media_file_name("foto.png.exe"), None);
+        assert_eq!(media_file_name("sem extensão"), None);
+        assert_eq!(
+            percent_decode("Gato%20dan%C3%A7ando.gif").as_deref(),
+            Some("Gato dançando.gif")
+        );
+        assert_eq!(percent_decode("%zz"), None);
+    }
+}
+
 /// The update platform of this install (`windows-x86_64`, `linux-x86_64`,
 /// `linux-x86_64-flatpak`), as the update manifests name it, or `None` when it
 /// cannot update itself: a .deb or .rpm is updated by the package manager, and
@@ -177,6 +292,7 @@ pub fn run() {
             discord_rpc::discord_presence,
             browser::open_url,
             save_theme_template,
+            save_media,
             updater_platform,
             pip::set_pip_ready,
             pip::pip_exit,

@@ -1,6 +1,6 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { Channel, ChatMessage, CloudFile, GifChoice, MessagePage, Reaction, User } from "@disc-voice/shared";
-import { FileText, History, MessageSquareText, Plus, SendHorizontal, Smile, Upload, X } from "lucide-react";
+import { FileText, History, ImagePlay, MessageSquareText, Pencil, Plus, Reply, SendHorizontal, Smile, SmilePlus, Trash2, Upload, X } from "lucide-react";
 import { TYPING_INTERVAL, typingLabel, useTyping } from "../hooks/useTyping";
 import { api, message } from "../lib/api";
 import { dayLabel, messageTime } from "../lib/display";
@@ -10,7 +10,8 @@ import { encodeMentions, everyoneMatches, mentionMatches, mentionQuery, mentions
 import { nameColor } from "../lib/roles";
 import { EmojiPicker } from "./EmojiPicker";
 import { GifImage, GifPicker } from "./GifPicker";
-import { applyReaction, DeleteMessageDialog, MentionSuggestions, MessageToolbar, Reactions } from "./MessageActions";
+import { SEPARATOR, useContextMenu } from "./ContextMenu";
+import { applyReaction, DeleteMessageDialog, MentionSuggestions, MessageToolbar, previewOf, Reactions, ReplyQuote } from "./MessageActions";
 import { Attachments, fileSize, ImageThumb, imageLinks, MediaViewer, MessageText, type Media } from "./MessageContent";
 import { ProfileButton } from "./ProfileCard";
 import { TopRoleBadge, useCan, useServerRoles } from "./ServerRoles";
@@ -45,7 +46,7 @@ function insertAt(field: HTMLTextAreaElement | null, value: string, text: string
   return { value: value.slice(0, start) + text + value.slice(end), caret: start + text.length };
 }
 
-interface Pending { clientId: string; content: string; gif?: GifChoice; files?: CloudFile[]; error: string; sending: boolean }
+interface Pending { clientId: string; content: string; gif?: GifChoice; files?: CloudFile[]; reply?: ChatMessage; error: string; sending: boolean }
 
 /** A file chosen in the composer: uploads to the user's space right away. */
 interface Draft { key: string; name: string; size: number; preview?: string; progress: number; uploaded?: CloudFile; error?: string }
@@ -156,6 +157,28 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   }
   const [editing, setEditing] = useState<{ id: string; text: string; saving: boolean; error: string } | null>(null);
   const [deleting, setDeleting] = useState<{ message: ChatMessage; busy: boolean; error: string } | null>(null);
+  /** The message the next one answers ("Responder"). */
+  const [replying, setReplying] = useState<ChatMessage | null>(null);
+  const messageMenu = useContextMenu();
+  /** The answered message flashes after jumping to it. */
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(timer);
+  }, [flash]);
+  function jumpTo(id: string) {
+    const row = list.current?.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+    if (!row) return;
+    pinBottom.current = false;
+    row.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    setFlash(id);
+  }
+  function startReply(item: ChatMessage) {
+    setEditing(null);
+    setReplying(item);
+    textarea.current?.focus();
+  }
   /** A reaction that could not be saved. */
   const [notice, setNotice] = useState("");
   /** The `@` being typed in the composer, and the highlighted suggestion. */
@@ -350,11 +373,16 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     if (event.type === "message.created" && event.message.channelId === channel.id) accept([event.message]);
     if (event.type === "message.updated" && event.message.channelId === channel.id) {
       const updated = event.message;
-      setMessages(current => current.map(item => item.id === updated.id ? updated : item));
+      // Replies to it show the new text too.
+      setMessages(current => current.map(item => item.id === updated.id ? updated
+        : item.replyTo?.id === updated.id && !item.replyTo.deleted ? { ...item, replyTo: previewOf(updated) } : item));
+      setReplying(current => current?.id === updated.id ? updated : current);
     }
     if (event.type === "message.deleted" && event.channelId === channel.id) {
-      setMessages(current => current.filter(item => item.id !== event.messageId));
+      setMessages(current => current.filter(item => item.id !== event.messageId)
+        .map(item => item.replyTo?.id === event.messageId ? { ...item, replyTo: { id: event.messageId, deleted: true } } : item));
       setEditing(current => current?.id === event.messageId ? null : current);
+      setReplying(current => current?.id === event.messageId ? null : current);
     }
     if (event.type === "message.reactions" && event.channelId === channel.id) setReactions(event.messageId, event.reactions);
     // Existing messages show the author's current name.
@@ -446,7 +474,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     inFlight.current.add(item.clientId);
     setPending(current => current.map(p => p.clientId === item.clientId ? { ...p, sending: true, error: "" } : p));
     try {
-      const sent = item.files?.length ? api.sendMessage(channel.id, item.clientId, item.content, undefined, item.files.map(file => file.id))
+      const reply = item.reply?.id;
+      const sent = reply ? api.sendMessage(channel.id, item.clientId, item.content, item.gif, item.files?.map(file => file.id), reply)
+        : item.files?.length ? api.sendMessage(channel.id, item.clientId, item.content, undefined, item.files.map(file => file.id))
         : item.gif ? api.sendMessage(channel.id, item.clientId, item.content, item.gif) : api.sendMessage(channel.id, item.clientId, item.content);
       accept([await sent]);
     }
@@ -459,9 +489,11 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
     event.preventDefault();
     if (!canSend) return;
     const files = drafts.flatMap(d => d.uploaded ? [d.uploaded] : []);
-    const item: Pending = { clientId: crypto.randomUUID(), content: encodeMentions(content.trim(), [...people.values()], canMentionEveryone), ...(files.length ? { files } : {}), sending: true, error: "" };
+    const item: Pending = { clientId: crypto.randomUUID(), content: encodeMentions(content.trim(), [...people.values()], canMentionEveryone),
+      ...(files.length ? { files } : {}), ...(replying ? { reply: replying } : {}), sending: true, error: "" };
     setPending(current => [...current, item]);
     setContent("");
+    setReplying(null);
     setMention(null);
     drafts.forEach(d => { if (d.preview) { URL.revokeObjectURL(d.preview); previews.current.delete(d.preview); } });
     setDrafts([]);
@@ -475,8 +507,9 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
   /** Sends the GIF chosen in the picker on its own; the text being typed stays. */
   function sendGif(gif: GifChoice) {
     setGifOpen(false);
-    const item: Pending = { clientId: crypto.randomUUID(), content: "", gif, sending: true, error: "" };
+    const item: Pending = { clientId: crypto.randomUUID(), content: "", gif, ...(replying ? { reply: replying } : {}), sending: true, error: "" };
     setPending(current => [...current, item]);
+    setReplying(null);
     pinBottom.current = true;
     void send(item);
     textarea.current?.focus();
@@ -511,6 +544,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickMention(options[activeSuggestion]); return; }
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
     }
+    if (event.key === "Escape" && replying) { event.preventDefault(); event.stopPropagation(); setReplying(null); return; }
     // Like Discord: ↑ in an empty composer edits the last message the user sent.
     if (event.key === "ArrowUp" && !content && lastOwn) { event.preventDefault(); startEditing(lastOwn); return; }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -565,6 +599,25 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       })}
     </ul>}
   </div>;
+  const replyBar = replying && <div className="reply-bar">
+    <span>Respondendo a <strong>{replying.author.name}</strong></span>
+    <button type="button" className="icon-button small" aria-label="Cancelar resposta" title="Cancelar resposta (Esc)"
+      onClick={() => { setReplying(null); textarea.current?.focus(); }}><X size={16} /></button>
+  </div>;
+  /** The right-click menu of a message. Selected text keeps the webview's menu, to copy it. */
+  const openMessageMenu = (event: ReactMouseEvent, item: ChatMessage, own: boolean) => {
+    const selection = window.getSelection();
+    if (selection?.toString() && event.currentTarget.contains(selection.anchorNode)) return;
+    const canReply = !!self && !importing;
+    messageMenu.open(event, "Ações da mensagem", [
+      canReply && { label: "Responder", icon: Reply, onSelect: () => startReply(item) },
+      !!self && { label: "Reagir com emoji", icon: SmilePlus, onSelect: () => openReactions(item.id) },
+      canReply && { label: "Responder com GIF", icon: ImagePlay, onSelect: () => { startReply(item); setEmojiOpen(false); setGifOpen(true); } },
+      SEPARATOR,
+      own && { label: "Editar mensagem", icon: Pencil, onSelect: () => startEditing(item) },
+      (own || canDeleteAny) && { label: "Excluir mensagem", icon: Trash2, danger: true, onSelect: () => setDeleting({ message: item, busy: false, error: "" }) },
+    ]);
+  };
   const canAttach = !importing;
   const dragProps = canAttach ? {
     onDragEnter: (event: DragEvent) => { if (hasFiles(event)) { event.preventDefault(); setDragging(true); } },
@@ -598,15 +651,18 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       {messages.map((item, index) => {
         const previous = messages[index - 1];
         const newDay = !previous || new Date(previous.createdAt).toDateString() !== new Date(item.createdAt).toDateString();
-        const grouped = !!previous && !newDay && previous.author.id === item.author.id
+        // A reply always shows who wrote it, under what it answers.
+        const grouped = !!previous && !newDay && !item.replyTo && previous.author.id === item.author.id
           && new Date(item.createdAt).getTime() - new Date(previous.createdAt).getTime() < GROUP_WINDOW;
         const mentionsMe = !!self && (!!item.mentions?.some(person => person.id === self.id)
-          || (item.author.id !== self.id && mentionsEveryone(item.content)));
+          || (item.author.id !== self.id && (mentionsEveryone(item.content) || item.replyTo?.author?.id === self.id)));
         const own = !!self && item.author.id === self.id && !item.discordId;
         const isEditing = editing?.id === item.id;
         return <Fragment key={item.id}>
           {newDay && <div className="day-divider" role="separator"><span>{dayLabel(item.createdAt)}</span></div>}
-          <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId ? "is-focused" : ""} ${mentionsMe ? "mentions-me" : ""} ${isEditing ? "is-editing" : ""}`}>
+          <article data-message-id={item.id} className={`chat-message ${grouped ? "grouped" : ""} ${item.id === focusId || item.id === flash ? "is-focused" : ""} ${mentionsMe ? "mentions-me" : ""} ${isEditing ? "is-editing" : ""} ${item.replyTo ? "has-reply" : ""} ${replying?.id === item.id ? "is-replied" : ""}`}
+            onContextMenu={isEditing ? undefined : event => openMessageMenu(event, item, own)}>
+            {item.replyTo && <ReplyQuote reply={item.replyTo} onJump={messages.some(m => m.id === item.replyTo!.id) ? () => jumpTo(item.replyTo!.id) : undefined} />}
             {grouped ? <span className="message-gutter" /> : <ProfileButton user={item.author} className="avatar-trigger" title={`Perfil de ${item.author.name}`}><Avatar name={item.author.name} src={item.author.avatar} still={item.author.avatarStill} /></ProfileButton>}
             <div className="message-body">
               {!grouped && <div className="message-meta"><strong style={{ color: nameColor(badges[item.author.id]) }}><ProfileButton user={item.author} /></strong><TopRoleBadge badge={badges[item.author.id]} />{item.discordId && <span className="source-tag" title="Mensagem importada do Discord">Discord</span>}<time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("pt-BR")}>{messageTime(item.createdAt)}</time></div>}
@@ -640,7 +696,8 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
           </article>
         </Fragment>;
       })}
-      {pending.map(item => <article className="chat-message pending-message" key={item.clientId}>
+      {pending.map(item => <article className={`chat-message pending-message ${item.reply ? "has-reply" : ""}`} key={item.clientId}>
+        {item.reply && <ReplyQuote reply={previewOf(item.reply)} />}
         <Avatar name={self?.name || "Você"} src={self?.avatar} still={self?.avatarStill} />
         <div className="message-body">
           <div className="message-meta"><strong>Você</strong><span>{item.sending ? "Enviando…" : "Não enviada"}</span></div>
@@ -651,6 +708,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
         </div>
       </article>)}
     </div>
+    {messageMenu.element}
     {viewing && <MediaViewer media={viewing} onClose={() => setViewing(null)} />}
     {deleting && <DeleteMessageDialog message={deleting.message} busy={deleting.busy} error={deleting.error} selfId={self?.id}
       onConfirm={() => void deleteMessage(deleting.message)} onClose={() => setDeleting(null)} />}
@@ -659,6 +717,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       {emojiPicker}
       {mentionList}
       {fileInput}
+      {replyBar}
       {draftList}
       {/* Who is typing shows above the field, which stays a single line. */}
       <span className="composer-hint" aria-live="polite">{typingIndicator}</span>
@@ -677,6 +736,7 @@ export function TextChannel({ channel, realtime, revision, self, focusId, onRead
       {emojiPicker}
       {mentionList}
       {fileInput}
+      {replyBar}
       {draftList}
       <label className="sr-only" htmlFor="message-content">{peer ? `Mensagem para ${peer.name}` : `Mensagem em #${channel.name}`}</label>
       <textarea ref={textarea} id="message-content" placeholder={peer ? `Conversar com ${peer.name}` : `Escrever em ${channel.name}`} maxLength={4000} value={content} rows={1}

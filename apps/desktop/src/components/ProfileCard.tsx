@@ -1,10 +1,14 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Ban, Gamepad2, MessageCircle } from "lucide-react";
+import { Ban, Gamepad2, MessageCircle, UserCheck, UserPlus, UserRound, UserX } from "lucide-react";
 import type { Activity, BannerColor, User } from "@disc-voice/shared";
+import type { FriendsState } from "../hooks/useFriends";
 import { activityDetail, activityLabel } from "../lib/activity";
+import { message } from "../lib/api";
 import { motionSrc, useReducedMotion } from "../lib/motion";
-import { BanDialog, RoleBadges, useCanBan, useServerRoles } from "./ServerRoles";
+import { SEPARATOR, useContextMenu } from "./ContextMenu";
+import { friendshipWith } from "./Friends";
+import { BanDialog, canBanUser, RoleBadges, useCanBan, useServerRoles } from "./ServerRoles";
 import { Avatar } from "./ui";
 
 const ActivityContext = createContext<Record<string, Activity>>({});
@@ -75,11 +79,19 @@ const ProfileContext = createContext<Open>(() => {});
 /** Opens a user's profile card next to the clicked element. */
 export const useProfileCard = () => useContext(ProfileContext);
 
+/** What the user menu offers besides the profile: friend requests and direct messages. */
+interface UserActions {
+  selfId?: string;
+  friends?: Pick<FriendsState, "friends" | "incoming" | "outgoing" | "add" | "accept" | "remove">;
+  onMessage?: (user: User) => void;
+}
+const UserActionsContext = createContext<UserActions>({});
+
 /**
  * Hosts the profile card. `profiles` holds the latest known version of each
  * user, so a card opened from an old message still shows the current profile.
  */
-export function ProfileCardProvider({ profiles, activities = {}, selfId, onMessage, children }: {
+export function ProfileCardProvider({ profiles, activities = {}, selfId, onMessage, friends, children }: {
   profiles: Record<string, User>;
   /** Current activity of each user, by id. */
   activities?: Record<string, Activity>;
@@ -87,17 +99,63 @@ export function ProfileCardProvider({ profiles, activities = {}, selfId, onMessa
   selfId?: string;
   /** Opens a direct conversation with someone. */
   onMessage?: (user: User) => void;
+  /** Friends and requests, for the user menu's friend request item. */
+  friends?: UserActions["friends"];
   children: ReactNode;
 }) {
   const [open, setOpen] = useState<{ user: User; anchor: HTMLElement } | null>(null);
   const close = useCallback(() => setOpen(null), []);
   const user = open && (profiles[open.user.id] || open.user);
   const canMessage = !!onMessage && !!user && user.id !== selfId && !user.discord;
-  return <ActivityContext.Provider value={activities}><ProfileContext.Provider value={(user, anchor) => setOpen({ user, anchor })}>
+  const show = useCallback<Open>((user, anchor) => setOpen({ user, anchor }), []);
+  return <ActivityContext.Provider value={activities}><ProfileContext.Provider value={show}><UserActionsContext.Provider value={{ selfId, friends, onMessage }}>
     {children}
     {open && user && <ProfilePopover user={user} anchor={open.anchor} onClose={close}
       onMessage={canMessage ? () => { close(); onMessage(user); } : undefined} />}
-  </ProfileContext.Provider></ActivityContext.Provider>;
+  </UserActionsContext.Provider></ProfileContext.Provider></ActivityContext.Provider>;
+}
+
+/**
+ * The right-click menu of a person: their profile, a friend request (or
+ * undoing it), a direct message and, for who may, banning them from the open
+ * server. Render `element` next to where `open` is called.
+ */
+export function useUserMenu() {
+  const openProfile = useProfileCard();
+  const { selfId, friends, onMessage } = useContext(UserActionsContext);
+  const roles = useServerRoles();
+  const menu = useContextMenu();
+  const [banning, setBanning] = useState<User | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(""), 5000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
+  const open = useCallback((event: ReactMouseEvent, user: User) => {
+    const anchor = event.currentTarget as HTMLElement;
+    // Authors known only from imported Discord messages have just a profile.
+    const person = user.id !== selfId && !user.discord;
+    const friendship = friends && person ? friendshipWith(friends, user.id) : null;
+    const run = (change: () => Promise<unknown>) => { setError(""); void change().catch(cause => setError(message(cause))); };
+    menu.open(event, `Ações de ${user.name}`, [
+      { label: "Exibir perfil", icon: UserRound, onSelect: () => openProfile(user, anchor) },
+      friendship === "none" && { label: "Enviar pedido de amizade", icon: UserPlus, onSelect: () => run(() => friends!.add(user.id)) },
+      friendship === "outgoing" && { label: "Desfazer pedido", icon: UserX, onSelect: () => run(() => friends!.remove(user.id)) },
+      friendship === "incoming" && { label: "Aceitar pedido de amizade", icon: UserCheck, onSelect: () => run(() => friends!.accept(user.id)) },
+      person && onMessage && { label: "Enviar mensagem direta", icon: MessageCircle, onSelect: () => onMessage(user) },
+      SEPARATOR,
+      canBanUser(roles, user.id) && { label: "Banir usuário", icon: Ban, danger: true, onSelect: () => setBanning(user) },
+    ]);
+  }, [selfId, friends, onMessage, roles, openProfile, menu.open]);
+
+  const element = <>
+    {menu.element}
+    {banning && roles.serverId && <BanDialog serverId={roles.serverId} serverName={roles.serverName} user={banning} onClose={() => setBanning(null)} />}
+    {error && <div className="floating-notice" role="alert">{error}</div>}
+  </>;
+  return { open, element };
 }
 
 function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anchor: HTMLElement; onClose: () => void; onMessage?: () => void }) {
@@ -156,6 +214,10 @@ function ProfilePopover({ user, anchor, onClose, onMessage }: { user: User; anch
 /** A user's name that opens their profile card. */
 export function ProfileButton({ user, className = "", children, title }: { user: User; className?: string; children?: ReactNode; title?: string }) {
   const open = useProfileCard();
-  return <button type="button" className={`profile-trigger ${className}`} title={title} aria-haspopup="dialog"
-    onClick={event => open(user, event.currentTarget)}>{children ?? user.name}</button>;
+  const menu = useUserMenu();
+  return <>
+    <button type="button" className={`profile-trigger ${className}`} title={title} aria-haspopup="dialog"
+      onClick={event => open(user, event.currentTarget)} onContextMenu={event => menu.open(event, user)}>{children ?? user.name}</button>
+    {menu.element}
+  </>;
 }

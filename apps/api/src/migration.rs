@@ -22,7 +22,37 @@ impl MigratorTrait for Migrator {
             Box::new(UserFiles),
             Box::new(ReactionsAndEdits),
             Box::new(RolesAndBans),
+            Box::new(Replies),
         ]
+    }
+}
+
+struct Replies;
+
+impl MigrationName for Replies {
+    fn name(&self) -> &str {
+        "m20261204_000017_replies"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Replies {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // The message being answered. No foreign key: once it is deleted, the
+        // reply shows "Mensagem original excluída".
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE messages ADD COLUMN reply_to bigint;")
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE messages DROP COLUMN reply_to;")
+            .await?;
+        Ok(())
     }
 }
 
